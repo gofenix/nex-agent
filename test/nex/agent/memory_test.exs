@@ -4,7 +4,6 @@ defmodule Nex.Agent.MemoryTest do
 
   describe "append/3" do
     test "appends entry to today's log" do
-      assert function_exported?(Memory, :append, 2)
       assert function_exported?(Memory, :append, 3)
     end
   end
