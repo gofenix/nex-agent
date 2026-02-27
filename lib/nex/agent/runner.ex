@@ -5,14 +5,16 @@ defmodule Nex.Agent.Runner do
     Tool.Read,
     Tool.Write,
     Tool.Edit,
-    Tool.Bash
+    Tool.Bash,
+    Skills,
+    Memory
   }
 
   @default_max_iterations 10
 
   @doc """
   Run an agent session with the given prompt.
-  
+
   Options:
     - :max_iterations - Maximum number of iterations (default: 10)
     - :provider - LLM provider (:anthropic, :openai, :ollama)
@@ -89,10 +91,119 @@ defmodule Nex.Agent.Runner do
   defp call_llm(messages, opts) do
     # Check if a test client is provided
     if opts[:llm_client] do
-      opts[:llm_client].(messages, opts)
+      opts[:llm_client].(messages, opts ++ [tools: all_tools()])
     else
       call_llm_real(messages, opts)
     end
+  end
+
+  defp all_tools do
+    # Built-in tools
+    tools = [
+      %{
+        "name" => "read",
+        "description" => "Read a file from the filesystem",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "path" => %{"type" => "string", "description" => "Path to the file to read"}
+          },
+          "required" => ["path"]
+        }
+      },
+      %{
+        "name" => "write",
+        "description" => "Write content to a file",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "path" => %{"type" => "string", "description" => "Path to write to"},
+            "content" => %{"type" => "string", "description" => "Content to write"}
+          },
+          "required" => ["path", "content"]
+        }
+      },
+      %{
+        "name" => "edit",
+        "description" => "Edit a file by replacing specific text",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "path" => %{"type" => "string", "description" => "Path to the file"},
+            "search" => %{"type" => "string", "description" => "Text to find"},
+            "replace" => %{"type" => "string", "description" => "Text to replace with"}
+          },
+          "required" => ["path", "search", "replace"]
+        }
+      },
+      %{
+        "name" => "bash",
+        "description" => "Execute a bash command",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "command" => %{"type" => "string", "description" => "Command to execute"}
+          },
+          "required" => ["command"]
+        }
+      }
+    ]
+
+    # Add Skills
+    skills = Skills.for_llm()
+
+    skill_tools =
+      Enum.map(skills, fn skill ->
+        %{
+          "name" => "skill_#{skill.name}",
+          "description" => skill.description,
+          "input_schema" => %{
+            "type" => "object",
+            "properties" => %{
+              "arguments" => %{
+                "type" => "string",
+                "description" => skill.argument_hint || "Arguments for the skill"
+              }
+            }
+          }
+        }
+      end)
+
+    # Add skills_list tool
+    skills_list_tool = %{
+      "name" => "skills_list",
+      "description" => "List all available skills",
+      "input_schema" => %{"type" => "object", "properties" => %{}}
+    }
+
+    # Add Memory search
+    memory_tools = [
+      %{
+        "name" => "memory_search",
+        "description" => "Search agent memory for past experiences",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string", "description" => "Search query"}
+          },
+          "required" => ["query"]
+        }
+      },
+      %{
+        "name" => "memory_append",
+        "description" => "Save important information to memory",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "task" => %{"type" => "string", "description" => "Task description"},
+            "result" => %{"type" => "string", "description" => "Result (SUCCESS/FAILURE)"}
+          },
+          "required" => ["task", "result"]
+        }
+      }
+    ]
+
+    tools ++ skill_tools ++ [skills_list_tool] ++ memory_tools
   end
 
   defp call_llm_real(messages, opts) do
@@ -161,6 +272,55 @@ defmodule Nex.Agent.Runner do
 
   defp execute_tool("bash", args, opts) do
     Bash.execute(args, %{cwd: opts[:cwd]})
+  end
+
+  defp execute_tool("memory_search", args, _opts) do
+    query = args["query"] || ""
+    results = Memory.search(query)
+
+    if results == [] do
+      {:ok, %{result: "No memories found for: #{query}"}}
+    else
+      formatted =
+        Enum.map(results, fn r ->
+          "#{r.entry.task} - #{r.entry.result}\n#{r.entry.body}\n---\n"
+        end)
+        |> Enum.join()
+
+      {:ok, %{result: formatted}}
+    end
+  end
+
+  defp execute_tool("memory_append", args, _opts) do
+    task = args["task"] || ""
+    result = args["result"] || "UNKNOWN"
+    metadata = Map.get(args, "metadata", %{})
+
+    case Memory.append(task, result, metadata) do
+      :ok -> {:ok, %{result: "Memory saved: #{task}"}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp execute_tool("skill_" <> skill_name, args, _opts) do
+    # Skills are called as skill_<name>
+    arguments = args["arguments"] || args["arguments"] || ""
+
+    case Skills.execute(skill_name, arguments) do
+      {:ok, content} -> {:ok, %{result: content}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp execute_tool("skills_list", _args, _opts) do
+    skills = Skills.list()
+
+    formatted =
+      Enum.map_join(skills, "\n", fn s ->
+        "- #{s.name}: #{s.description}"
+      end)
+
+    {:ok, %{result: "Available skills:\n#{formatted}"}}
   end
 
   defp execute_tool(name, _args, _opts) do

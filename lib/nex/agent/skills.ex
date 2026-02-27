@@ -55,6 +55,7 @@ defmodule Nex.Agent.Skills do
   """
   @spec list() :: list(map())
   def list do
+    unless Process.whereis(@name), do: start_link()
     Agent.get(@name, &Map.values/1)
   end
 
@@ -100,6 +101,9 @@ defmodule Nex.Agent.Skills do
   """
   @spec for_llm() :: list(map())
   def for_llm do
+    # Ensure Skills agent is started
+    unless Process.whereis(@name), do: start_link()
+
     list()
     |> Enum.filter(& &1.user_invocable)
     |> Enum.map(fn skill ->
