@@ -17,16 +17,24 @@ defmodule Nex.Agent.Tool.Bash do
   end
 
   def execute(%{"command" => command}, ctx) do
-    timeout = Map.get(ctx, :timeout, 30) * 1000
     cwd = Map.get(ctx, :cwd, File.cwd!())
+    timeout = Map.get(ctx, :timeout, 30) * 1000
 
-    options = [
-      stderr_to_stdout: true,
-      cd: cwd,
-      timeout: timeout
-    ]
+    task =
+      Task.async(fn ->
+        System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
+      end)
 
-    case System.cmd("sh", ["-c", command], options) do
+    result =
+      try do
+        Task.await(task, timeout)
+      rescue
+        _ ->
+          Task.shutdown(task, :brutal_kill)
+          {:error, :timeout}
+      end
+
+    case result do
       {output, 0} ->
         truncated =
           if String.length(output) > 50000 do
@@ -46,9 +54,9 @@ defmodule Nex.Agent.Tool.Bash do
           end
 
         {:ok, %{content: truncated, exit_code: exit_code}}
+
+      {:error, :timeout} ->
+        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
     end
-  rescue
-    err in [ErlangError] ->
-      {:error, "Command failed: #{inspect(err)}"}
   end
 end

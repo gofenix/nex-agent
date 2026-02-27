@@ -4,6 +4,7 @@ defmodule Nex.Agent.LLM.Ollama do
   def chat(messages, options) do
     model = Keyword.get(options, :model, "llama3.1")
     base_url = Keyword.get(options, :base_url, "http://localhost:11434/v1")
+    http_client = Keyword.get(options, :http_client, &Req.post/2)
 
     body = %{
       model: model,
@@ -11,10 +12,13 @@ defmodule Nex.Agent.LLM.Ollama do
       stream: false
     }
 
-    case Req.post("#{base_url}/chat/completions",
-           json: body,
-           headers: [{"content-type", "application/json"}]
-         ) do
+    result =
+      http_client.("#{base_url}/chat/completions",
+        json: body,
+        headers: [{"content-type", "application/json"}]
+      )
+
+    case result do
       {:ok, %{status: 200, body: response}} ->
         {:ok,
          %{
@@ -36,7 +40,8 @@ defmodule Nex.Agent.LLM.Ollama do
 
   def tools, do: []
 
-  defp transform_messages(messages) do
+  # Public for testing
+  def transform_messages(messages) do
     messages
     |> Enum.filter(fn m -> m["role"] != "system" end)
   end

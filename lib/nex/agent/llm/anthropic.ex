@@ -8,6 +8,7 @@ defmodule Nex.Agent.LLM.Anthropic do
     api_key = Keyword.fetch!(options, :api_key)
     max_tokens = Keyword.get(options, :max_tokens, 4096)
     temperature = Keyword.get(options, :temperature, 1.0)
+    http_client = Keyword.get(options, :http_client, &Req.post/2)
 
     body = %{
       model: model,
@@ -17,14 +18,17 @@ defmodule Nex.Agent.LLM.Anthropic do
       system: extract_system(messages)
     }
 
-    case Req.post("#{@base_url}/messages",
-           json: body,
-           headers: [
-             {"x-api-key", api_key},
-             {"anthropic-version", "2023-06-01"},
-             {"content-type", "application/json"}
-           ]
-         ) do
+    result =
+      http_client.("#{@base_url}/messages",
+        json: body,
+        headers: [
+          {"x-api-key", api_key},
+          {"anthropic-version", "2023-06-01"},
+          {"content-type", "application/json"}
+        ]
+      )
+
+    case result do
       {:ok, %{status: 200, body: response}} ->
         {:ok,
          %{
@@ -44,6 +48,7 @@ defmodule Nex.Agent.LLM.Anthropic do
   def stream(messages, options, callback) do
     model = Keyword.get(options, :model, "claude-sonnet-4-20250514")
     api_key = Keyword.fetch!(options, :api_key)
+    http_client = Keyword.get(options, :http_client, &Req.post/2)
 
     body = %{
       model: model,
@@ -64,7 +69,9 @@ defmodule Nex.Agent.LLM.Anthropic do
         ]
       )
 
-    case Req.post(req, json: body) do
+    result = http_client.(req, json: body)
+
+    case result do
       {:ok, %{status: 200, body: stream}} ->
         Stream.each(stream, fn chunk ->
           callback.(chunk)
@@ -81,7 +88,8 @@ defmodule Nex.Agent.LLM.Anthropic do
 
   def tools, do: []
 
-  defp transform_messages(messages) do
+  # Public for testing
+  def transform_messages(messages) do
     messages
     |> Enum.filter(fn m -> m["role"] != "system" end)
     |> Enum.map(fn m ->
@@ -116,7 +124,8 @@ defmodule Nex.Agent.LLM.Anthropic do
     end)
   end
 
-  defp extract_system(messages) do
+  # Public for testing
+  def extract_system(messages) do
     messages
     |> Enum.find(fn m -> m["role"] == "system" end)
     |> case do

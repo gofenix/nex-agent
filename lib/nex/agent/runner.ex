@@ -10,6 +10,18 @@ defmodule Nex.Agent.Runner do
 
   @default_max_iterations 10
 
+  @doc """
+  Run an agent session with the given prompt.
+  
+  Options:
+    - :max_iterations - Maximum number of iterations (default: 10)
+    - :provider - LLM provider (:anthropic, :openai, :ollama)
+    - :model - Model name
+    - :api_key - API key for the provider
+    - :base_url - Custom base URL for the provider
+    - :cwd - Current working directory
+    - :llm_client - For testing: a function that mocks LLM responses
+  """
   def run(session, prompt, opts \\ []) do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     provider = Keyword.get(opts, :provider, :anthropic)
@@ -17,6 +29,7 @@ defmodule Nex.Agent.Runner do
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
+    llm_client = Keyword.get(opts, :llm_client)
 
     system_prompt = Nex.Agent.SystemPrompt.build(cwd: cwd)
 
@@ -34,7 +47,8 @@ defmodule Nex.Agent.Runner do
       model: model,
       api_key: api_key,
       base_url: base_url,
-      cwd: cwd
+      cwd: cwd,
+      llm_client: llm_client
     )
   end
 
@@ -73,6 +87,15 @@ defmodule Nex.Agent.Runner do
   end
 
   defp call_llm(messages, opts) do
+    # Check if a test client is provided
+    if opts[:llm_client] do
+      opts[:llm_client].(messages, opts)
+    else
+      call_llm_real(messages, opts)
+    end
+  end
+
+  defp call_llm_real(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model)
     api_key = Keyword.get(opts, :api_key)
