@@ -8,7 +8,6 @@ defmodule Nex.Agent.Runner do
     Tool.Bash,
     Skills,
     Memory,
-    Reflection,
     Evolution
   }
 
@@ -178,6 +177,53 @@ defmodule Nex.Agent.Runner do
       "input_schema" => %{"type" => "object", "properties" => %{}}
     }
 
+    # Add skill_create tool
+    skill_create_tool = %{
+      "name" => "skill_create",
+      "description" => "Create a new skill for automating repetitive tasks",
+      "input_schema" => %{
+        "type" => "object",
+        "properties" => %{
+          "name" => %{"type" => "string", "description" => "Skill name (snake_case)"},
+          "description" => %{"type" => "string", "description" => "What this skill does"},
+          "type" => %{
+            "type" => "string",
+            "description" => "Skill type: elixir, script, mcp, or markdown"
+          },
+          "code" => %{"type" => "string", "description" => "The actual code/script/content"},
+          "parameters" => %{"type" => "object", "description" => "JSON Schema for parameters"}
+        },
+        "required" => ["name", "description"]
+      }
+    }
+
+    # Add skill_execute tool
+    skill_execute_tool = %{
+      "name" => "skill_execute",
+      "description" => "Execute a skill with arguments",
+      "input_schema" => %{
+        "type" => "object",
+        "properties" => %{
+          "name" => %{"type" => "string", "description" => "Skill name to execute"},
+          "arguments" => %{"type" => "object", "description" => "Arguments for the skill"}
+        },
+        "required" => ["name", "arguments"]
+      }
+    }
+
+    # Add skill_delete tool
+    skill_delete_tool = %{
+      "name" => "skill_delete",
+      "description" => "Delete a skill by name",
+      "input_schema" => %{
+        "type" => "object",
+        "properties" => %{
+          "name" => %{"type" => "string", "description" => "Skill name to delete"}
+        },
+        "required" => ["name"]
+      }
+    }
+
     # Add Memory search
     memory_tools = [
       %{
@@ -205,7 +251,10 @@ defmodule Nex.Agent.Runner do
       }
     ]
 
-    tools ++ skill_tools ++ [skills_list_tool] ++ memory_tools ++ evolution_tools() ++ mcp_tools()
+    tools ++
+      skill_tools ++
+      [skills_list_tool, skill_create_tool, skill_execute_tool, skill_delete_tool] ++
+      memory_tools ++ evolution_tools() ++ mcp_tools()
   end
 
   defp mcp_tools do
@@ -426,10 +475,107 @@ defmodule Nex.Agent.Runner do
 
     formatted =
       Enum.map_join(skills, "\n", fn s ->
-        "- #{s.name}: #{s.description}"
+        type = s.type || "markdown"
+        "- #{s.name} (#{type}): #{s.description}"
       end)
 
     {:ok, %{result: "Available skills:\n#{formatted}"}}
+  end
+
+  defp execute_tool("skill_create", args, _opts) do
+    name = args["name"]
+    description = args["description"]
+    type = args["type"] || "markdown"
+    code = args["code"] || ""
+    parameters = args["parameters"] || %{}
+
+    if is_nil(name) do
+      {:error, "Skill name is required"}
+    else
+      case Skills.create(%{
+             name: name,
+             description: description,
+             type: type,
+             code: code,
+             parameters: parameters
+           }) do
+        {:ok, skill} ->
+          Memory.append(
+            "Created skill: #{name}",
+            "SUCCESS",
+            %{type: :skill_create, skill_type: type}
+          )
+
+          {:ok, %{result: "Successfully created skill '#{name}' (type: #{type})"}}
+
+        {:error, reason} ->
+          Memory.append(
+            "Failed to create skill: #{name}",
+            "FAILURE",
+            %{type: :skill_create, error: reason}
+          )
+
+          {:error, reason}
+      end
+    end
+  end
+
+  defp execute_tool("skill_execute", args, _opts) do
+    name = args["name"]
+    arguments = args["arguments"] || %{}
+
+    if is_nil(name) do
+      {:error, "Skill name is required"}
+    else
+      case Skills.execute(name, arguments, invoked_by: :user) do
+        {:ok, result} ->
+          formatted =
+            if is_map(result) do
+              Map.get(result, :result) || Map.get(result, :content) || Jason.encode!(result)
+            else
+              result
+            end
+
+          Memory.append(
+            "Executed skill: #{name}",
+            "SUCCESS",
+            %{type: :skill_execute, args: arguments}
+          )
+
+          {:ok, %{result: formatted}}
+
+        {:error, reason} ->
+          Memory.append(
+            "Failed to execute skill: #{name}",
+            "FAILURE",
+            %{type: :skill_execute, error: reason}
+          )
+
+          {:error, reason}
+      end
+    end
+  end
+
+  defp execute_tool("skill_delete", args, _opts) do
+    name = args["name"]
+
+    if is_nil(name) do
+      {:error, "Skill name is required"}
+    else
+      case Skills.delete(name) do
+        :ok ->
+          Memory.append(
+            "Deleted skill: #{name}",
+            "SUCCESS",
+            %{type: :skill_delete}
+          )
+
+          {:ok, %{result: "Successfully deleted skill '#{name}'"}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
   end
 
   # Evolution tools
@@ -513,7 +659,7 @@ defmodule Nex.Agent.Runner do
   # Reflection tools
   defp execute_tool("reflect", args, _opts) do
     # This would need to track execution results - for now just show recent memories
-    auto_apply = args["auto_apply"] == true
+    _auto_apply = args["auto_apply"] == true
 
     # Get recent memories for reflection context
     recent = Memory.search("", limit: 20)

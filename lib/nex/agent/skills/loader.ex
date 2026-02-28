@@ -104,21 +104,58 @@ defmodule Nex.Agent.Skills.Loader do
   defp parse_skill(frontmatter, body, path) do
     metadata = parse_frontmatter(frontmatter)
 
+    # Check for skill.json in the same directory
+    skill_dir = Path.dirname(path)
+
+    full_metadata =
+      if File.exists?(Path.join(skill_dir, "skill.json")) do
+        case File.read!(Path.join(skill_dir, "skill.json")) |> Jason.decode() do
+          {:ok, json_meta} -> Map.merge(metadata, json_meta)
+          _ -> metadata
+        end
+      else
+        metadata
+      end
+
     name =
-      metadata["name"] ||
+      full_metadata["name"] ||
         Path.basename(path, "/SKILL.md") ||
         Path.basename(path, ".md")
 
+    type = full_metadata["type"] || "markdown"
+
+    # Load code based on type
+    code =
+      case type do
+        "elixir" ->
+          skill_ex = Path.join(skill_dir, "skill.ex")
+          if File.exists?(skill_ex), do: File.read!(skill_ex), else: ""
+
+        "script" ->
+          script_file = Path.join(skill_dir, "script.sh")
+          if File.exists?(script_file), do: File.read!(script_file), else: ""
+
+        "mcp" ->
+          mcp_file = Path.join(skill_dir, "mcp.json")
+          if File.exists?(mcp_file), do: File.read!(mcp_file), else: ""
+
+        _ ->
+          String.trim(body)
+      end
+
     %{
       name: name,
-      description: metadata["description"] || extract_first_paragraph(body),
-      content: String.trim(body),
-      disable_model_invocation: metadata["disable-model-invocation"] == "true",
-      allowed_tools: parse_allowed_tools(metadata["allowed-tools"]),
-      user_invocable: metadata["user-invocable"] != "false",
-      context: metadata["context"],
-      agent: metadata["agent"],
-      argument_hint: metadata["argument-hint"],
+      description: full_metadata["description"] || extract_first_paragraph(body),
+      content: code,
+      type: type,
+      code: code,
+      parameters: full_metadata["parameters"] || %{},
+      disable_model_invocation: full_metadata["disable-model-invocation"] == "true",
+      allowed_tools: parse_allowed_tools(full_metadata["allowed-tools"]),
+      user_invocable: full_metadata["user-invocable"] != "false",
+      context: full_metadata["context"],
+      agent: full_metadata["agent"],
+      argument_hint: full_metadata["argument-hint"],
       path: path
     }
   end
