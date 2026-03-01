@@ -12,10 +12,10 @@ defmodule Nex.Agent.Evolution do
         Nex.Agent.Runner,
         new_code_string
       )
-      
+
       # Rollback to previous version
       :ok = Nex.Agent.Evolution.rollback(Nex.Agent.Runner)
-      
+
       # List all versions
       versions = Nex.Agent.Evolution.versions(Nex.Agent.Runner)
 
@@ -47,16 +47,16 @@ defmodule Nex.Agent.Evolution do
       new_code = \"\"\"
       defmodule Nex.Agent.Runner do
         def run(session, prompt, opts \\\\ []) do
-          IO.puts("Modified at \#{DateTime.utc_now()}")
+          IO.puts(\"Modified at \#{DateTime.utc_now()}\")
           original_code()
         end
       end
       \"\"\"
-      
+
       {:ok, version} = Nex.Agent.Evolution.upgrade_module(Nex.Agent.Runner, new_code)
 
   """
-  @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade_module(module, code, opts \\ []) do
     validate = Keyword.get(opts, :validate, true)
     backup = Keyword.get(opts, :backup, true)
@@ -64,42 +64,19 @@ defmodule Nex.Agent.Evolution do
     # Get current source path
     source_path = get_source_path(module)
 
-    # Validate code if requested
-    if validate do
-      case validate_code(code) do
-        {:error, reason} ->
-          {:error, "Validation failed: #{reason}"}
-
-        :ok ->
-          :ok
-      end
-    end
-
-    # Create backup if requested
-    if backup && File.exists?(source_path) do
-      create_backup(module, source_path)
-    end
-
-    # Write new code
-    case File.write(source_path, code) do
-      :ok ->
-        # Try to compile and load
-        case compile_and_load(module, code) do
-          :ok ->
-            version = save_version(module, code)
-            {:ok, version}
-
-          {:error, reason} ->
-            # Rollback on failure
-            if backup do
-              rollback(module)
-            end
-
-            {:error, "Compilation failed: #{inspect(reason)}"}
+    with :ok <- maybe_validate_code(validate, code),
+         :ok <- maybe_create_backup(backup, module, source_path),
+         :ok <- File.write(source_path, code),
+         :ok <- compile_and_load(module, code) do
+      version = save_version(module, code)
+      {:ok, version}
+    else
+      {:error, reason} ->
+        if backup do
+          _ = rollback(module)
         end
 
-      {:error, reason} ->
-        {:error, "Failed to write file: #{inspect(reason)}"}
+        {:error, to_error(reason)}
     end
   end
 
@@ -157,7 +134,8 @@ defmodule Nex.Agent.Evolution do
       module_dir
       |> File.ls!()
       |> Enum.filter(&String.ends_with?(&1, ".ex"))
-      |> Enum.map(&read_version/1)
+      |> Enum.map(&read_version(module_dir, &1))
+      |> Enum.filter(&is_map/1)
       |> Enum.sort_by(& &1.timestamp)
     else
       []
@@ -247,6 +225,15 @@ defmodule Nex.Agent.Evolution do
     end
   end
 
+  defp maybe_validate_code(false, _code), do: :ok
+
+  defp maybe_validate_code(true, code) do
+    case validate_code(code) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "Validation failed: #{reason}"}
+    end
+  end
+
   defp compile_and_load(module, code) do
     # Parse the code
     quoted = Code.string_to_quoted!(code)
@@ -271,6 +258,18 @@ defmodule Nex.Agent.Evolution do
 
     backup_path = Path.join(module_dir, "backup.ex")
     File.copy!(source_path, backup_path)
+    :ok
+  end
+
+  defp maybe_create_backup(false, _module, _source_path), do: :ok
+  defp maybe_create_backup(true, _module, source_path) when not is_binary(source_path), do: :ok
+
+  defp maybe_create_backup(true, module, source_path) do
+    if File.exists?(source_path) do
+      create_backup(module, source_path)
+    else
+      :ok
+    end
   end
 
   defp save_version(module, code) do
@@ -293,9 +292,18 @@ defmodule Nex.Agent.Evolution do
     version
   end
 
-  defp read_version(filename) do
-    version_path = Path.join(@versions_dir, filename)
-    {:ok, content} = File.read(version_path)
-    Jason.decode!(content, keys: :atoms!)
+  defp read_version(module_dir, filename) do
+    version_path = Path.join(module_dir, filename)
+
+    case File.read(version_path) do
+      {:ok, content} -> Jason.decode!(content, keys: :atoms!)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
+
+  defp to_error({:error, reason}), do: to_error(reason)
+  defp to_error(reason) when is_binary(reason), do: reason
+  defp to_error(reason), do: inspect(reason)
 end

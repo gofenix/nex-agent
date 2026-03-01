@@ -7,6 +7,7 @@ defmodule Nex.Agent.LLM.OpenAI do
     base_url = Keyword.get(options, :base_url, "https://api.openai.com/v1")
     max_tokens = Keyword.get(options, :max_tokens, 4096)
     temperature = Keyword.get(options, :temperature, 1.0)
+    http_client = Keyword.get(options, :http_client, &Req.post/2)
 
     base_url = String.trim_trailing(base_url, "/")
 
@@ -17,7 +18,7 @@ defmodule Nex.Agent.LLM.OpenAI do
       max_tokens: max_tokens
     }
 
-    case Req.post("#{base_url}/chat/completions",
+    case http_client.("#{base_url}/chat/completions",
            json: body,
            headers: [
              {"authorization", "Bearer #{api_key}"},
@@ -26,10 +27,12 @@ defmodule Nex.Agent.LLM.OpenAI do
          ) do
       {:ok, %{status: 200, body: response}} ->
         choice = hd(response["choices"])
+        message = choice["message"] || %{}
 
         {:ok,
          %{
-           content: choice["message"]["content"],
+           content: message["content"],
+           tool_calls: message["tool_calls"] || [],
            model: response["model"],
            usage: response["usage"]
          }}

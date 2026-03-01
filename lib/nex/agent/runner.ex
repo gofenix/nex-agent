@@ -8,7 +8,9 @@ defmodule Nex.Agent.Runner do
     Tool.Bash,
     Skills,
     Memory,
-    Evolution
+    Evolution,
+    Evaluation,
+    Evolution.Workflow
   }
 
   @default_max_iterations 10
@@ -53,6 +55,72 @@ defmodule Nex.Agent.Runner do
       cwd: cwd,
       llm_client: llm_client
     )
+  end
+
+  defp execute_tool("evolve_proposals", _args, _opts) do
+    proposals = Workflow.list_pending()
+
+    if proposals == [] do
+      {:ok, %{result: "No pending evolution proposals"}}
+    else
+      formatted =
+        Enum.map_join(proposals, "\n", fn p ->
+          "- #{p.id} module=#{p.module} risk=#{p.policy.risk_level} created_at=#{p.created_at}"
+        end)
+
+      {:ok, %{result: "Pending proposals:\n#{formatted}"}}
+    end
+  end
+
+  defp execute_tool("evolve_approve", args, _opts) do
+    proposal_id = args["proposal_id"]
+    eval_window_days = args["eval_window_days"] || 3
+
+    if is_nil(proposal_id) do
+      {:error, "proposal_id is required"}
+    else
+      case Workflow.approve_and_apply(proposal_id) do
+        {:ok, %{module: module, version: version}} ->
+          baseline = Evaluation.evaluate_recent(window_days: eval_window_days)
+
+          eval =
+            Evaluation.evaluate_candidate(module,
+              baseline: baseline,
+              candidate: baseline,
+              min_success_rate: 0.50,
+              max_score_regression: 5
+            )
+
+          if eval.passed do
+            {:ok,
+             %{
+               result:
+                 "Approved and applied proposal #{proposal_id}. Version=#{version.id}. Eval=#{eval.summary}"
+             }}
+          else
+            rollback_result = Evolution.rollback(module)
+
+            {:error,
+             "Approved proposal applied but failed evaluation gate: #{Enum.join(eval.reasons, "; ")}. Auto-rollback: #{inspect(rollback_result)}"}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp execute_tool("evolve_reject", args, _opts) do
+    proposal_id = args["proposal_id"]
+
+    if is_nil(proposal_id) do
+      {:error, "proposal_id is required"}
+    else
+      case Workflow.reject(proposal_id) do
+        :ok -> {:ok, %{result: "Rejected proposal #{proposal_id}"}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
   end
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
@@ -183,15 +251,20 @@ defmodule Nex.Agent.Runner do
 
     skill_tools =
       Enum.map(skills, fn skill ->
+        skill_name = Map.get(skill, "name") || Map.get(skill, :name)
+        skill_description = Map.get(skill, "description") || Map.get(skill, :description)
+
         %{
-          "name" => "skill_#{skill.name}",
-          "description" => skill.description,
+          "name" => skill_name,
+          "description" => skill_description,
           "input_schema" => %{
             "type" => "object",
             "properties" => %{
               "arguments" => %{
                 "type" => "string",
-                "description" => skill.argument_hint || "Arguments for the skill"
+                "description" =>
+                  Map.get(skill, "argument_hint") || Map.get(skill, :argument_hint) ||
+                    "Arguments for the skill"
               }
             }
           }
@@ -341,7 +414,7 @@ defmodule Nex.Agent.Runner do
     [
       %{
         "name" => "evolve_code",
-        "description" => "Modify and reload agent's own code at runtime",
+        "description" => "Modify and reload agent code with policy checks and evaluation gate",
         "input_schema" => %{
           "type" => "object",
           "properties" => %{
@@ -349,7 +422,15 @@ defmodule Nex.Agent.Runner do
               "type" => "string",
               "description" => "Module name to modify (e.g., Nex.Agent.Runner)"
             },
-            "code" => %{"type" => "string", "description" => "New Elixir code for the module"}
+            "code" => %{"type" => "string", "description" => "New Elixir code for the module"},
+            "auto_approve" => %{
+              "type" => "boolean",
+              "description" => "Force direct apply even for risky modules"
+            },
+            "eval_window_days" => %{
+              "type" => "integer",
+              "description" => "How many days of memory to use for evaluation (default: 3)"
+            }
           },
           "required" => ["module", "code"]
         }
@@ -374,6 +455,37 @@ defmodule Nex.Agent.Runner do
             "module" => %{"type" => "string", "description" => "Module name"}
           },
           "required" => ["module"]
+        }
+      },
+      %{
+        "name" => "evolve_proposals",
+        "description" => "List pending evolution proposals",
+        "input_schema" => %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        "name" => "evolve_approve",
+        "description" => "Approve and apply a pending evolution proposal",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "proposal_id" => %{"type" => "string", "description" => "Proposal ID"},
+            "eval_window_days" => %{
+              "type" => "integer",
+              "description" => "How many days of memory to use for evaluation (default: 3)"
+            }
+          },
+          "required" => ["proposal_id"]
+        }
+      },
+      %{
+        "name" => "evolve_reject",
+        "description" => "Reject a pending evolution proposal",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "proposal_id" => %{"type" => "string", "description" => "Proposal ID"}
+          },
+          "required" => ["proposal_id"]
         }
       },
       %{
@@ -429,10 +541,15 @@ defmodule Nex.Agent.Runner do
 
     results =
       Enum.map(tool_calls, fn tc ->
-        tool_name = tc["function"]["name"]
-        args = tc["function"]["arguments"]
+        tool_name = get_in(tc, ["function", "name"]) || get_in(tc, [:function, :name])
+        raw_args = get_in(tc, ["function", "arguments"]) || get_in(tc, [:function, :arguments])
+        args = normalize_tool_arguments(raw_args)
 
-        result = execute_tool(tool_name, args, cwd: cwd)
+        result =
+          case args do
+            {:error, reason} -> {:error, reason}
+            parsed_args -> execute_tool(tool_name, parsed_args, cwd: cwd)
+          end
 
         tool_result = %{
           "role" => "tool",
@@ -501,9 +618,9 @@ defmodule Nex.Agent.Runner do
 
   defp execute_tool("skill_" <> skill_name, args, _opts) do
     # Skills are called as skill_<name>
-    arguments = args["arguments"] || args["arguments"] || ""
+    arguments = args["arguments"] || ""
 
-    case Skills.execute(skill_name, arguments) do
+    case Skills.execute(skill_name, arguments, invoked_by: :model) do
       {:ok, content} -> {:ok, %{result: content}}
       {:error, reason} -> {:error, reason}
     end
@@ -621,29 +738,70 @@ defmodule Nex.Agent.Runner do
   defp execute_tool("evolve_code", args, _opts) do
     module_str = args["module"]
     code = args["code"]
+    auto_approve = args["auto_approve"] == true
+    eval_window_days = args["eval_window_days"] || 3
 
     if is_nil(module_str) || is_nil(code) do
       {:error, "Both module and code are required"}
     else
       module = String.to_atom(module_str)
 
-      case Evolution.upgrade_module(module, code) do
-        {:ok, version} ->
-          Memory.append(
-            "Evolved: #{module_str}",
-            "SUCCESS",
-            %{type: :evolution, version: version.id}
-          )
+      case Workflow.evolve(module, code,
+             auto_approve: auto_approve,
+             metadata: %{source: :tool, requested_module: module_str}
+           ) do
+        {:ok, %{status: :pending_approval} = pending} ->
+          {:ok,
+           %{
+             result:
+               "Evolution proposal queued (#{pending.proposal_id}) for #{module_str}. Approval required.",
+             proposal_id: pending.proposal_id
+           }}
 
-          {:ok, %{result: "Successfully evolved #{module_str} to version #{version.id}"}}
+        {:ok, %{status: :applied, version: version, policy: policy}} ->
+          baseline = Evaluation.evaluate_recent(window_days: eval_window_days)
+
+          eval =
+            Evaluation.evaluate_candidate(module,
+              baseline: baseline,
+              candidate: baseline,
+              min_success_rate: 0.50,
+              max_score_regression: 5
+            )
+
+          if eval.passed do
+            Memory.append(
+              "Evolved: #{module_str}",
+              "SUCCESS",
+              %{type: :evolution, version: version.id, risk: policy.risk_level, evaluation: eval.summary}
+            )
+
+            {:ok,
+             %{
+               result: "Successfully evolved #{module_str} to version #{version.id}",
+               version: version.id,
+               evaluation: eval.summary
+             }}
+          else
+            rollback_result = Evolution.rollback(module)
+
+            Memory.append(
+              "Failed post-evaluation evolve: #{module_str}",
+              "FAILURE",
+              %{
+                type: :evolution,
+                version: version.id,
+                evaluation: eval.summary,
+                rollback: inspect(rollback_result)
+              }
+            )
+
+            {:error,
+             "Evolution applied but failed evaluation gate: #{Enum.join(eval.reasons, "; ")}. Auto-rollback: #{inspect(rollback_result)}"}
+          end
 
         {:error, reason} ->
-          Memory.append(
-            "Failed to evolve: #{module_str}",
-            "FAILURE",
-            %{type: :evolution, error: reason}
-          )
-
+          Memory.append("Failed to evolve: #{module_str}", "FAILURE", %{type: :evolution, error: reason})
           {:error, reason}
       end
     end
@@ -800,6 +958,26 @@ defmodule Nex.Agent.Runner do
   defp execute_tool(name, _args, _opts) do
     {:error, "Unknown tool: #{name}"}
   end
+
+  defp normalize_tool_arguments(args) when is_map(args), do: args
+
+  defp normalize_tool_arguments(args) when is_binary(args) do
+    trimmed = String.trim(args)
+
+    cond do
+      trimmed == "" ->
+        %{}
+
+      true ->
+        case Jason.decode(trimmed) do
+          {:ok, decoded} when is_map(decoded) -> decoded
+          {:ok, _decoded} -> {:error, "Tool arguments must decode to an object"}
+          {:error, reason} -> {:error, "Invalid tool arguments JSON: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp normalize_tool_arguments(_), do: {:error, "Tool arguments must be a map or JSON object string"}
 
   @tool_result_max_chars 500
 

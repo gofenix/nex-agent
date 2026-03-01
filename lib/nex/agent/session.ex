@@ -41,42 +41,42 @@ defmodule Nex.Agent.Session do
   def load(session_id, project_id) do
     project_dir = sanitize_project_id(project_id)
     dir = Path.join([Path.expand(@session_dir), project_dir, session_id])
-    file = Path.join(dir, "_ .jsonl")
+    file = entries_file_path(dir)
 
-    unless File.exists?(file) do
+    if File.exists?(file) do
+      case File.read(file) do
+        {:ok, content} ->
+          entries =
+            content
+            |> String.split("\n", trim: true)
+            |> Enum.map(&Entry.from_json/1)
+            |> Enum.filter(&match?({:ok, _}, &1))
+            |> Enum.map(fn {:ok, e} -> e end)
+
+          current_entry_id =
+            if length(entries) > 0 do
+              List.last(entries).id
+            end
+
+          {:ok,
+           %__MODULE__{
+             id: session_id,
+             project_id: project_id,
+             path: dir,
+             entries: entries,
+             current_entry_id: current_entry_id
+           }}
+
+        error ->
+          error
+      end
+    else
       {:error, :session_not_found}
-    end
-
-    case File.read(file) do
-      {:ok, content} ->
-        entries =
-          content
-          |> String.split("\n", trim: true)
-          |> Enum.map(&Entry.from_json/1)
-          |> Enum.filter(&match?({:ok, _}, &1))
-          |> Enum.map(fn {:ok, e} -> e end)
-
-        current_entry_id =
-          if length(entries) > 0 do
-            List.last(entries).id
-          end
-
-        {:ok,
-         %__MODULE__{
-           id: session_id,
-           project_id: project_id,
-           path: dir,
-           entries: entries,
-           current_entry_id: current_entry_id
-         }}
-
-      error ->
-        error
     end
   end
 
   def add_entry(%__MODULE__{} = session, %Entry{} = entry) do
-    file = Path.join(session.path, "_ .jsonl")
+    file = entries_file_path(session.path)
     line = Entry.to_json(entry) <> "\n"
 
     File.write(file, line, [:append])
@@ -164,5 +164,16 @@ defmodule Nex.Agent.Session do
 
   defp sanitize_project_id(project_id) do
     project_id |> String.replace(~r/[^\w-]/, "_")
+  end
+
+  defp entries_file_path(session_dir) do
+    preferred = Path.join(session_dir, "_.jsonl")
+    legacy = Path.join(session_dir, "_ .jsonl")
+
+    cond do
+      File.exists?(preferred) -> preferred
+      File.exists?(legacy) -> legacy
+      true -> preferred
+    end
   end
 end

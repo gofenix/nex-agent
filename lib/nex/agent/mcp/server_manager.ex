@@ -9,13 +9,13 @@ defmodule Nex.Agent.MCP.ServerManager do
         command: "npx",
         args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/test/data"]
       ])
-      
+
       # Call a tool
       {:ok, result} = Nex.Agent.MCP.ServerManager.call_tool(server_id, "read_file", %{path: "/Users/test/data/file.txt"})
-      
+
       # Stop a server
       :ok = Nex.Agent.MCP.ServerManager.stop(server_id)
-      
+
       # List running servers
       servers = Nex.Agent.MCP.ServerManager.list()
   """
@@ -117,7 +117,7 @@ defmodule Nex.Agent.MCP.ServerManager do
       {:ok, pid} ->
         # Initialize the connection
         case Nex.Agent.MCP.initialize(pid) do
-          :ok ->
+          {:ok, _init_result} ->
             new_servers =
               Map.put(state.servers, server_id, %{
                 pid: pid,

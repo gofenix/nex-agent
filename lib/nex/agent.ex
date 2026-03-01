@@ -6,7 +6,8 @@ defmodule Nex.Agent do
           provider: atom(),
           model: String.t(),
           api_key: String.t() | nil,
-          base_url: String.t() | nil
+          base_url: String.t() | nil,
+          max_iterations: pos_integer()
         }
 
   defstruct [
@@ -14,7 +15,8 @@ defmodule Nex.Agent do
     :provider,
     :model,
     :api_key,
-    :base_url
+    :base_url,
+    max_iterations: 10
   ]
 
   def start(opts \\ []) do
@@ -25,10 +27,11 @@ defmodule Nex.Agent do
     model = Keyword.get(opts, :model, default_model(provider))
     api_key = Keyword.get(opts, :api_key) || default_api_key(provider)
     base_url = Keyword.get(opts, :base_url)
+    max_iterations = Keyword.get(opts, :max_iterations, 10)
     project = Keyword.get(opts, :project, Path.basename(File.cwd!()))
     cwd = Keyword.get(opts, :cwd, File.cwd!())
 
-    if is_nil(api_key) do
+    if is_nil(api_key) and provider != :ollama do
       {:error, "No API key found. Set :api_key or #{env_var_name(provider)}"}
     else
       case Session.create(project, cwd) do
@@ -39,7 +42,8 @@ defmodule Nex.Agent do
              provider: provider,
              model: model,
              api_key: api_key,
-             base_url: base_url
+             base_url: base_url,
+             max_iterations: max_iterations
            }}
 
         error ->
@@ -54,13 +58,15 @@ defmodule Nex.Agent do
     api_key = Keyword.get(opts, :api_key) || agent.api_key || default_api_key(provider)
     base_url = Keyword.get(opts, :base_url, agent.base_url)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
+    max_iterations = Keyword.get(opts, :max_iterations, agent.max_iterations)
 
     case Runner.run(agent.session, prompt,
            provider: provider,
            model: model,
            api_key: api_key,
            base_url: base_url,
-           cwd: cwd
+           cwd: cwd,
+           max_iterations: max_iterations
          ) do
       {:ok, result, session} ->
         {:ok, result, %{agent | session: session}}
