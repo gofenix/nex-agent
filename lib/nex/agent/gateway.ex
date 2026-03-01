@@ -5,6 +5,8 @@ defmodule Nex.Agent.Gateway do
   负责：
   - 启动/停止 Bus
   - 启动/停止 Cron
+  - 启动/停止 Inbound Worker
+  - 按配置启动/停止 Telegram Channel
   - 管理 Agent 进程
   - 提供 HTTP API（可选）
   """
@@ -28,6 +30,32 @@ defmodule Nex.Agent.Gateway do
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  defp ensure_inbound_worker_started(config) do
+    case Process.whereis(Nex.Agent.InboundWorker) do
+      nil ->
+        {:ok, _} = Nex.Agent.InboundWorker.start_link(config: config)
+        :ok
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp ensure_telegram_channel_started(config) do
+    if Nex.Agent.Config.telegram_enabled?(config) do
+      case Process.whereis(Nex.Agent.Channel.Telegram) do
+        nil ->
+          {:ok, _} = Nex.Agent.Channel.Telegram.start_link(config: config)
+          :ok
+
+        _pid ->
+          :ok
+      end
+    else
+      :ok
+    end
   end
 
   @doc """
@@ -66,6 +94,8 @@ defmodule Nex.Agent.Gateway do
 
   @impl true
   def init(_opts) do
+    Process.flag(:trap_exit, true)
+
     state = %__MODULE__{
       config: Nex.Agent.Config.load(),
       status: :stopped,
@@ -113,7 +143,9 @@ defmodule Nex.Agent.Gateway do
       },
       services: %{
         bus: Process.whereis(Nex.Agent.Bus) != nil,
-        cron: Process.whereis(Nex.Agent.Cron) != nil
+        cron: Process.whereis(Nex.Agent.Cron) != nil,
+        inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
+        telegram_channel: Process.whereis(Nex.Agent.Channel.Telegram) != nil
       }
     }
 
@@ -136,12 +168,19 @@ defmodule Nex.Agent.Gateway do
     {:reply, {:error, :not_running}, state}
   end
 
+  @impl true
+  def handle_info({:EXIT, _pid, _reason}, state) do
+    {:noreply, state}
+  end
+
   defp do_start(state) do
     if not Nex.Agent.Config.valid?(state.config) do
       {:error, :invalid_config}
     else
       ensure_bus_started()
       ensure_cron_started()
+      ensure_inbound_worker_started(state.config)
+      ensure_telegram_channel_started(state.config)
 
       {:ok,
        %{
@@ -153,6 +192,8 @@ defmodule Nex.Agent.Gateway do
   end
 
   defp do_stop(state) do
+    stop_telegram_channel()
+    stop_inbound_worker()
     stop_cron()
     stop_bus()
 
@@ -190,6 +231,20 @@ defmodule Nex.Agent.Gateway do
 
   defp stop_cron do
     case Process.whereis(Nex.Agent.Cron) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_inbound_worker do
+    case Process.whereis(Nex.Agent.InboundWorker) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_telegram_channel do
+    case Process.whereis(Nex.Agent.Channel.Telegram) do
       nil -> :ok
       pid -> GenServer.stop(pid, :shutdown)
     end

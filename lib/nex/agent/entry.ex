@@ -79,18 +79,24 @@ defmodule Nex.Agent.Entry do
 
   def from_json(json) do
     case Jason.decode(json) do
-      {:ok, map} -> 
-        atom_map = for {key, val} <- map, into: %{} do
-          atom_key = String.to_existing_atom(key)
-          converted_val = if atom_key == :type and is_binary(val) do
-            String.to_existing_atom(val)
-          else
-            val
+      {:ok, map} ->
+        atom_map =
+          for {key, val} <- map, into: %{} do
+            atom_key = String.to_existing_atom(key)
+
+            converted_val =
+              if atom_key == :type and is_binary(val) do
+                String.to_existing_atom(val)
+              else
+                val
+              end
+
+            {atom_key, converted_val}
           end
-          {atom_key, converted_val}
-        end
+
         {:ok, struct(__MODULE__, atom_map)}
-      error -> 
+
+      error ->
         error
     end
   rescue

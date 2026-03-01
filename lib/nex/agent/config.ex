@@ -9,14 +9,16 @@ defmodule Nex.Agent.Config do
             model: "gpt-4o",
             providers: %{},
             defaults: %{},
-            gateway: %{}
+            gateway: %{},
+            telegram: %{}
 
   @type t :: %__MODULE__{
           provider: String.t(),
           model: String.t(),
           providers: map(),
           defaults: map(),
-          gateway: map()
+          gateway: map(),
+          telegram: map()
         }
 
   @doc """
@@ -42,7 +44,8 @@ defmodule Nex.Agent.Config do
             model: Map.get(data, "model", "gpt-4o"),
             providers: Map.get(data, "providers", default_providers()),
             defaults: Map.get(data, "defaults", default_defaults()),
-            gateway: Map.get(data, "gateway", default_gateway())
+            gateway: Map.get(data, "gateway", default_gateway()),
+            telegram: Map.get(data, "telegram", default_telegram())
           }
 
         _ ->
@@ -66,7 +69,8 @@ defmodule Nex.Agent.Config do
       "model" => config.model,
       "providers" => config.providers,
       "defaults" => config.defaults,
-      "gateway" => config.gateway
+      "gateway" => config.gateway,
+      "telegram" => config.telegram
     }
 
     File.write(path, Jason.encode!(data, pretty: true))
@@ -82,8 +86,61 @@ defmodule Nex.Agent.Config do
       model: "gpt-4o",
       providers: default_providers(),
       defaults: default_defaults(),
-      gateway: default_gateway()
+      gateway: default_gateway(),
+      telegram: default_telegram()
     }
+  end
+
+  @doc """
+  获取 Telegram 配置
+  """
+  @spec telegram(t()) :: map()
+  def telegram(%__MODULE__{} = config) do
+    Map.merge(default_telegram(), config.telegram || %{})
+  end
+
+  @doc """
+  Telegram 是否启用
+  """
+  @spec telegram_enabled?(t()) :: boolean()
+  def telegram_enabled?(%__MODULE__{} = config) do
+    config
+    |> telegram()
+    |> Map.get("enabled", false)
+    |> Kernel.==(true)
+  end
+
+  @doc """
+  获取 Telegram token
+  """
+  @spec telegram_token(t()) :: String.t() | nil
+  def telegram_token(%__MODULE__{} = config) do
+    case Map.get(telegram(config), "token") do
+      token when is_binary(token) and token != "" -> token
+      _ -> nil
+    end
+  end
+
+  @doc """
+  获取 Telegram allow_from
+  """
+  @spec telegram_allow_from(t()) :: [String.t()]
+  def telegram_allow_from(%__MODULE__{} = config) do
+    case Map.get(telegram(config), "allow_from") do
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      _ -> []
+    end
+  end
+
+  @doc """
+  Telegram 是否启用回复模式
+  """
+  @spec telegram_reply_to_message?(t()) :: boolean()
+  def telegram_reply_to_message?(%__MODULE__{} = config) do
+    config
+    |> telegram()
+    |> Map.get("reply_to_message", false)
+    |> Kernel.==(true)
   end
 
   @doc """
@@ -150,6 +207,34 @@ defmodule Nex.Agent.Config do
     %{config | providers: providers}
   end
 
+  def set(%__MODULE__{} = config, :telegram_enabled, value) when is_boolean(value) do
+    %{config | telegram: Map.put(telegram(config), "enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :telegram_token, value) when is_binary(value) do
+    %{config | telegram: Map.put(telegram(config), "token", value)}
+  end
+
+  def set(%__MODULE__{} = config, :telegram_allow_from, value) when is_list(value) do
+    allow_from =
+      value
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    %{config | telegram: Map.put(telegram(config), "allow_from", allow_from)}
+  end
+
+  def set(%__MODULE__{} = config, :telegram_reply_to_message, value) when is_boolean(value) do
+    %{config | telegram: Map.put(telegram(config), "reply_to_message", value)}
+  end
+
+  def set(%__MODULE__{} = config, :telegram_proxy, value)
+      when is_binary(value) or is_nil(value) do
+    %{config | telegram: Map.put(telegram(config), "proxy", value)}
+  end
+
   def set(%__MODULE__{} = config, :base_url, {provider, url}) when is_binary(provider) do
     providers =
       Map.update(
@@ -169,9 +254,20 @@ defmodule Nex.Agent.Config do
   """
   @spec valid?(t()) :: boolean()
   def valid?(%__MODULE__{provider: provider} = config) do
-    case get_api_key(config, provider) do
-      nil -> provider == "ollama"
-      _ -> true
+    provider_valid? =
+      case get_api_key(config, provider) do
+        nil -> provider == "ollama"
+        _ -> true
+      end
+
+    provider_valid? and telegram_valid?(config)
+  end
+
+  defp telegram_valid?(%__MODULE__{} = config) do
+    if telegram_enabled?(config) do
+      not is_nil(telegram_token(config))
+    else
+      true
     end
   end
 
@@ -195,6 +291,16 @@ defmodule Nex.Agent.Config do
     %{
       "host" => "0.0.0.0",
       "port" => 18790
+    }
+  end
+
+  defp default_telegram do
+    %{
+      "enabled" => false,
+      "token" => "",
+      "allow_from" => [],
+      "reply_to_message" => false,
+      "proxy" => nil
     }
   end
 end

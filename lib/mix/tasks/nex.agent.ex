@@ -92,9 +92,60 @@ defmodule Mix.Tasks.Nex.Agent do
         Nex.Agent.Config.save(Nex.Agent.Config.set(config, :api_key, {provider, key}))
         Mix.shell().info("Updated #{provider} API key")
 
+      ["config", "set", "telegram.token", value] ->
+        config = Nex.Agent.Config.load()
+        Nex.Agent.Config.save(Nex.Agent.Config.set(config, :telegram_token, value))
+        Mix.shell().info("Updated telegram.token")
+
+      ["config", "set", "telegram.enabled", value] ->
+        config = Nex.Agent.Config.load()
+
+        case parse_boolean(value) do
+          {:ok, bool} ->
+            Nex.Agent.Config.save(Nex.Agent.Config.set(config, :telegram_enabled, bool))
+            Mix.shell().info("Updated telegram.enabled = #{bool}")
+
+          :error ->
+            Mix.shell().error("Invalid boolean: #{value} (expected true/false)")
+        end
+
+      ["config", "set", "telegram.allow_from", value] ->
+        config = Nex.Agent.Config.load()
+        allow_from = parse_csv_list(value)
+        Nex.Agent.Config.save(Nex.Agent.Config.set(config, :telegram_allow_from, allow_from))
+        Mix.shell().info("Updated telegram.allow_from = #{Enum.join(allow_from, ",")}")
+
+      ["config", "set", "telegram.reply_to_message", value] ->
+        config = Nex.Agent.Config.load()
+
+        case parse_boolean(value) do
+          {:ok, bool} ->
+            Nex.Agent.Config.save(Nex.Agent.Config.set(config, :telegram_reply_to_message, bool))
+            Mix.shell().info("Updated telegram.reply_to_message = #{bool}")
+
+          :error ->
+            Mix.shell().error("Invalid boolean: #{value} (expected true/false)")
+        end
+
       _ ->
         Mix.shell().error("Unknown config command")
     end
+  end
+
+  defp parse_boolean(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "true" -> {:ok, true}
+      "false" -> {:ok, false}
+      _ -> :error
+    end
+  end
+
+  defp parse_csv_list(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
   end
 
   defp run_single(opts) do

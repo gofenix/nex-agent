@@ -857,7 +857,8 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp normalize_tool_arguments(_), do: {:error, "Tool arguments must be a map or JSON object string"}
+  defp normalize_tool_arguments(_),
+    do: {:error, "Tool arguments must be a map or JSON object string"}
 
   @tool_result_max_chars 500
 
