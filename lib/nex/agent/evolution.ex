@@ -39,8 +39,8 @@ defmodule Nex.Agent.Evolution do
 
   ## Options
 
-  * `:validate` - Run validation before applying (default: true)
-  * `:backup` - Create backup before upgrade (default: true)
+  * `:validate` - Run validation before applying (default: false)
+  * `:backup` - Create backup before upgrade (default: false)
 
   ## Examples
 
@@ -58,8 +58,8 @@ defmodule Nex.Agent.Evolution do
   """
   @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade_module(module, code, opts \\ []) do
-    validate = Keyword.get(opts, :validate, true)
-    backup = Keyword.get(opts, :backup, true)
+    validate = Keyword.get(opts, :validate, false)
+    backup = Keyword.get(opts, :backup, false)
 
     # Get current source path
     source_path = get_source_path(module)
@@ -184,22 +184,19 @@ defmodule Nex.Agent.Evolution do
     cond do
       beam_path == "" or String.contains?(beam_path, "non_existing") or
           not File.exists?(beam_path) ->
-        # Try multiple possible locations - handle Elixir. prefix
-        module_str =
-          to_string(module)
+        module_path =
+          module
+          |> to_string()
           |> String.replace_prefix("Elixir.", "")
-          |> String.replace("Nex.", "nex_agent/nex/")
-
-        module_path = module_str |> String.replace(".", "/")
+          |> Macro.underscore()
 
         possible_paths = [
-          # Direct path - this is where it actually is
-          Path.join([File.cwd!(), "lib", "nex/agent/runner.ex"]),
-          Path.join([File.cwd!(), "nex_agent/lib/nex/agent/runner.ex"]),
-          # From current working directory
+          # Current project layout
           Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
-          # Home directory expansion
-          Path.expand("~/#{module_path}.ex")
+          # Monorepo layout: repo root running from parent directory
+          Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
+          # Monorepo layout: running from nex_agent directory itself
+          Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
         ]
 
         # Return first existing path or the first one
