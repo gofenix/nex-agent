@@ -44,6 +44,8 @@ defmodule Nex.Agent.Skills do
   """
   @spec load() :: :ok
   def load do
+    unless Process.whereis(@name), do: start_link()
+
     skills = Nex.Agent.Skills.Loader.load_all()
 
     Agent.update(@name, fn _state ->
@@ -73,6 +75,7 @@ defmodule Nex.Agent.Skills do
   """
   @spec get(String.t()) :: map() | nil
   def get(name) do
+    unless Process.whereis(@name), do: start_link()
     Agent.get(@name, &Map.get(&1, name))
   end
 

@@ -1,5 +1,5 @@
 defmodule Nex.Agent do
-  alias Nex.Agent.{Session, Runner}
+  alias Nex.Agent.{Session, Runner, Onboarding, Skills}
 
   @type t :: %__MODULE__{
           session: Session.t(),
@@ -18,6 +18,9 @@ defmodule Nex.Agent do
   ]
 
   def start(opts \\ []) do
+    :ok = Onboarding.ensure_initialized()
+    :ok = Skills.load()
+
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model, default_model(provider))
     api_key = Keyword.get(opts, :api_key) || default_api_key(provider)

@@ -385,6 +385,9 @@ defmodule Nex.Agent.Runner do
       :openai ->
         Nex.Agent.LLM.OpenAI.chat(messages, provider_opts)
 
+      :openrouter ->
+        Nex.Agent.LLM.OpenRouter.chat(messages, provider_opts)
+
       :ollama ->
         Nex.Agent.LLM.Ollama.chat(messages, provider_opts)
 

@@ -13,7 +13,10 @@ defmodule NexAgent.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [
+      extra_applications: [:logger, :inets, :ssl, :crypto],
+      mod: {Nex.Agent.Application, []}
+    ]
   end
 
   defp deps do
