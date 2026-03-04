@@ -78,16 +78,24 @@ defmodule Nex.Agent do
     session_key = "#{channel}:#{chat_id}"
     session = SessionManager.get_or_create(session_key)
 
-    case Runner.run(session, prompt,
-           provider: provider,
-           model: model,
-           api_key: api_key,
-           base_url: base_url,
-           cwd: cwd,
-           max_iterations: max_iterations,
-           channel: channel,
-           chat_id: chat_id
-         ) do
+    on_progress = Keyword.get(opts, :on_progress)
+    tools_filter = Keyword.get(opts, :tools_filter)
+
+    runner_opts =
+      [
+        provider: provider,
+        model: model,
+        api_key: api_key,
+        base_url: base_url,
+        cwd: cwd,
+        max_iterations: max_iterations,
+        channel: channel,
+        chat_id: chat_id
+      ]
+      |> maybe_put(:on_progress, on_progress)
+      |> maybe_put(:tools_filter, tools_filter)
+
+    case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->
         SessionManager.save(session)
         {:ok, result, %{agent | session: session}}
@@ -130,4 +138,7 @@ defmodule Nex.Agent do
   defp env_var_name(:anthropic), do: "ANTHROPIC_API_KEY"
   defp env_var_name(:openai), do: "OPENAI_API_KEY"
   defp env_var_name(_), do: "API_KEY"
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

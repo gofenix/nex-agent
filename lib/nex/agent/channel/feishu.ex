@@ -594,8 +594,20 @@ defmodule Nex.Agent.Channel.Feishu do
     {text, []}
   end
 
+  defp extract_content("image", content_json, message_id) do
+    image_key =
+      Map.get(content_json, "image_key") ||
+        Map.get(content_json, :image_key)
+
+    if image_key do
+      {"[image: #{image_key} message_id:#{message_id}]", []}
+    else
+      {nil, []}
+    end
+  end
+
   defp extract_content(msg_type, content_json, _message_id)
-       when msg_type in ["image", "audio", "file", "media"] do
+       when msg_type in ["audio", "file", "media"] do
     file_key =
       Map.get(content_json, "image_key") ||
         Map.get(content_json, "file_key") ||
@@ -610,11 +622,15 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp extract_content("interactive", content_json, _message_id) do
+    text = extract_interactive_content(content_json)
+    {text, []}
+  end
+
   defp extract_content(msg_type, content_json, _message_id)
        when msg_type in [
               "share_chat",
               "share_user",
-              "interactive",
               "share_calendar_event",
               "system",
               "merge_forward"
@@ -672,6 +688,66 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp extract_interactive_content(card) when is_map(card) do
+    elements = Map.get(card, "elements") || Map.get(card, :elements) || []
+    header = Map.get(card, "header") || Map.get(card, :header)
+
+    header_text =
+      if is_map(header) do
+        title = Map.get(header, "title") || Map.get(header, :title) || %{}
+        Map.get(title, "content") || Map.get(title, :content) || ""
+      else
+        ""
+      end
+
+    body_parts = Enum.map(elements, &extract_card_element/1)
+    parts = [header_text | body_parts] |> Enum.reject(&(&1 == ""))
+
+    case parts do
+      [] -> "[interactive card]"
+      _ -> Enum.join(parts, "\n")
+    end
+  end
+
+  defp extract_interactive_content(_), do: "[interactive card]"
+
+  defp extract_card_element(%{"tag" => "div"} = el) do
+    text_obj = Map.get(el, "text") || %{}
+    Map.get(text_obj, "content") || Map.get(text_obj, :content) || ""
+  end
+
+  defp extract_card_element(%{"tag" => "markdown", "content" => content}), do: content
+
+  defp extract_card_element(%{"tag" => "action"} = el) do
+    actions = Map.get(el, "actions") || []
+
+    Enum.map_join(actions, " ", fn action ->
+      text_obj = Map.get(action, "text") || %{}
+      "[" <> (Map.get(text_obj, "content") || "") <> "]"
+    end)
+  end
+
+  defp extract_card_element(%{"tag" => "note"} = el) do
+    elements = Map.get(el, "elements") || []
+
+    Enum.map_join(elements, " ", fn note_el ->
+      Map.get(note_el, "content") || ""
+    end)
+  end
+
+  defp extract_card_element(%{"tag" => "column_set"} = el) do
+    columns = Map.get(el, "columns") || []
+
+    Enum.map_join(columns, " | ", fn col ->
+      col_elements = Map.get(col, "elements") || []
+      Enum.map_join(col_elements, " ", &extract_card_element/1)
+    end)
+  end
+
+  defp extract_card_element(%{"tag" => "hr"}), do: "---"
+
+  defp extract_card_element(_), do: ""
+
   defp get_tenant_access_token(state) do
     now = System.system_time(:second)
 
@@ -712,7 +788,14 @@ defmodule Nex.Agent.Channel.Feishu do
         {:error, :missing_credentials, state}
 
       true ->
-        send_text(payload, chat_id, content, state)
+        metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+        is_progress = Map.get(metadata, "_progress") || Map.get(metadata, :_progress)
+
+        if is_progress do
+          send_text(payload, chat_id, content, state)
+        else
+          send_interactive_card(payload, chat_id, content, state)
+        end
     end
   end
 
@@ -735,6 +818,151 @@ defmodule Nex.Agent.Channel.Feishu do
       {:error, reason} -> {:error, reason, state}
     end
   end
+
+  defp send_interactive_card(payload, chat_id, content, state) do
+    card = build_interactive_card(content)
+
+    with {:ok, token, state} <- get_tenant_access_token(state),
+         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
+         {:ok, _body} <-
+           feishu_post(
+             state,
+             "/im/v1/messages?receive_id_type=#{receive_id_type}",
+             %{
+               "receive_id" => chat_id,
+               "msg_type" => "interactive",
+               "content" => Jason.encode!(card)
+             },
+             [{"Authorization", "Bearer #{token}"}]
+           ) do
+      {:ok, state}
+    else
+      {:error, reason} ->
+        Logger.warning("[Feishu] Card send failed, falling back to text: #{inspect(reason)}")
+        send_text(payload, chat_id, content, state)
+    end
+  end
+
+  defp build_interactive_card(content) do
+    elements = build_card_elements(content)
+
+    %{
+      "config" => %{"wide_screen_mode" => true},
+      "elements" => elements
+    }
+  end
+
+  defp build_card_elements(content) do
+    content
+    |> String.split("\n")
+    |> chunk_by_type()
+    |> Enum.flat_map(&render_chunk/1)
+  end
+
+  defp chunk_by_type(lines) do
+    {chunks, current} =
+      Enum.reduce(lines, {[], nil}, fn line, {chunks, current} ->
+        cond do
+          String.starts_with?(line, "```") and current == nil ->
+            lang = String.trim_leading(line, "`") |> String.trim()
+            {chunks, {:code, lang, []}}
+
+          match?({:code, _, _}, current) and String.starts_with?(line, "```") ->
+            {:code, lang, code_lines} = current
+            {chunks ++ [{:code_block, lang, Enum.reverse(code_lines)}], nil}
+
+          match?({:code, _, _}, current) ->
+            {:code, lang, code_lines} = current
+            {chunks, {:code, lang, [line | code_lines]}}
+
+          Regex.match?(~r/^\#{1,3}\s/, line) ->
+            {chunks ++ [{:heading, line}], nil}
+
+          Regex.match?(~r/^[-*]\s/, line) ->
+            case current do
+              {:list, items} -> {chunks, {:list, items ++ [line]}}
+              _ ->
+                chunks = if current, do: chunks ++ [current], else: chunks
+                {chunks, {:list, [line]}}
+            end
+
+          Regex.match?(~r/^\d+\.\s/, line) ->
+            case current do
+              {:list, items} -> {chunks, {:list, items ++ [line]}}
+              _ ->
+                chunks = if current, do: chunks ++ [current], else: chunks
+                {chunks, {:list, [line]}}
+            end
+
+          String.trim(line) == "" ->
+            if current do
+              {chunks ++ [current], nil}
+            else
+              {chunks, nil}
+            end
+
+          true ->
+            case current do
+              {:text, text_lines} -> {chunks, {:text, text_lines ++ [line]}}
+              _ ->
+                chunks = if current, do: chunks ++ [current], else: chunks
+                {chunks, {:text, [line]}}
+            end
+        end
+      end)
+
+    if current, do: chunks ++ [current], else: chunks
+  end
+
+  defp render_chunk({:heading, line}) do
+    {level, text} =
+      cond do
+        String.starts_with?(line, "### ") -> {3, String.trim_leading(line, "### ")}
+        String.starts_with?(line, "## ") -> {2, String.trim_leading(line, "## ")}
+        String.starts_with?(line, "# ") -> {1, String.trim_leading(line, "# ")}
+        true -> {3, line}
+      end
+
+    tag =
+      case level do
+        1 -> "lark_md"
+        _ -> "lark_md"
+      end
+
+    [%{"tag" => "div", "text" => %{"tag" => tag, "content" => "**#{text}**"}}]
+  end
+
+  defp render_chunk({:code_block, lang, lines}) do
+    code = Enum.join(lines, "\n")
+    lang_str = if lang != "", do: lang, else: "text"
+
+    [
+      %{
+        "tag" => "div",
+        "text" => %{
+          "tag" => "lark_md",
+          "content" => "```#{lang_str}\n#{code}\n```"
+        }
+      }
+    ]
+  end
+
+  defp render_chunk({:list, items}) do
+    md = Enum.join(items, "\n")
+    [%{"tag" => "div", "text" => %{"tag" => "lark_md", "content" => md}}]
+  end
+
+  defp render_chunk({:text, lines}) do
+    text = Enum.join(lines, "\n")
+
+    if String.trim(text) == "" do
+      []
+    else
+      [%{"tag" => "div", "text" => %{"tag" => "lark_md", "content" => text}}]
+    end
+  end
+
+  defp render_chunk(_), do: []
 
   defp extract_tenant_token(%{"code" => 0, "tenant_access_token" => token, "expire" => expire})
        when is_binary(token) and is_integer(expire) do

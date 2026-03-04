@@ -162,6 +162,8 @@ defmodule Nex.Agent.Gateway do
         bus: Process.whereis(Nex.Agent.Bus) != nil,
         cron: Process.whereis(Nex.Agent.Cron) != nil,
         inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
+        subagent: Process.whereis(Nex.Agent.Subagent) != nil,
+        harness: Process.whereis(Nex.Agent.Harness) != nil,
         telegram_channel: Process.whereis(Nex.Agent.Channel.Telegram) != nil,
         feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil
       }
@@ -197,7 +199,9 @@ defmodule Nex.Agent.Gateway do
     else
       ensure_bus_started()
       ensure_cron_started()
+      ensure_subagent_started(state.config)
       ensure_inbound_worker_started(state.config)
+      ensure_harness_started(state.config)
       ensure_telegram_channel_started(state.config)
       ensure_feishu_channel_started(state.config)
 
@@ -213,7 +217,9 @@ defmodule Nex.Agent.Gateway do
   defp do_stop(state) do
     stop_feishu_channel()
     stop_telegram_channel()
+    stop_harness()
     stop_inbound_worker()
+    stop_subagent()
     stop_cron()
     stop_bus()
 
@@ -239,6 +245,57 @@ defmodule Nex.Agent.Gateway do
 
       _pid ->
         :ok
+    end
+  end
+
+  defp ensure_subagent_started(config) do
+    case Process.whereis(Nex.Agent.Subagent) do
+      nil ->
+        opts = [
+          provider: String.to_atom(config.provider),
+          model: config.model,
+          api_key: Nex.Agent.Config.get_current_api_key(config),
+          base_url: Nex.Agent.Config.get_current_base_url(config)
+        ]
+
+        {:ok, _} = Nex.Agent.Subagent.start_link(opts)
+        :ok
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp ensure_harness_started(config) do
+    case Process.whereis(Nex.Agent.Harness) do
+      nil ->
+        opts = [
+          provider: String.to_atom(config.provider),
+          model: config.model,
+          api_key: Nex.Agent.Config.get_current_api_key(config),
+          base_url: Nex.Agent.Config.get_current_base_url(config),
+          auto_apply: false
+        ]
+
+        {:ok, _} = Nex.Agent.Harness.start_link(opts)
+        :ok
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp stop_subagent do
+    case Process.whereis(Nex.Agent.Subagent) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_harness do
+    case Process.whereis(Nex.Agent.Harness) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
     end
   end
 

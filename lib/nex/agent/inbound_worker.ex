@@ -10,7 +10,14 @@ defmodule Nex.Agent.InboundWorker do
 
   alias Nex.Agent.{Bus, Config, Session}
 
-  defstruct [:config, :agent_start_fun, :agent_prompt_fun, :agent_abort_fun, agents: %{}]
+  defstruct [
+    :config,
+    :agent_start_fun,
+    :agent_prompt_fun,
+    :agent_abort_fun,
+    agents: %{},
+    active_tasks: %{}
+  ]
 
   @type agent_start_fun :: (keyword() -> {:ok, term()} | {:error, term()})
   @type agent_prompt_fun :: (term(), String.t(), keyword() ->
@@ -22,7 +29,8 @@ defmodule Nex.Agent.InboundWorker do
           agent_start_fun: agent_start_fun(),
           agent_prompt_fun: agent_prompt_fun(),
           agent_abort_fun: agent_abort_fun(),
-          agents: %{String.t() => term()}
+          agents: %{String.t() => term()},
+          active_tasks: %{String.t() => pid()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -43,7 +51,8 @@ defmodule Nex.Agent.InboundWorker do
       agent_start_fun: Keyword.get(opts, :agent_start_fun, &Nex.Agent.start/1),
       agent_prompt_fun: Keyword.get(opts, :agent_prompt_fun, &Nex.Agent.prompt/3),
       agent_abort_fun: Keyword.get(opts, :agent_abort_fun, &Nex.Agent.abort/1),
-      agents: %{}
+      agents: %{},
+      active_tasks: %{}
     }
 
     Bus.subscribe(:inbound)
@@ -58,20 +67,50 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:bus_message, :inbound, payload}, state) when is_map(payload) do
-    case process_inbound(payload, state) do
-      {:ok, new_state} ->
-        {:noreply, new_state}
+    {:noreply, dispatch_inbound(payload, state)}
+  end
 
-      {:error, reason, new_state} ->
-        publish_outbound(payload, "Error: #{format_reason(reason)}")
-        {:noreply, new_state}
+  @impl true
+  def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
+    state = put_in(state.agents[key], updated_agent)
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+
+    unless result == :message_sent do
+      publish_outbound(payload, result)
     end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
+    state = put_in(state.agents[key], updated_agent)
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    publish_outbound(payload, "Error: #{format_reason(reason)}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:async_result, key, {:error, reason}, payload}, state) do
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    publish_outbound(payload, "Error: #{format_reason(reason)}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    active_tasks =
+      state.active_tasks
+      |> Enum.reject(fn {_key, task_pid} -> task_pid == pid end)
+      |> Map.new()
+
+    {:noreply, %{state | active_tasks: active_tasks}}
   end
 
   @impl true
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp process_inbound(payload, state) do
+  defp dispatch_inbound(payload, state) do
     channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
     chat_id = payload_chat_id(payload)
     content = Map.get(payload, :content) || Map.get(payload, "content") || ""
@@ -84,39 +123,100 @@ defmodule Nex.Agent.InboundWorker do
 
     cond do
       cmd == "" ->
-        {:ok, state}
+        state
 
       cmd == "/new" ->
+        state = cancel_active_task(state, key)
         publish_outbound(payload, "New session started.")
-        {:ok, %{state | agents: Map.delete(state.agents, key)}}
+        %{state | agents: Map.delete(state.agents, key)}
 
       cmd == "/stop" ->
-        state = abort_session_agent(state, key)
-        publish_outbound(payload, "Stopped current task.")
-        {:ok, state}
+        {count, state} = stop_session(state, key)
+        publish_outbound(payload, "Stopped #{count} task(s).")
+        state
 
       true ->
-        {channel, chat_id} = parse_session_key(key)
-
-        with {:ok, agent, state} <- ensure_agent(state, key),
-             {:ok, result, updated_agent} <-
-               state.agent_prompt_fun.(agent, content, channel: channel, chat_id: chat_id) do
-          state = put_in(state.agents[key], updated_agent)
-          # Only publish outbound if Runner didn't already send via message tool
-          unless result == :message_sent do
-            publish_outbound(payload, result)
-          end
-
-          {:ok, state}
-        else
-          {:error, reason, updated_agent} ->
-            state = put_in(state.agents[key], updated_agent)
-            {:error, reason, state}
-
-          {:error, reason} ->
-            {:error, reason, state}
-        end
+        dispatch_async(state, key, content, payload)
     end
+  end
+
+  defp dispatch_async(state, key, content, payload) do
+    {channel, chat_id} = parse_session_key(key)
+
+    case ensure_agent(state, key) do
+      {:ok, agent, state} ->
+        parent = self()
+        on_progress = build_progress_callback(payload)
+
+        pid =
+          spawn_link(fn ->
+            result =
+              state.agent_prompt_fun.(agent, content,
+                channel: channel,
+                chat_id: chat_id,
+                on_progress: on_progress
+              )
+
+            send(parent, {:async_result, key, result, payload})
+          end)
+
+        Process.monitor(pid)
+        %{state | active_tasks: Map.put(state.active_tasks, key, pid)}
+
+      {:error, reason} ->
+        publish_outbound(payload, "Error: #{format_reason(reason)}")
+        state
+    end
+  end
+
+  defp build_progress_callback(payload) do
+    fn type, content ->
+      case type do
+        :tool_hint ->
+          publish_outbound(payload, "🔧 #{content}", _progress: true, _tool_hint: true)
+
+        :thinking ->
+          publish_outbound(payload, content, _progress: true)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp cancel_active_task(state, key) do
+    case Map.get(state.active_tasks, key) do
+      nil ->
+        state
+
+      pid ->
+        Process.exit(pid, :kill)
+        %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    end
+  end
+
+  defp stop_session(state, key) do
+    count =
+      case Map.get(state.active_tasks, key) do
+        nil -> 0
+        pid ->
+          Process.exit(pid, :kill)
+          1
+      end
+
+    subagent_count =
+      if Process.whereis(Nex.Agent.Subagent) do
+        case Nex.Agent.Subagent.cancel_by_session(key) do
+          {:ok, n} -> n
+          _ -> 0
+        end
+      else
+        0
+      end
+
+    state = abort_session_agent(state, key)
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    {count + subagent_count, state}
   end
 
   defp ensure_agent(state, key) do
@@ -183,7 +283,7 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp publish_outbound(payload, content) do
+  defp publish_outbound(payload, content, extra_meta \\ []) do
     channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
     chat_id = payload_chat_id(payload)
 
@@ -200,6 +300,7 @@ defmodule Nex.Agent.InboundWorker do
       |> extract_metadata()
       |> Map.put_new("channel", channel)
       |> Map.put_new("chat_id", chat_id)
+      |> Map.merge(Map.new(extra_meta, fn {k, v} -> {to_string(k), v} end))
 
     Logger.info("InboundWorker publishing topic=#{inspect(outbound_topic)} chat_id=#{chat_id}")
 
