@@ -2,6 +2,10 @@ defmodule Nex.Agent.Tool.Read do
   alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
+  def name, do: "read"
+  def description, do: "Read file contents (only files within allowed directories)"
+  def category, do: :base
+
   def definition do
     %{
       name: "read",

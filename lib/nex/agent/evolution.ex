@@ -5,20 +5,6 @@ defmodule Nex.Agent.Evolution do
   This is the core of the self-evolving agent. It allows the agent to
   modify its own code and reload it without restarting.
 
-  ## Usage
-
-      # Modify a module's code
-      {:ok, version} = Nex.Agent.Evolution.upgrade_module(
-        Nex.Agent.Runner,
-        new_code_string
-      )
-
-      # Rollback to previous version
-      :ok = Nex.Agent.Evolution.rollback(Nex.Agent.Runner)
-
-      # List all versions
-      versions = Nex.Agent.Evolution.versions(Nex.Agent.Runner)
-
   ## Safety
 
   - All changes are versioned
@@ -26,56 +12,38 @@ defmodule Nex.Agent.Evolution do
   - Previous code is preserved for manual recovery
   """
 
+  require Logger
+
   @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
 
   @doc """
   Upgrade a module with new code.
 
-  ## Parameters
-
-  * `module` - Module name (atom)
-  * `code` - New Elixir code as string
-  * `opts` - Options
+  Always creates a backup before upgrade. Validates code syntax,
+  and optionally performs a health check after loading.
 
   ## Options
 
-  * `:validate` - Run validation before applying (default: false)
-  * `:backup` - Create backup before upgrade (default: false)
-
-  ## Examples
-
-      new_code = \"\"\"
-      defmodule Nex.Agent.Runner do
-        def run(session, prompt, opts \\\\ []) do
-          IO.puts(\"Modified at \#{DateTime.utc_now()}\")
-          original_code()
-        end
-      end
-      \"\"\"
-
-      {:ok, version} = Nex.Agent.Evolution.upgrade_module(Nex.Agent.Runner, new_code)
-
+  * `:validate` - Run validation + health check (default: true)
   """
   @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade_module(module, code, opts \\ []) do
-    validate = Keyword.get(opts, :validate, false)
-    backup = Keyword.get(opts, :backup, false)
+    validate = Keyword.get(opts, :validate, true)
 
-    # Get current source path
     source_path = get_source_path(module)
 
     with :ok <- maybe_validate_code(validate, code),
-         :ok <- maybe_create_backup(backup, module, source_path),
-         :ok <- File.write(source_path, code),
-         :ok <- compile_and_load(module, code) do
+         :ok <- create_backup(module, source_path),
+         :ok <- write_source(source_path, code),
+         :ok <- compile_and_load(module, code),
+         :ok <- maybe_health_check(validate, module) do
       version = save_version(module, code)
+      Logger.info("[Evolution] Upgraded #{inspect(module)} -> version #{version.id}")
       {:ok, version}
     else
       {:error, reason} ->
-        if backup do
-          _ = rollback(module)
-        end
-
+        Logger.warning("[Evolution] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
+        _ = rollback(module)
         {:error, to_error(reason)}
     end
   end
@@ -83,26 +51,30 @@ defmodule Nex.Agent.Evolution do
   @doc """
   Rollback to the previous version of a module.
   """
-
   @spec rollback(atom()) :: :ok | {:error, String.t()}
   def rollback(module) do
     versions = list_versions(module)
 
     if length(versions) > 1 do
-      # Get the previous version (second to last)
       previous = Enum.at(versions, -2)
-
       source_path = get_source_path(module)
-
-      # Write previous version
-      File.write!(source_path, previous.code)
-
-      # Reload
+      write_source(source_path, previous.code)
       compile_and_load(module, previous.code)
-
       :ok
     else
-      {:error, "No previous version to rollback to"}
+      # Try backup file
+      module_dir = Path.join(@versions_dir, to_string(module))
+      backup_path = Path.join(module_dir, "backup.ex")
+
+      if File.exists?(backup_path) do
+        code = File.read!(backup_path)
+        source_path = get_source_path(module)
+        write_source(source_path, code)
+        compile_and_load(module, code)
+        :ok
+      else
+        {:error, "No previous version to rollback to"}
+      end
     end
   end
 
@@ -115,7 +87,7 @@ defmodule Nex.Agent.Evolution do
 
     if version do
       source_path = get_source_path(module)
-      File.write!(source_path, version.code)
+      write_source(source_path, version.code)
       compile_and_load(module, version.code)
       :ok
     else
@@ -134,6 +106,7 @@ defmodule Nex.Agent.Evolution do
       module_dir
       |> File.ls!()
       |> Enum.filter(&String.ends_with?(&1, ".ex"))
+      |> Enum.reject(&(&1 == "backup.ex"))
       |> Enum.map(&read_version(module_dir, &1))
       |> Enum.filter(&is_map/1)
       |> Enum.sort_by(& &1.timestamp)
@@ -157,12 +130,7 @@ defmodule Nex.Agent.Evolution do
   @spec current_version(atom()) :: map() | nil
   def current_version(module) do
     versions = list_versions(module)
-
-    if length(versions) > 0 do
-      Enum.at(versions, -1)
-    else
-      nil
-    end
+    if versions != [], do: List.last(versions), else: nil
   end
 
   @doc """
@@ -170,15 +138,66 @@ defmodule Nex.Agent.Evolution do
   """
   @spec can_evolve?(atom()) :: boolean()
   def can_evolve?(module) do
-    # Must be a defined module
-    # Simplified: assume source exists if module is loaded
     Code.ensure_loaded?(module)
+  end
+
+  @doc """
+  List all modules that can be evolved (agent modules).
+  """
+  @spec list_evolvable_modules() :: [atom()]
+  def list_evolvable_modules do
+    app_modules()
+    |> Enum.filter(&can_evolve?/1)
+  end
+
+  @doc """
+  Get the source code of a module from disk.
+  """
+  @spec get_source(atom()) :: {:ok, String.t()} | {:error, String.t()}
+  def get_source(module) do
+    path = get_source_path(module)
+
+    if File.exists?(path) do
+      File.read(path)
+    else
+      {:error, "Source not found at #{path}"}
+    end
+  end
+
+  @doc """
+  Diff between current source and new code.
+  """
+  @spec diff(atom(), String.t()) :: String.t()
+  def diff(module, new_code) do
+    case get_source(module) do
+      {:ok, current} ->
+        old_lines = String.split(current, "\n")
+        new_lines = String.split(new_code, "\n")
+
+        removed = old_lines -- new_lines
+        added = new_lines -- old_lines
+
+        parts = []
+        parts = if removed != [], do: parts ++ ["--- Removed:\n" <> Enum.join(removed, "\n")], else: parts
+        parts = if added != [], do: parts ++ ["+++ Added:\n" <> Enum.join(added, "\n")], else: parts
+
+        if parts == [], do: "No changes", else: Enum.join(parts, "\n\n")
+
+      {:error, reason} ->
+        "Cannot diff: #{reason}"
+    end
   end
 
   # Private functions
 
+  defp app_modules do
+    case :application.get_key(:nex_agent, :modules) do
+      {:ok, modules} -> modules
+      _ -> []
+    end
+  end
+
   defp get_source_path(module) do
-    # Try to get the source file from the compiled beam
     beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
     cond do
@@ -191,19 +210,14 @@ defmodule Nex.Agent.Evolution do
           |> Macro.underscore()
 
         possible_paths = [
-          # Current project layout
           Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
-          # Monorepo layout: repo root running from parent directory
           Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
-          # Monorepo layout: running from nex_agent directory itself
           Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
         ]
 
-        # Return first existing path or the first one
         Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
 
       true ->
-        # Convert beam path to ex path
         beam_path
         |> Path.rootname(".beam")
         |> Path.rootname(".ez")
@@ -214,8 +228,6 @@ defmodule Nex.Agent.Evolution do
   end
 
   defp validate_code(code) do
-    # Only parse the code, don't execute it
-    # This validates syntax without running the code
     case Code.string_to_quoted(code) do
       {:ok, _} -> :ok
       {:error, error} -> {:error, Exception.message(error)}
@@ -231,42 +243,49 @@ defmodule Nex.Agent.Evolution do
     end
   end
 
+  defp maybe_health_check(false, _module), do: :ok
+
+  defp maybe_health_check(true, module) do
+    try do
+      info = module.__info__(:functions)
+
+      if is_list(info) do
+        :ok
+      else
+        {:error, "Health check failed: module interface incomplete"}
+      end
+    rescue
+      e -> {:error, "Health check failed: #{Exception.message(e)}"}
+    end
+  end
+
   defp compile_and_load(module, code) do
-    # Parse the code
     quoted = Code.string_to_quoted!(code)
-
-    # Compile the module with a unique name to avoid conflicts
-    # This compiles the code into the module name
     {module_bin, _} = Code.compile_quoted(quoted, [])
-
-    # Purge old version and load new
     :code.purge(module)
     {:module, _module} = :code.load_binary(module, ~c"", module_bin)
-
     :ok
   rescue
     e ->
       {:error, Exception.message(e)}
   end
 
+  defp write_source(source_path, code) do
+    dir = Path.dirname(source_path)
+    File.mkdir_p!(dir)
+    File.write(source_path, code)
+  end
+
   defp create_backup(module, source_path) do
     module_dir = Path.join(@versions_dir, to_string(module))
     File.mkdir_p!(module_dir)
 
-    backup_path = Path.join(module_dir, "backup.ex")
-    File.copy!(source_path, backup_path)
-    :ok
-  end
-
-  defp maybe_create_backup(false, _module, _source_path), do: :ok
-  defp maybe_create_backup(true, _module, source_path) when not is_binary(source_path), do: :ok
-
-  defp maybe_create_backup(true, module, source_path) do
-    if File.exists?(source_path) do
-      create_backup(module, source_path)
-    else
-      :ok
+    if is_binary(source_path) and File.exists?(source_path) do
+      backup_path = Path.join(module_dir, "backup.ex")
+      File.copy!(source_path, backup_path)
     end
+
+    :ok
   end
 
   defp save_version(module, code) do

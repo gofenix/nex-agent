@@ -2,6 +2,10 @@ defmodule Nex.Agent.Tool.Write do
   alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
+  def name, do: "write"
+  def description, do: "Create or overwrite files (only within allowed directories)"
+  def category, do: :base
+
   def definition do
     %{
       name: "write",

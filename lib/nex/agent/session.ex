@@ -46,20 +46,28 @@ defmodule Nex.Agent.Session do
   """
   @spec add_message(t(), String.t(), String.t(), keyword()) :: t()
   def add_message(%__MODULE__{} = session, role, content, opts \\ []) do
-    extra =
-      opts
-      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-      |> Enum.into(%{}, fn {k, v} -> {to_string(k), v} end)
+    tool_calls = Keyword.get(opts, :tool_calls)
 
-    msg =
-      %{
-        "role" => role,
-        "content" => content,
-        "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-      |> Map.merge(extra)
+    # Skip empty assistant messages with no tool_calls
+    if role == "assistant" and (content == nil or content == "") and
+         (tool_calls == nil or tool_calls == []) do
+      session
+    else
+      extra =
+        opts
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Enum.into(%{}, fn {k, v} -> {to_string(k), v} end)
 
-    %{session | messages: session.messages ++ [msg], updated_at: DateTime.utc_now()}
+      msg =
+        %{
+          "role" => role,
+          "content" => content,
+          "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+        |> Map.merge(extra)
+
+      %{session | messages: session.messages ++ [msg], updated_at: DateTime.utc_now()}
+    end
   end
 
   @doc """

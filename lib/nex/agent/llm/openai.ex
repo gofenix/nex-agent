@@ -9,6 +9,7 @@ defmodule Nex.Agent.LLM.OpenAI do
     temperature = Keyword.get(options, :temperature, 1.0)
     http_client = Keyword.get(options, :http_client, &Req.post/2)
     tools = Keyword.get(options, :tools, []) |> transform_tools()
+    tool_choice = Keyword.get(options, :tool_choice)
 
     base_url = String.trim_trailing(base_url, "/")
 
@@ -21,7 +22,9 @@ defmodule Nex.Agent.LLM.OpenAI do
 
     body =
       if tools != [] do
-        Map.put(body, :tools, tools)
+        body
+        |> Map.put(:tools, tools)
+        |> then(fn b -> if tool_choice, do: Map.put(b, :tool_choice, tool_choice), else: b end)
       else
         body
       end
@@ -44,6 +47,7 @@ defmodule Nex.Agent.LLM.OpenAI do
            content: message["content"],
            reasoning_content: message["reasoning_content"],
            tool_calls: message["tool_calls"] || [],
+           finish_reason: choice["finish_reason"],
            model: response["model"],
            usage: response["usage"]
          }}
@@ -64,12 +68,17 @@ defmodule Nex.Agent.LLM.OpenAI do
 
   defp transform_tools(tools) when is_list(tools) do
     Enum.map(tools, fn tool ->
+      func = tool["function"] || %{}
+      name = tool["name"] || func["name"]
+      description = tool["description"] || func["description"]
+      parameters = tool["input_schema"] || func["parameters"] || %{type: "object", properties: %{}}
+
       %{
         type: "function",
         function: %{
-          name: tool["name"],
-          description: tool["description"],
-          parameters: tool["input_schema"] || %{type: "object", properties: %{}}
+          name: name,
+          description: description,
+          parameters: parameters
         }
       }
     end)

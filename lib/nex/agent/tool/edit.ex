@@ -2,6 +2,10 @@ defmodule Nex.Agent.Tool.Edit do
   alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
+  def name, do: "edit"
+  def description, do: "Make surgical edits to files (only within allowed directories)"
+  def category, do: :base
+
   def definition do
     %{
       name: "edit",

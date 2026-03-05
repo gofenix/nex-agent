@@ -161,6 +161,7 @@ defmodule Nex.Agent.Gateway do
       services: %{
         bus: Process.whereis(Nex.Agent.Bus) != nil,
         cron: Process.whereis(Nex.Agent.Cron) != nil,
+        tool_registry: Process.whereis(Nex.Agent.Tool.Registry) != nil,
         inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
         subagent: Process.whereis(Nex.Agent.Subagent) != nil,
         harness: Process.whereis(Nex.Agent.Harness) != nil,
@@ -199,6 +200,7 @@ defmodule Nex.Agent.Gateway do
     else
       ensure_system_prompt_started()
       ensure_session_manager_started()
+      ensure_tool_registry_started()
       ensure_bus_started()
       ensure_cron_started()
       ensure_subagent_started(state.config)
@@ -224,6 +226,7 @@ defmodule Nex.Agent.Gateway do
     stop_subagent()
     stop_cron()
     stop_bus()
+    stop_tool_registry()
     stop_session_manager()
     stop_system_prompt()
 
@@ -245,6 +248,17 @@ defmodule Nex.Agent.Gateway do
     case Process.whereis(Nex.Agent.SessionManager) do
       nil ->
         {:ok, _} = Nex.Agent.SessionManager.start_link()
+        :ok
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp ensure_tool_registry_started do
+    case Process.whereis(Nex.Agent.Tool.Registry) do
+      nil ->
+        {:ok, _} = Nex.Agent.Tool.Registry.start_link()
         :ok
 
       _pid ->
@@ -327,6 +341,13 @@ defmodule Nex.Agent.Gateway do
 
   defp stop_bus do
     case Process.whereis(Nex.Agent.Bus) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_tool_registry do
+    case Process.whereis(Nex.Agent.Tool.Registry) do
       nil -> :ok
       pid -> GenServer.stop(pid, :shutdown)
     end

@@ -23,7 +23,9 @@ defmodule NexAgent.MixProject do
     [
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
-      {:websockex, "~> 0.4"}
+      {:websockex, "~> 0.4"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
     ]
   end
 end

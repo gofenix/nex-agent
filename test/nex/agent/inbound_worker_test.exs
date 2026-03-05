@@ -25,7 +25,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, %{session: :s1}}
     end
 
-    prompt_fun = fn _agent, content ->
+    prompt_fun = fn _agent, content, _opts ->
       {:ok, "echo: #{content}", %{session: :s1}}
     end
 
@@ -68,14 +68,15 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:bus_message, :telegram_outbound, out2}, 1_000
     assert out2.content == "echo: second"
 
-    assert Agent.get(start_count, & &1) == 1
+    # ensure_agent creates agents directly now, start_fun is no longer called
+    assert Agent.get(start_count, & &1) == 0
   end
 
   test "supports /new and /stop control commands" do
     {:ok, aborted} = Agent.start_link(fn -> 0 end)
 
     start_fun = fn _opts -> {:ok, %{session: :x}} end
-    prompt_fun = fn _agent, content -> {:ok, content, %{session: :x}} end
+    prompt_fun = fn _agent, content, _opts -> {:ok, content, %{session: :x}} end
 
     abort_fun = fn _agent ->
       Agent.update(aborted, &(&1 + 1))
@@ -101,7 +102,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     Bus.publish(:inbound, Map.put(base, :content, "/stop"))
     assert_receive {:bus_message, :telegram_outbound, stop_msg}, 1_000
-    assert stop_msg.content == "Stopped current task."
+    assert stop_msg.content == "Stopped 0 task(s)."
 
     Bus.publish(:inbound, Map.put(base, :content, "/new"))
     assert_receive {:bus_message, :telegram_outbound, new_msg}, 1_000

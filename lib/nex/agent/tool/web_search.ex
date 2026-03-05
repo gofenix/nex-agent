@@ -3,10 +3,34 @@ defmodule Nex.Agent.Tool.WebSearch do
   Web Search Tool - Search the web using Brave Search API
   """
 
-  @behaviour Nex.Agent.Tool
+  @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "web_search"
   def description, do: "Search the web. Returns titles, URLs, and snippets."
+  def category, do: :base
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{
+          query: %{
+            type: "string",
+            description: "Search query"
+          },
+          count: %{
+            type: "integer",
+            description: "Number of results (1-10)",
+            minimum: 1,
+            maximum: 10
+          }
+        },
+        required: ["query"]
+      }
+    }
+  end
 
   def parameters do
     %{

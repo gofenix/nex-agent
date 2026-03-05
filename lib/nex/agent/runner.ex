@@ -9,8 +9,11 @@ defmodule Nex.Agent.Runner do
     Memory
   }
 
+  alias Nex.Agent.Tool.Registry, as: ToolRegistry
+
   @default_max_iterations 10
-  @memory_window 50
+  @max_iterations_hard_limit 50
+  @memory_window 100
   @max_tool_result_length 2000
   @tool_hint_preview_length 220
 
@@ -23,23 +26,18 @@ defmodule Nex.Agent.Runner do
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
-    cwd = Keyword.get(opts, :cwd, File.cwd!())
-    channel = Keyword.get(opts, :channel, "telegram")
-    chat_id = Keyword.get(opts, :chat_id, "default")
 
-    Logger.info("[Runner] Starting provider=#{provider} model=#{model} channel=#{channel}")
+    Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
 
     session = maybe_consolidate_memory(session, provider, model, api_key, base_url)
 
     history = Session.get_history(session, @memory_window)
 
+    channel = Keyword.get(opts, :channel, "telegram")
+    chat_id = Keyword.get(opts, :chat_id, "default")
+
     messages =
-      ContextBuilder.build_messages(
-        history,
-        prompt,
-        channel,
-        chat_id
-      )
+      ContextBuilder.build_messages(history, prompt, channel, chat_id)
 
     session = Session.add_message(session, "user", prompt)
 
@@ -48,29 +46,22 @@ defmodule Nex.Agent.Runner do
     run_loop(session, messages, 0, max_iterations, opts)
   end
 
-  defp session_history(session) do
-    Session.get_history(session, @memory_window)
-  end
-
   defp maybe_consolidate_memory(session, provider, model, api_key, base_url) do
     messages = session.messages
     unconsolidated = length(messages) - session.last_consolidated
 
     if unconsolidated >= @memory_window do
-      Logger.info("[Runner] Triggering memory consolidation: #{unconsolidated} messages")
+      Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
 
-      case Memory.consolidate(session, provider, model,
-             api_key: api_key,
-             base_url: base_url,
-             memory_window: @memory_window
-           ) do
-        {:ok, updated_session} ->
-          updated_session
+      Task.start(fn ->
+        Memory.consolidate(session, provider, model,
+          api_key: api_key,
+          base_url: base_url,
+          memory_window: @memory_window
+        )
+      end)
 
-        {:error, reason} ->
-          Logger.warning("[Runner] Memory consolidation failed: #{inspect(reason)}")
-          session
-      end
+      session
     else
       session
     end
@@ -87,45 +78,19 @@ defmodule Nex.Agent.Runner do
       case call_llm(messages, opts) do
         {:ok, response} ->
           content = response.content
-          reasoning_content = Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
+          finish_reason = Map.get(response, :finish_reason)
+
+          reasoning_content =
+            Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
+
           tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
-          if tool_calls && tool_calls != [] do
-            Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
-            Logger.debug("[Runner] raw tool_calls=#{inspect(tool_calls, limit: 20)}")
-
-            tool_call_dicts =
-              Enum.map(tool_calls, fn tc ->
-                func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
-                name = Map.get(tc, :name) || Map.get(tc, "name") || Map.get(func, "name") || Map.get(func, :name)
-                arguments = Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") || Map.get(func, :arguments) || %{}
-
-                %{
-                  "id" => Map.get(tc, :id) || Map.get(tc, "id"),
-                  "type" => "function",
-                  "function" => %{
-                    "name" => name,
-                    "arguments" => if(is_binary(arguments), do: arguments, else: Jason.encode!(arguments))
-                  }
-                }
-              end)
-
-            maybe_send_progress(on_progress, content, tool_call_dicts)
-
-            messages = ContextBuilder.add_assistant_message(messages, content, tool_call_dicts, reasoning_content)
-
-            session =
-              Session.add_message(session, "assistant", content, tool_calls: tool_call_dicts, reasoning_content: reasoning_content)
-
-            {new_messages, results, session} = execute_tools(session, messages, tool_calls, opts)
-
-            maybe_publish_tool_results(results, opts)
-
-            run_loop(session, new_messages, iteration + 1, max_iterations, opts)
+          if finish_reason == "error" do
+            Logger.error("[Runner] LLM returned error finish_reason")
+            {:error, "LLM returned an error", session}
           else
-            Logger.info("[Runner] LLM finished: #{String.slice(content || "", 0, 100)}")
-            session = Session.add_message(session, "assistant", content || "", reasoning_content: reasoning_content)
-            {:ok, content || "", session}
+            handle_response(session, messages, content, tool_calls, reasoning_content,
+              iteration, max_iterations, on_progress, opts)
           end
 
         {:error, reason} ->
@@ -133,6 +98,85 @@ defmodule Nex.Agent.Runner do
           {:error, reason, session}
       end
     end
+  end
+
+  defp handle_response(session, messages, content, tool_calls, reasoning_content,
+         iteration, max_iterations, on_progress, opts)
+       when is_list(tool_calls) and tool_calls != [] do
+    Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
+
+    tool_call_dicts = normalize_tool_calls(tool_calls)
+
+    maybe_send_progress(on_progress, content, tool_call_dicts)
+
+    messages =
+      ContextBuilder.add_assistant_message(messages, content, tool_call_dicts, reasoning_content)
+
+    session =
+      Session.add_message(session, "assistant", content,
+        tool_calls: tool_call_dicts,
+        reasoning_content: reasoning_content
+      )
+
+    {new_messages, results, session} = execute_tools(session, messages, tool_calls, opts)
+
+    maybe_publish_tool_results(results, opts)
+
+    # Check if message tool was used
+    message_sent = Enum.any?(results, fn {_id, name, _r} -> name == "message" end)
+
+    effective_max =
+      if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit do
+        new_max = min(max_iterations * 2, @max_iterations_hard_limit)
+        Logger.info("[Runner] Auto-expanding max_iterations #{max_iterations} -> #{new_max}")
+        new_max
+      else
+        max_iterations
+      end
+
+    case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
+      {:ok, final_content, final_session} when message_sent and (final_content == "" or is_nil(final_content)) ->
+        {:ok, :message_sent, final_session}
+
+      other ->
+        other
+    end
+  end
+
+  defp handle_response(session, _messages, content, _tool_calls, reasoning_content,
+         _iteration, _max_iterations, _on_progress, _opts) do
+    Logger.info("[Runner] LLM finished: #{String.slice(content || "", 0, 100)}")
+
+    session =
+      Session.add_message(session, "assistant", content || "",
+        reasoning_content: reasoning_content
+      )
+
+    {:ok, content || "", session}
+  end
+
+  defp normalize_tool_calls(tool_calls) do
+    Enum.map(tool_calls, fn tc ->
+      func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
+
+      name =
+        Map.get(tc, :name) || Map.get(tc, "name") || Map.get(func, "name") ||
+          Map.get(func, :name)
+
+      arguments =
+        Map.get(tc, :arguments) || Map.get(tc, "arguments") ||
+          Map.get(func, "arguments") || Map.get(func, :arguments) || %{}
+
+      %{
+        "id" => Map.get(tc, :id) || Map.get(tc, "id"),
+        "type" => "function",
+        "function" => %{
+          "name" => name,
+          "arguments" =>
+            if(is_binary(arguments), do: arguments, else: Jason.encode!(arguments))
+        }
+      }
+    end)
   end
 
   defp maybe_send_progress(nil, _content, _tool_calls), do: :ok
@@ -169,15 +213,14 @@ defmodule Nex.Agent.Runner do
 
   defp normalize_tool_hint_args(args, tool_name) when is_binary(args) do
     case Jason.decode(args) do
-      {:ok, decoded} ->
-        normalize_tool_hint_args(decoded, tool_name)
-
-      _ ->
-        args
+      {:ok, decoded} -> normalize_tool_hint_args(decoded, tool_name)
+      _ -> args
     end
   end
 
-  defp normalize_tool_hint_args(%{"command" => command}, "bash") when is_binary(command), do: command
+  defp normalize_tool_hint_args(%{"command" => command}, "bash") when is_binary(command),
+    do: command
+
   defp normalize_tool_hint_args(%{command: command}, "bash") when is_binary(command), do: command
 
   defp normalize_tool_hint_args(args, _tool_name) when is_map(args) do
@@ -216,7 +259,8 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp truncate_result(result) when is_binary(result) and byte_size(result) > @max_tool_result_length do
+  defp truncate_result(result)
+       when is_binary(result) and byte_size(result) > @max_tool_result_length do
     String.slice(result, 0, @max_tool_result_length) <> "\n... (truncated)"
   end
 
@@ -226,18 +270,46 @@ defmodule Nex.Agent.Runner do
   defp call_llm(messages, opts) do
     tools =
       case Keyword.get(opts, :tools_filter) do
-        :subagent -> base_tools()
-        _ -> all_tools()
+        :subagent -> registry_definitions(:subagent)
+        _ -> registry_definitions(:all)
       end
 
-    opts =
-      opts
-      |> Keyword.put(:tools, tools)
+    opts = Keyword.put(opts, :tools, tools)
 
     if opts[:llm_client] do
       opts[:llm_client].(messages, opts)
     else
       call_llm_real(messages, opts)
+    end
+  end
+
+  defp registry_definitions(filter) do
+    if Process.whereis(ToolRegistry) do
+      registry_defs = ToolRegistry.definitions(filter)
+
+      # Also include dynamic skill tools
+      skill_tools =
+        Skills.for_llm()
+        |> Enum.map(fn skill ->
+          name = Map.get(skill, "name") || Map.get(skill, :name)
+          desc = Map.get(skill, "description") || Map.get(skill, :description)
+
+          %{
+            "name" => name,
+            "description" => desc,
+            "input_schema" => %{
+              "type" => "object",
+              "properties" => %{
+                "input" => %{"type" => "string", "description" => "Input to skill"}
+              },
+              "required" => ["input"]
+            }
+          }
+        end)
+
+      registry_defs ++ skill_tools
+    else
+      []
     end
   end
 
@@ -269,303 +341,121 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp base_tools do
-    [
-      %{
-        "name" => "read",
-        "description" => "Read a file from the filesystem",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "path" => %{"type" => "string", "description" => "Path to file"}
-          },
-          "required" => ["path"]
-        }
-      },
-      %{
-        "name" => "write",
-        "description" => "Write content to a file",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "path" => %{"type" => "string", "description" => "Path to file"},
-            "content" => %{"type" => "string", "description" => "Content to write"}
-          },
-          "required" => ["path", "content"]
-        }
-      },
-      %{
-        "name" => "bash",
-        "description" => "Execute a shell command",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "command" => %{"type" => "string", "description" => "Command to execute"}
-          },
-          "required" => ["command"]
-        }
-      }
-    ]
-  end
-
-  defp evolution_tools do
-    [
-      %{
-        "name" => "skill_create",
-        "description" => "Create a new reusable skill. Use this when you notice a repeated pattern that should be automated.",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "name" => %{"type" => "string", "description" => "Skill name (snake_case)"},
-            "description" => %{"type" => "string", "description" => "What this skill does"},
-            "content" => %{"type" => "string", "description" => "Skill content (markdown instructions or script)"}
-          },
-          "required" => ["name", "description", "content"]
-        }
-      },
-      %{
-        "name" => "soul_update",
-        "description" => "Update your SOUL.md personality/behavior file. Use sparingly to record important learned preferences or behavioral adjustments.",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "content" => %{"type" => "string", "description" => "New full content for SOUL.md"}
-          },
-          "required" => ["content"]
-        }
-      },
-      %{
-        "name" => "spawn_task",
-        "description" => "Spawn a background subagent to handle a task independently. The result will be reported back when complete.",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "task" => %{"type" => "string", "description" => "Description of the task to perform"},
-            "label" => %{"type" => "string", "description" => "Short label for the task"}
-          },
-          "required" => ["task"]
-        }
-      },
-      %{
-        "name" => "message",
-        "description" => "Send a message to the user immediately without waiting for the full response.",
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "content" => %{"type" => "string", "description" => "Message content to send"}
-          },
-          "required" => ["content"]
-        }
-      }
-    ]
-  end
-
-  defp all_tools do
-    skills = Skills.for_llm()
-
-    skill_tools =
-      Enum.map(skills, fn skill ->
-        name = Map.get(skill, "name") || Map.get(skill, :name)
-        desc = Map.get(skill, "description") || Map.get(skill, :description)
-
-        %{
-          "name" => name,
-          "description" => desc,
-          "input_schema" => %{
-            "type" => "object",
-            "properties" => %{
-              "input" => %{"type" => "string", "description" => "Input to skill"}
-            },
-            "required" => ["input"]
-          }
-        }
-      end)
-
-    base_tools() ++ evolution_tools() ++ skill_tools
-  end
-
   defp execute_tools(session, messages, tool_calls, opts) do
+    ctx = build_tool_ctx(opts)
+
     results =
-      Enum.map(tool_calls, fn tc ->
-        func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
-        tool_name = Map.get(tc, :name) || Map.get(tc, "name") || Map.get(func, "name") || Map.get(func, :name)
-        tool_call_id = Map.get(tc, :id) || Map.get(tc, "id")
-        args = Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") || Map.get(func, :arguments) || %{}
+      tool_calls
+      |> Task.async_stream(
+        fn tc ->
+          func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
 
-        args =
-          if is_binary(args) do
-            case Jason.decode(args) do
-              {:ok, map} -> map
-              _ -> %{}
-            end
-          else
-            args
-          end
+          tool_name =
+            Map.get(tc, :name) || Map.get(tc, "name") || Map.get(func, "name") ||
+              Map.get(func, :name)
 
-        Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(args)})")
+          tool_call_id = Map.get(tc, :id) || Map.get(tc, "id")
 
-        result = execute_tool(tool_name, args, opts)
-        truncated = truncate_result(result)
+          args =
+            Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") ||
+              Map.get(func, :arguments) || %{}
 
-        {tool_call_id, tool_name, truncated}
+          args = parse_args(args)
+
+          Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(args)})")
+
+          result = execute_tool(tool_name, args, ctx)
+          truncated = truncate_result(result)
+
+          {tool_call_id, tool_name, truncated}
+        end,
+        ordered: true,
+        timeout: 60_000,
+        on_timeout: :kill_task
+      )
+      |> Enum.map(fn
+        {:ok, result} -> result
+        {:exit, reason} ->
+          Logger.error("[Runner] Tool task exited: #{inspect(reason)}")
+          {nil, "unknown", "Error: tool timed out or crashed (#{inspect(reason)})"}
       end)
 
     {new_messages, session} =
-      Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result}, {msgs, sess} ->
+      Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result},
+                                                   {msgs, sess} ->
         msgs = ContextBuilder.add_tool_result(msgs, tool_call_id, tool_name, result)
-        sess = Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
+
+        # Only persist non-error results to session history
+        is_error = is_binary(result) and String.starts_with?(result, "Error")
+
+        sess =
+          if is_error do
+            sess
+          else
+            Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
+          end
+
         {msgs, sess}
       end)
 
     {new_messages, results, session}
   end
 
-  defp execute_tool("read", args, _opts) do
-    path = args["path"] || args[:path]
+  defp parse_args(args) when is_binary(args) do
+    case Jason.decode(args) do
+      {:ok, map} ->
+        map
 
-    if path do
-      case File.read(path) do
-        {:ok, content} -> content
-        {:error, reason} -> "Error reading file: #{inspect(reason)}"
-      end
-    else
-      "Error: path is required"
-    end
-  end
-
-  defp execute_tool("write", args, _opts) do
-    path = args["path"] || args[:path]
-    content = args["content"] || args[:content]
-
-    if path && content do
-      case File.write(path, content) do
-        :ok -> "File written successfully"
-        {:error, reason} -> "Error writing file: #{inspect(reason)}"
-      end
-    else
-      "Error: path and content are required"
-    end
-  end
-
-  defp execute_tool("bash", args, _opts) do
-    command = args["command"] || args[:command]
-
-    if command do
-      {output, exit_code} = System.cmd("sh", ["-c", command])
-
-      if exit_code == 0 do
-        output
-      else
-        "Error: command exited with code #{exit_code}\n#{output}"
-      end
-    else
-      "Error: command is required"
-    end
-  end
-
-  defp execute_tool("skill_create", args, _opts) do
-    name = args["name"] || args[:name]
-    description = args["description"] || args[:description]
-    content = args["content"] || args[:content]
-
-    if name && description && content do
-      case Skills.create(%{
-             name: name,
-             description: description,
-             type: :markdown,
-             content: content
-           }) do
-        :ok -> "Skill '#{name}' created successfully."
-        {:ok, _} -> "Skill '#{name}' created successfully."
-        {:error, reason} -> "Error creating skill: #{inspect(reason)}"
-      end
-    else
-      "Error: name, description, and content are required"
-    end
-  end
-
-  defp execute_tool("soul_update", args, _opts) do
-    content = args["content"] || args[:content]
-
-    if content do
-      soul_path = Path.join([System.get_env("HOME", "."), ".nex", "agent", "workspace", "SOUL.md"])
-      dir = Path.dirname(soul_path)
-      File.mkdir_p!(dir)
-
-      case File.write(soul_path, content) do
-        :ok -> "SOUL.md updated successfully."
-        {:error, reason} -> "Error updating SOUL.md: #{inspect(reason)}"
-      end
-    else
-      "Error: content is required"
-    end
-  end
-
-  defp execute_tool("spawn_task", args, opts) do
-    task_desc = args["task"] || args[:task]
-    label = args["label"] || args[:label]
-
-    if task_desc do
-      spawn_opts = [
-        label: label,
-        session_key: Keyword.get(opts, :session_key),
-        provider: Keyword.get(opts, :provider),
-        model: Keyword.get(opts, :model),
-        api_key: Keyword.get(opts, :api_key),
-        base_url: Keyword.get(opts, :base_url),
-        channel: Keyword.get(opts, :channel),
-        chat_id: Keyword.get(opts, :chat_id)
-      ]
-
-      if Process.whereis(Nex.Agent.Subagent) do
-        case Nex.Agent.Subagent.spawn_task(task_desc, spawn_opts) do
-          {:ok, task_id} -> "Background task spawned: #{task_id} (#{label || "unlabeled"})"
-          {:error, reason} -> "Error spawning task: #{inspect(reason)}"
+      _ ->
+        case Nex.Agent.LLM.JsonRepair.repair_and_decode(args) do
+          {:ok, map} -> map
+          _ -> %{}
         end
-      else
-        "Error: Subagent service is not running"
-      end
-    else
-      "Error: task description is required"
     end
   end
 
-  defp execute_tool("message", args, opts) do
-    content = args["content"] || args[:content]
-    channel = Keyword.get(opts, :channel)
-    chat_id = Keyword.get(opts, :chat_id)
+  defp parse_args(args) when is_map(args), do: args
+  defp parse_args(_), do: %{}
 
-    if content && channel && chat_id do
-      outbound_topic =
-        case channel do
-          "telegram" -> :telegram_outbound
-          "feishu" -> :feishu_outbound
-          "http" -> :http_outbound
-          _ -> :outbound
-        end
-
-      if Process.whereis(Bus) do
-        Bus.publish(outbound_topic, %{
-          chat_id: chat_id,
-          content: content,
-          metadata: %{"channel" => channel, "chat_id" => chat_id}
-        })
+  defp execute_tool(tool_name, args, ctx) do
+    if Process.whereis(ToolRegistry) do
+      case ToolRegistry.execute(tool_name, args, ctx) do
+        {:ok, result} when is_binary(result) -> result
+        {:ok, %{content: content}} when is_binary(content) -> content
+        {:ok, %{error: error}} -> "Error: #{error}"
+        {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
+        {:ok, result} -> to_string(result)
+        {:error, reason} -> "Error: #{reason}"
       end
-
-      "Message sent."
     else
-      "Error: content is required"
+      execute_tool_fallback(tool_name, args, ctx)
     end
   end
 
-  defp execute_tool(name, args, _opts) do
-    # Remove skill_ prefix if present (all skills in for_llm have this prefix)
+  # Fallback for skill tools (skill_xxx pattern)
+  defp execute_tool_fallback(name, args, _ctx) do
     skill_name = String.replace_prefix(name, "skill_", "")
 
     case Skills.execute(skill_name, args["input"] || args[:input] || "", invoked_by: :model) do
-      {:ok, result} -> result
+      {:ok, result} when is_binary(result) -> result
+      {:ok, %{result: result}} -> to_string(result)
+      {:ok, result} -> inspect(result)
       {:error, reason} -> "Error executing skill #{skill_name}: #{inspect(reason)}"
     end
+  end
+
+  defp build_tool_ctx(opts) do
+    %{
+      channel: Keyword.get(opts, :channel),
+      chat_id: Keyword.get(opts, :chat_id),
+      session_key: Keyword.get(opts, :session_key),
+      provider: Keyword.get(opts, :provider),
+      model: Keyword.get(opts, :model),
+      api_key: Keyword.get(opts, :api_key),
+      base_url: Keyword.get(opts, :base_url),
+      cwd: Keyword.get(opts, :cwd, File.cwd!()),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
   end
 
   @doc """
@@ -590,29 +480,25 @@ defmodule Nex.Agent.Runner do
     if is_nil(llm_chat) do
       {:error, "Unsupported provider for consolidation: #{provider}"}
     else
-      case llm_chat.(messages,
-             model: model,
-             api_key: api_key,
-             base_url: base_url,
-             tools: tools
-           ) do
+      tool_choice = Keyword.get(opts, :tool_choice)
+
+      call_opts =
+        [model: model, api_key: api_key, base_url: base_url, tools: tools] ++
+          if tool_choice, do: [tool_choice: tool_choice], else: []
+
+      case llm_chat.(messages, call_opts) do
         {:ok, response} ->
           tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
           if tool_calls && length(tool_calls) > 0 do
             tc = List.first(tool_calls)
             func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
-            args = Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") || Map.get(func, :arguments) || %{}
 
             args =
-              if is_binary(args) do
-                case Jason.decode(args) do
-                  {:ok, map} -> map
-                  _ -> %{}
-                end
-              else
-                args
-              end
+              Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") ||
+                Map.get(func, :arguments) || %{}
+
+            args = parse_args(args)
 
             {:ok, args}
           else

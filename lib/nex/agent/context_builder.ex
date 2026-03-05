@@ -4,7 +4,7 @@ defmodule Nex.Agent.ContextBuilder do
   Mirrors nanobot's ContextBuilder.
   """
 
-  alias Nex.Agent.{Skills, Memory}
+  alias Nex.Agent.Skills
 
   @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
   @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
@@ -134,7 +134,10 @@ defmodule Nex.Agent.ContextBuilder do
   def build_runtime_context(channel, chat_id) do
     now = DateTime.utc_now()
 
-    time_str = "#{now.year}-#{pad(now.month)}-#{pad(now.day)}"
+    day_name = Calendar.ISO.day_of_week(now.year, now.month, now.day, :default)
+    day_names = %{1 => "Monday", 2 => "Tuesday", 3 => "Wednesday", 4 => "Thursday", 5 => "Friday", 6 => "Saturday", 7 => "Sunday"}
+
+    time_str = "#{now.year}-#{pad(now.month)}-#{pad(now.day)} #{pad(now.hour)}:#{pad(now.minute)} UTC #{day_names[day_name]}"
 
     lines =
       [@runtime_context_tag, "Current Time: #{time_str}"]
@@ -160,11 +163,13 @@ defmodule Nex.Agent.ContextBuilder do
           [String.t()] | nil
         ) :: [message()]
   def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil) do
+    runtime_ctx = build_runtime_context(channel, chat_id)
+    merged_user_content = runtime_ctx <> "\n\n" <> current_message
+
     [
       %{"role" => "system", "content" => build_system_prompt()},
       Enum.map(history, &clean_history_entry/1),
-      %{"role" => "user", "content" => build_runtime_context(channel, chat_id)},
-      build_user_content(current_message, media)
+      build_user_content(merged_user_content, media)
     ]
     |> List.flatten()
   end

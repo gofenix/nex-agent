@@ -3,13 +3,31 @@ defmodule Nex.Agent.Tool.WebFetch do
   Web Fetch Tool - Fetch URL content with HTML parsing
   """
 
-  @behaviour Nex.Agent.Tool
+  @behaviour Nex.Agent.Tool.Behaviour
 
   @user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   @max_length 50_000
 
   def name, do: "web_fetch"
   def description, do: "Fetch and extract content from a URL."
+  def category, do: :base
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{
+          url: %{
+            type: "string",
+            description: "URL to fetch"
+          }
+        },
+        required: ["url"]
+      }
+    }
+  end
 
   def parameters do
     %{

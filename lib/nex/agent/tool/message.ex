@@ -1,6 +1,10 @@
 defmodule Nex.Agent.Tool.Message do
   @behaviour Nex.Agent.Tool.Behaviour
 
+  def name, do: "message"
+  def description, do: "Send a message to the user immediately."
+  def category, do: :base
+
   def definition do
     %{
       name: "message",

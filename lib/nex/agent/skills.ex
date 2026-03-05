@@ -24,7 +24,7 @@ defmodule Nex.Agent.Skills do
   """
 
   use Agent
-  alias Nex.Agent.{Memory, Evolution}
+  alias Nex.Agent.Evolution
 
   @name __MODULE__
 
@@ -346,6 +346,9 @@ defmodule Nex.Agent.Skills do
     # Save metadata
     save_skill_metadata(skill_dir, name, description, "elixir", parameters, allowed_tools)
 
+    # Try to compile and auto-register as Tool if it implements Tool.Behaviour
+    maybe_register_as_tool(name, code)
+
     # Reload skills
     load()
 
@@ -416,5 +419,29 @@ defmodule Nex.Agent.Skills do
 
     meta_file = Path.join(skill_dir, "skill.json")
     File.write!(meta_file, Jason.encode!(metadata))
+  end
+
+  defp maybe_register_as_tool(name, code) do
+    name_hash = :crypto.hash(:md5, name) |> Base.encode16() |> String.slice(0, 8)
+    module_name = Module.concat(Nex.Agent.Skills.Runtime, "Skill_#{name_hash}")
+
+    try do
+      case Evolution.upgrade_module(module_name, code, validate: true) do
+        {:ok, _} ->
+          Code.ensure_loaded(module_name)
+
+          if function_exported?(module_name, :definition, 0) and
+               function_exported?(module_name, :execute, 2) do
+            if Process.whereis(Nex.Agent.Tool.Registry) do
+              Nex.Agent.Tool.Registry.register(module_name)
+            end
+          end
+
+        _ ->
+          :ok
+      end
+    rescue
+      _ -> :ok
+    end
   end
 end

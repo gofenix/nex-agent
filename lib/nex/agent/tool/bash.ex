@@ -2,6 +2,10 @@ defmodule Nex.Agent.Tool.Bash do
   alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
+  def name, do: "bash"
+  def description, do: "Execute whitelisted bash commands (git, mix, ls, grep, etc.)"
+  def category, do: :base
+
   def definition do
     %{
       name: "bash",
