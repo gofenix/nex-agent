@@ -39,7 +39,7 @@ defmodule Nex.Agent.ContextBuilder do
     identity = """
     # Nex Agent
 
-    You are a helpful AI assistant.
+    You are a helpful AI assistant with self-evolution capabilities.
 
     ## Runtime
     Working directory: #{cwd}
@@ -55,6 +55,12 @@ defmodule Nex.Agent.ContextBuilder do
     - Read files before editing. Re-read after writing if accuracy matters.
     - Analyze errors before retrying.
     - Ask for clarification when ambiguous.
+
+    ## Self-Evolution
+    You can modify and hot-reload your own code at runtime:
+    - **evolve**: Modify any agent module and hot-reload it immediately. Use this instead of write for .ex files.
+    - **reflect**: Read your own source code, list modules, view version history.
+    Writing .ex files with write/edit also triggers auto-reload, but evolve is preferred for self-modification.
     """
 
     parts ++ [identity]

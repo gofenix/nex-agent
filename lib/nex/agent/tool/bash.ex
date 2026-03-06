@@ -1,20 +1,19 @@
 defmodule Nex.Agent.Tool.Bash do
-  alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "bash"
-  def description, do: "Execute whitelisted bash commands (git, mix, ls, grep, etc.)"
+  def description, do: "Execute a shell command"
   def category, do: :base
 
   def definition do
     %{
       name: "bash",
-      description: "Execute whitelisted bash commands (git, mix, ls, grep, etc.)",
+      description: "Execute a shell command",
       parameters: %{
         type: "object",
         properties: %{
-          command: %{type: "string", description: "Command to execute (must be whitelisted)"},
-          timeout: %{type: "number", description: "Timeout in seconds (default: 30)", default: 30}
+          command: %{type: "string", description: "Command to execute"},
+          timeout: %{type: "number", description: "Timeout in seconds (default: 120)", default: 120}
         },
         required: ["command"]
       }
@@ -22,53 +21,42 @@ defmodule Nex.Agent.Tool.Bash do
   end
 
   def execute(%{"command" => command}, ctx) do
-    # Validate command against whitelist
-    case Security.validate_command(command) do
-      {:error, reason} ->
-        {:error, reason}
+    cwd = Map.get(ctx, :cwd, File.cwd!())
+    timeout = (Map.get(ctx, "timeout") || Map.get(ctx, :timeout, 120)) * 1000
 
-      :ok ->
-        cwd = Map.get(ctx, :cwd, File.cwd!())
-        timeout = Map.get(ctx, :timeout, 30) * 1000
+    task =
+      Task.async(fn ->
+        System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
+      end)
 
-        task =
-          Task.async(fn ->
-            System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
-          end)
+    result =
+      try do
+        Task.await(task, timeout)
+      rescue
+        _ ->
+          Task.shutdown(task, :brutal_kill)
+          {:error, :timeout}
+      end
 
-        result =
-          try do
-            Task.await(task, timeout)
-          rescue
-            _ ->
-              Task.shutdown(task, :brutal_kill)
-              {:error, :timeout}
+    case result do
+      {output, exit_code} ->
+        truncated =
+          if byte_size(output) > 50_000 do
+            String.slice(output, 0, 50_000) <> "\n\n[Output truncated]"
+          else
+            output
           end
 
-        case result do
-          {output, 0} ->
-            truncated =
-              if String.length(output) > 50000 do
-                String.slice(output, 0, 50000) <> "\n\n[Output truncated]"
-              else
-                output
-              end
-
-            {:ok, %{content: truncated, exit_code: 0}}
-
-          {output, exit_code} ->
-            truncated =
-              if String.length(output) > 50000 do
-                String.slice(output, 0, 50000) <> "\n\n[Output truncated]"
-              else
-                output
-              end
-
-            {:ok, %{content: truncated, exit_code: exit_code}}
-
-          {:error, :timeout} ->
-            {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
+        if exit_code == 0 do
+          {:ok, truncated}
+        else
+          {:ok, "Exit code #{exit_code}\n#{truncated}"}
         end
+
+      {:error, :timeout} ->
+        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
     end
   end
+
+  def execute(_args, _ctx), do: {:error, "command is required"}
 end

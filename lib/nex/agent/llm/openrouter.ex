@@ -101,6 +101,10 @@ defmodule Nex.Agent.LLM.OpenRouter do
 
   defp transform_tools(_), do: []
 
+  defp generate_id do
+    "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
+  end
+
   defp transform_messages(messages) do
     Enum.map(messages, fn m ->
       cond do
@@ -114,8 +118,8 @@ defmodule Nex.Agent.LLM.OpenRouter do
         m["role"] == "tool" ->
           %{
             "role" => "tool",
-            "tool_call_id" => m["tool_call_id"],
-            "name" => "tool",
+            "tool_call_id" => m["tool_call_id"] || generate_id(),
+            "name" => m["name"] || "tool",
             "content" => m["content"]
           }
 

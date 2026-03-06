@@ -34,17 +34,17 @@ defmodule Nex.Agent.Tool.Registry do
 
   @doc "Register a tool module."
   def register(module) do
-    GenServer.call(__MODULE__, {:register, module})
+    GenServer.cast(__MODULE__, {:register, module})
   end
 
   @doc "Unregister a tool by name."
   def unregister(name) do
-    GenServer.call(__MODULE__, {:unregister, name})
+    GenServer.cast(__MODULE__, {:unregister, name})
   end
 
   @doc "Atomic hot-swap: unregister old + register new."
   def hot_swap(name, new_module) do
-    GenServer.call(__MODULE__, {:hot_swap, name, new_module})
+    GenServer.cast(__MODULE__, {:hot_swap, name, new_module})
   end
 
   @doc """
@@ -92,28 +92,31 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   @impl true
-  def handle_call({:register, module}, _from, %{tools: tools} = state) do
+  def handle_cast({:register, module}, %{tools: tools} = state) do
     case safe_tool_name(module) do
       {:ok, name} ->
-        {:reply, :ok, %{state | tools: Map.put(tools, name, module)}}
+        {:noreply, %{state | tools: Map.put(tools, name, module)}}
 
       :error ->
-        {:reply, {:error, "Module does not implement name/0 or definition/0"}, state}
+        Logger.warning("[Registry] Failed to register module: #{inspect(module)}")
+        {:noreply, state}
     end
   end
 
-  def handle_call({:unregister, name}, _from, %{tools: tools} = state) do
-    {:reply, :ok, %{state | tools: Map.delete(tools, name)}}
+  def handle_cast({:unregister, name}, %{tools: tools} = state) do
+    {:noreply, %{state | tools: Map.delete(tools, name)}}
   end
 
-  def handle_call({:hot_swap, name, new_module}, _from, %{tools: tools} = state) do
+  def handle_cast({:hot_swap, name, new_module}, %{tools: tools} = state) do
     case safe_tool_name(new_module) do
       {:ok, new_name} ->
         tools = tools |> Map.delete(name) |> Map.put(new_name, new_module)
-        {:reply, :ok, %{state | tools: tools}}
+        Logger.info("[Registry] Hot-swapped #{name} -> #{new_name}")
+        {:noreply, %{state | tools: tools}}
 
       :error ->
-        {:reply, {:error, "New module does not implement required callbacks"}, state}
+        Logger.warning("[Registry] Hot-swap failed for #{name}: module doesn't implement callbacks")
+        {:noreply, state}
     end
   end
 

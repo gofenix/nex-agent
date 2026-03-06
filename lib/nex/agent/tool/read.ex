@@ -1,19 +1,18 @@
 defmodule Nex.Agent.Tool.Read do
-  alias Nex.Agent.Security
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "read"
-  def description, do: "Read file contents (only files within allowed directories)"
+  def description, do: "Read a file from the filesystem"
   def category, do: :base
 
   def definition do
     %{
       name: "read",
-      description: "Read file contents (only files within allowed directories)",
+      description: "Read a file from the filesystem",
       parameters: %{
         type: "object",
         properties: %{
-          path: %{type: "string", description: "Absolute path to file"}
+          path: %{type: "string", description: "Path to file"}
         },
         required: ["path"]
       }
@@ -21,25 +20,21 @@ defmodule Nex.Agent.Tool.Read do
   end
 
   def execute(%{"path" => path}, _ctx) do
-    case Security.validate_path(path) do
+    case File.read(path) do
+      {:ok, content} ->
+        truncated =
+          if byte_size(content) > 100_000 do
+            String.slice(content, 0, 100_000) <> "\n\n[Output truncated]"
+          else
+            content
+          end
+
+        {:ok, truncated}
+
       {:error, reason} ->
-        {:error, reason}
-
-      {:ok, validated_path} ->
-        case File.read(validated_path) do
-          {:ok, content} ->
-            truncated =
-              if String.length(content) > 50000 do
-                String.slice(content, 0, 50000) <> "\n\n[Output truncated - file too large]"
-              else
-                content
-              end
-
-            {:ok, %{content: truncated}}
-
-          {:error, reason} ->
-            {:error, "Failed to read file: #{path}, error: #{reason}"}
-        end
+        {:error, "Error reading file #{path}: #{inspect(reason)}"}
     end
   end
+
+  def execute(_args, _ctx), do: {:error, "path is required"}
 end

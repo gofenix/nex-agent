@@ -168,7 +168,7 @@ defmodule Nex.Agent.Runner do
           Map.get(func, "arguments") || Map.get(func, :arguments) || %{}
 
       %{
-        "id" => Map.get(tc, :id) || Map.get(tc, "id"),
+        "id" => Map.get(tc, :id) || Map.get(tc, "id") || generate_tool_call_id(),
         "type" => "function",
         "function" => %{
           "name" => name,
@@ -354,7 +354,7 @@ defmodule Nex.Agent.Runner do
             Map.get(tc, :name) || Map.get(tc, "name") || Map.get(func, "name") ||
               Map.get(func, :name)
 
-          tool_call_id = Map.get(tc, :id) || Map.get(tc, "id")
+          tool_call_id = Map.get(tc, :id) || Map.get(tc, "id") || generate_tool_call_id()
 
           args =
             Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") ||
@@ -377,23 +377,14 @@ defmodule Nex.Agent.Runner do
         {:ok, result} -> result
         {:exit, reason} ->
           Logger.error("[Runner] Tool task exited: #{inspect(reason)}")
-          {nil, "unknown", "Error: tool timed out or crashed (#{inspect(reason)})"}
+          {generate_tool_call_id(), "unknown", "Error: tool timed out or crashed (#{inspect(reason)})"}
       end)
 
     {new_messages, session} =
       Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result},
                                                    {msgs, sess} ->
         msgs = ContextBuilder.add_tool_result(msgs, tool_call_id, tool_name, result)
-
-        # Only persist non-error results to session history
-        is_error = is_binary(result) and String.starts_with?(result, "Error")
-
-        sess =
-          if is_error do
-            sess
-          else
-            Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
-          end
+        sess = Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
 
         {msgs, sess}
       end)
@@ -456,6 +447,10 @@ defmodule Nex.Agent.Runner do
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       metadata: Keyword.get(opts, :metadata, %{})
     }
+  end
+
+  defp generate_tool_call_id do
+    "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
   end
 
   @doc """

@@ -146,7 +146,7 @@ defmodule Nex.Agent.LLM.Anthropic do
 
                   %{
                     type: "tool_use",
-                    id: tc["id"],
+                    id: tc["id"] || generate_id(),
                     name: tc["function"]["name"],
                     input: input
                   }
@@ -167,7 +167,7 @@ defmodule Nex.Agent.LLM.Anthropic do
 
                     %{
                       type: "tool_use",
-                      id: tc["id"],
+                      id: tc["id"] || generate_id(),
                       name: tc["function"]["name"],
                       input: input
                     }
@@ -184,7 +184,7 @@ defmodule Nex.Agent.LLM.Anthropic do
             content: [
               %{
                 type: "tool_result",
-                tool_use_id: m["tool_call_id"],
+                tool_use_id: m["tool_call_id"] || generate_id(),
                 content: m["content"] || ""
               }
             ]
@@ -250,5 +250,9 @@ defmodule Nex.Agent.LLM.Anthropic do
         input_schema: input_schema
       }
     end)
+  end
+
+  defp generate_id do
+    "toolu_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
   end
 end

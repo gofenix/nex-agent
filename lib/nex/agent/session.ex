@@ -84,42 +84,123 @@ defmodule Nex.Agent.Session do
         idx -> Enum.drop(sliced, idx)
       end
 
-    Enum.map(aligned, fn m ->
-      entry = %{
-        "role" => Map.get(m, "role"),
-        "content" => Map.get(m, "content", "") || ""
-      }
+    aligned
+    |> Enum.map(&sanitize_history_entry/1)
+    |> sanitize_tool_pairs()
+  end
 
-      entry =
-        if tool_calls = Map.get(m, "tool_calls") do
-          Map.put(entry, "tool_calls", tool_calls)
+  defp sanitize_history_entry(m) do
+    entry = %{
+      "role" => Map.get(m, "role"),
+      "content" => Map.get(m, "content", "") || ""
+    }
+
+    entry =
+      if tool_calls = Map.get(m, "tool_calls") do
+        sanitized =
+          Enum.map(tool_calls, fn tc ->
+            if Map.get(tc, "id"), do: tc, else: Map.put(tc, "id", generate_fallback_id())
+          end)
+
+        Map.put(entry, "tool_calls", sanitized)
+      else
+        entry
+      end
+
+    entry =
+      if tcid = Map.get(m, "tool_call_id") do
+        entry
+        |> Map.put("tool_call_id", tcid)
+        |> then(fn e ->
+          if name = Map.get(m, "name"), do: Map.put(e, "name", name), else: e
+        end)
+      else
+        if Map.get(m, "role") == "tool" do
+          Map.put(entry, "tool_call_id", nil)
         else
           entry
         end
+      end
 
-      entry =
-        if tool_call_id = Map.get(m, "tool_call_id") do
-          Map.put(entry, "tool_call_id", tool_call_id)
-        else
-          entry
-        end
-
-      entry =
-        if name = Map.get(m, "name") do
-          Map.put(entry, "name", name)
-        else
-          entry
-        end
-
-      entry =
-        if rc = Map.get(m, "reasoning_content") do
-          Map.put(entry, "reasoning_content", rc)
-        else
-          entry
-        end
-
+    if rc = Map.get(m, "reasoning_content") do
+      Map.put(entry, "reasoning_content", rc)
+    else
       entry
-    end)
+    end
+  end
+
+  # Ensure every tool_use has a matching tool_result in the same turn.
+  # Drop orphaned assistant tool_calls and orphaned tool results.
+  defp sanitize_tool_pairs(messages) do
+    # Process sequentially: track pending tool_call_ids per assistant turn
+    {result, _pending} =
+      Enum.reduce(messages, {[], MapSet.new()}, fn m, {acc, pending} ->
+        cond do
+          m["role"] == "assistant" && is_list(m["tool_calls"]) && m["tool_calls"] != [] ->
+            # New assistant turn with tool_calls.
+            # First, strip any still-pending tool_calls from previous assistant
+            # (they had no matching results). Then set new pending.
+            tc_ids = m["tool_calls"] |> Enum.map(&(&1["id"])) |> MapSet.new()
+            {acc ++ [m], tc_ids}
+
+          m["role"] == "tool" ->
+            tcid = m["tool_call_id"]
+
+            if tcid && MapSet.member?(pending, tcid) do
+              {acc ++ [m], MapSet.delete(pending, tcid)}
+            else
+              # Orphaned tool result (nil ID or no matching use) — drop it
+              {acc, pending}
+            end
+
+          m["role"] == "user" || m["role"] == "assistant" ->
+            # New turn. If there are still pending tool_call_ids,
+            # strip them from the last assistant message.
+            acc = strip_pending_tool_calls(acc, pending)
+            {acc ++ [m], MapSet.new()}
+
+          true ->
+            {acc ++ [m], pending}
+        end
+      end)
+
+    result
+  end
+
+  # Remove unmatched tool_call entries from the last assistant message
+  defp strip_pending_tool_calls(messages, pending) when pending == %MapSet{} do
+    messages
+  end
+
+  defp strip_pending_tool_calls(messages, pending) do
+    if MapSet.size(pending) == 0 do
+      messages
+    else
+      # Find the last assistant message with tool_calls and strip orphaned ones
+      {rev_before, rev_after} =
+        messages
+        |> Enum.reverse()
+        |> Enum.split_while(fn m ->
+          not (m["role"] == "assistant" && is_list(m["tool_calls"]))
+        end)
+
+      case rev_after do
+        [assistant | rest] ->
+          kept = Enum.reject(assistant["tool_calls"], &MapSet.member?(pending, &1["id"]))
+
+          updated =
+            if kept == [] do
+              Map.delete(assistant, "tool_calls")
+            else
+              %{assistant | "tool_calls" => kept}
+            end
+
+          Enum.reverse(rest) ++ [updated] ++ Enum.reverse(rev_before)
+
+        [] ->
+          messages
+      end
+    end
   end
 
   @doc """
@@ -230,5 +311,9 @@ defmodule Nex.Agent.Session do
       {:ok, dt, _} -> dt
       _ -> DateTime.utc_now()
     end
+  end
+
+  defp generate_fallback_id do
+    "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
   end
 end

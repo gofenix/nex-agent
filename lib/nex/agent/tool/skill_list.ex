@@ -5,6 +5,9 @@ defmodule Nex.Agent.Tool.SkillList do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
+  @api_url "https://skills.sh/api/search"
+  @default_list_query ".."  # Search query that returns broad results for listing
+
   def name, do: "skill_list"
   def description, do: "List available skills from skills.sh registry or locally installed skills"
   def category, do: :evolution
@@ -47,13 +50,12 @@ defmodule Nex.Agent.Tool.SkillList do
   end
 
   def execute(%{"scope" => "registry"}, _ctx) do
-    case System.cmd("npx", ["skills", "list"], stderr_to_stdout: true, timeout: 30_000) do
+    # Use search API with a broad query to get popular skills
+    url = "#{@api_url}?q=#{@default_list_query}"
+
+    case System.cmd("curl", ["-s", "-L", url], stderr_to_stdout: true) do
       {output, 0} ->
-        {:ok,
-         %{
-           skills: String.trim(output),
-           message: "Registry skills listed successfully"
-         }}
+        parse_registry_response(output)
 
       {error, exit_code} ->
         {:error, "Failed to list registry skills (exit #{exit_code}): #{error}"}
@@ -72,5 +74,32 @@ defmodule Nex.Agent.Tool.SkillList do
      }}
   end
 
-  def execute(_args, ctx), do: execute(%{"scope" => "all"}, ctx)
+  def execute(_args, ctx) do
+    # Default to "all"
+    execute(%{"scope" => "all"}, ctx)
+  end
+
+  defp parse_registry_response(output) do
+    case Jason.decode(output) do
+      {:ok, %{"skills" => skills}} when is_list(skills) ->
+        formatted =
+          skills
+          |> Enum.map(fn skill ->
+            "- #{skill["source"]}: #{skill["name"]} (#{skill["installs"]} installs)"
+          end)
+          |> Enum.join("\n")
+
+        {:ok,
+         %{
+           skills: formatted,
+           message: "Registry skills listed successfully"
+         }}
+
+      {:ok, %{"error" => error}} ->
+        {:error, "API error: #{error}"}
+
+      {:error, _} ->
+        {:error, "Failed to parse registry response"}
+    end
+  end
 end
