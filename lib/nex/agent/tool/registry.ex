@@ -139,21 +139,30 @@ defmodule Nex.Agent.Tool.Registry do
     {:reply, defs, state}
   end
 
-  def handle_call({:execute, name, args, ctx}, _from, %{tools: tools} = state) do
+  def handle_call({:execute, name, args, ctx}, from, %{tools: tools} = state) do
     case Map.get(tools, name) do
       nil ->
         {:reply, {:error, "Unknown tool: #{name}. [Analyze the error and try a different approach.]"}, state}
 
       module ->
-        result =
-          try do
-            module.execute(args, ctx)
-          rescue
-            e ->
-              {:error, "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
-          end
+        Task.start(fn ->
+          result =
+            try do
+              module.execute(args, ctx)
+            rescue
+              e ->
+                {:error, "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
+            catch
+              :exit, {:timeout, _} ->
+                {:error, "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+              kind, reason ->
+                {:error, "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+            end
 
-        {:reply, result, state}
+          GenServer.reply(from, result)
+        end)
+
+        {:noreply, state}
     end
   end
 

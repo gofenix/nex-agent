@@ -35,22 +35,27 @@ defmodule Nex.Agent.LLM.OpenAI do
              {"authorization", "Bearer #{api_key}"},
              {"content-type", "application/json"}
            ],
-           receive_timeout: 600_000,
+           receive_timeout: 180_000,
            connect_options: [timeout: 30_000]
          ) do
       {:ok, %{status: 200, body: response}} ->
-        choice = hd(response["choices"])
-        message = choice["message"] || %{}
+        case response["choices"] do
+          [choice | _] ->
+            message = choice["message"] || %{}
 
-        {:ok,
-         %{
-           content: message["content"],
-           reasoning_content: message["reasoning_content"],
-           tool_calls: message["tool_calls"] || [],
-           finish_reason: choice["finish_reason"],
-           model: response["model"],
-           usage: response["usage"]
-         }}
+            {:ok,
+             %{
+               content: message["content"],
+               reasoning_content: message["reasoning_content"],
+               tool_calls: message["tool_calls"] || [],
+               finish_reason: choice["finish_reason"],
+               model: response["model"],
+               usage: response["usage"]
+             }}
+
+          _ ->
+            {:error, "Empty response from LLM: no choices returned"}
+        end
 
       {:ok, %{status: status, body: body}} ->
         {:error, %{status: status, error: body}}

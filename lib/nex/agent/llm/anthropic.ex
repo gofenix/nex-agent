@@ -45,7 +45,7 @@ defmodule Nex.Agent.LLM.Anthropic do
           {"anthropic-beta", "prompt-caching-2024-07-31"},
           {"content-type", "application/json"}
         ],
-        receive_timeout: 600_000,
+        receive_timeout: 180_000,
         connect_options: [timeout: 30_000]
       )
 
@@ -142,7 +142,7 @@ defmodule Nex.Agent.LLM.Anthropic do
               tool_use_blocks =
                 Enum.map(tool_calls, fn tc ->
                   args = tc["function"]["arguments"]
-                  input = if is_binary(args), do: Jason.decode!(args), else: args
+                  input = safe_decode_args(args)
 
                   %{
                     type: "tool_use",
@@ -163,7 +163,7 @@ defmodule Nex.Agent.LLM.Anthropic do
                 content:
                   Enum.map(tool_calls, fn tc ->
                     args = tc["function"]["arguments"]
-                    input = if is_binary(args), do: Jason.decode!(args), else: args
+                    input = safe_decode_args(args)
 
                     %{
                       type: "tool_use",
@@ -251,6 +251,15 @@ defmodule Nex.Agent.LLM.Anthropic do
       }
     end)
   end
+
+  defp safe_decode_args(args) when is_binary(args) do
+    case Jason.decode(args) do
+      {:ok, decoded} -> decoded
+      _ -> %{"_raw" => args}
+    end
+  end
+
+  defp safe_decode_args(args), do: args
 
   defp generate_id do
     "toolu_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))

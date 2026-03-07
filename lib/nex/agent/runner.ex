@@ -75,7 +75,20 @@ defmodule Nex.Agent.Runner do
       Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
       {:error, :max_iterations_exceeded, session}
     else
-      case call_llm(messages, opts) do
+      llm_result =
+        try do
+          call_llm(messages, opts)
+        rescue
+          e ->
+            Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
+            {:error, "LLM call failed: #{Exception.message(e)}"}
+        catch
+          kind, reason ->
+            Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
+            {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
+        end
+
+      case llm_result do
         {:ok, response} ->
           content = response.content
           finish_reason = Map.get(response, :finish_reason)

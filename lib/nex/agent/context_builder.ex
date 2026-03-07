@@ -72,8 +72,9 @@ defmodule Nex.Agent.ContextBuilder do
       |> Enum.map(fn filename ->
         path = Path.join(workspace, filename)
 
-        if File.exists?(path) do
-          ("## #{filename}\n\n" <> File.read!(path)) |> String.trim()
+        case File.read(path) do
+          {:ok, content} -> ("## #{filename}\n\n" <> content) |> String.trim()
+          {:error, _} -> nil
         end
       end)
       |> Enum.reject(&is_nil/1)
@@ -85,16 +86,18 @@ defmodule Nex.Agent.ContextBuilder do
   defp add_memory(parts, workspace) do
     memory_file = Path.join(workspace, "memory/MEMORY.md")
 
-    if File.exists?(memory_file) do
-      content = File.read!(memory_file) |> String.trim()
+    case File.read(memory_file) do
+      {:ok, content} ->
+        trimmed = String.trim(content)
 
-      if content != "" do
-        parts ++ ["# Memory\n\n## Long-term Memory\n\n" <> content]
-      else
+        if trimmed != "" do
+          parts ++ ["# Memory\n\n## Long-term Memory\n\n" <> trimmed]
+        else
+          parts
+        end
+
+      {:error, _} ->
         parts
-      end
-    else
-      parts
     end
   end
 

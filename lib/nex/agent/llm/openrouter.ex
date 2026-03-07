@@ -37,35 +37,40 @@ defmodule Nex.Agent.LLM.OpenRouter do
              {"http-referer", "https://nex.dev"},
              {"x-title", "Nex Agent"}
            ],
-           receive_timeout: 600_000,
+           receive_timeout: 180_000,
            connect_options: [timeout: 30_000]
          ) do
       {:ok, %{status: 200, body: response}} ->
-        choice = hd(response["choices"])
-        message = choice["message"] || %{}
+        case response["choices"] do
+          [choice | _] ->
+            message = choice["message"] || %{}
 
-        # Parse tool calls from OpenAI format back to our internal format
-        tool_calls =
-          (message["tool_calls"] || [])
-          |> Enum.map(fn tc ->
-            %{
-              "id" => tc["id"],
-              "type" => tc["type"],
-              "function" => %{
-                "name" => tc["function"]["name"],
-                "arguments" => tc["function"]["arguments"]
-              }
-            }
-          end)
+            # Parse tool calls from OpenAI format back to our internal format
+            tool_calls =
+              (message["tool_calls"] || [])
+              |> Enum.map(fn tc ->
+                %{
+                  "id" => tc["id"],
+                  "type" => tc["type"],
+                  "function" => %{
+                    "name" => tc["function"]["name"],
+                    "arguments" => tc["function"]["arguments"]
+                  }
+                }
+              end)
 
-        {:ok,
-         %{
-           content: message["content"],
-           tool_calls: tool_calls,
-           finish_reason: choice["finish_reason"],
-           model: response["model"],
-           usage: response["usage"]
-         }}
+            {:ok,
+             %{
+               content: message["content"],
+               tool_calls: tool_calls,
+               finish_reason: choice["finish_reason"],
+               model: response["model"],
+               usage: response["usage"]
+             }}
+
+          _ ->
+            {:error, "Empty response from LLM: no choices returned"}
+        end
 
       {:ok, %{status: status, body: body}} ->
         {:error, %{status: status, error: body}}

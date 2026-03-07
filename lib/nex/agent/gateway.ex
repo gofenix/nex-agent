@@ -190,8 +190,16 @@ defmodule Nex.Agent.Gateway do
   end
 
   @impl true
-  def handle_info({:EXIT, _pid, _reason}, state) do
-    {:noreply, state}
+  def handle_info({:EXIT, pid, reason}, state) do
+    require Logger
+
+    if reason != :shutdown and reason != :normal do
+      Logger.warning("[Gateway] Child process #{inspect(pid)} exited: #{inspect(reason)}")
+      state = maybe_restart_critical_service(pid, state)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
   end
 
   defp do_start(state) do
@@ -424,6 +432,38 @@ defmodule Nex.Agent.Gateway do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp maybe_restart_critical_service(pid, state) do
+    require Logger
+
+    cond do
+      pid == Process.whereis(Nex.Agent.InboundWorker) or
+          not is_nil(state.config) and Process.whereis(Nex.Agent.InboundWorker) == nil ->
+        Logger.info("[Gateway] Restarting InboundWorker...")
+
+        try do
+          ensure_inbound_worker_started(state.config)
+        rescue
+          e -> Logger.error("[Gateway] Failed to restart InboundWorker: #{Exception.message(e)}")
+        end
+
+        state
+
+      Process.whereis(Nex.Agent.Tool.Registry) == nil ->
+        Logger.info("[Gateway] Restarting ToolRegistry...")
+
+        try do
+          ensure_tool_registry_started()
+        rescue
+          e -> Logger.error("[Gateway] Failed to restart ToolRegistry: #{Exception.message(e)}")
+        end
+
+        state
+
+      true ->
+        state
     end
   end
 end

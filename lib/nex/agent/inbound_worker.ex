@@ -98,7 +98,21 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  def handle_info({:check_timeout, key, pid}, state) do
+    if Map.get(state.active_tasks, key) == pid and Process.alive?(pid) do
+      Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
+      Process.exit(pid, :kill)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
+    if reason != :normal and reason != :killed do
+      Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
+    end
+
     active_tasks =
       state.active_tasks
       |> Enum.reject(fn {_key, task_pid} -> task_pid == pid end)
@@ -149,18 +163,27 @@ defmodule Nex.Agent.InboundWorker do
         on_progress = build_progress_callback(payload)
 
         pid =
-          spawn_link(fn ->
-            result =
-              state.agent_prompt_fun.(agent, content,
-                channel: channel,
-                chat_id: chat_id,
-                on_progress: on_progress
-              )
+          spawn(fn ->
+            try do
+              result =
+                state.agent_prompt_fun.(agent, content,
+                  channel: channel,
+                  chat_id: chat_id,
+                  on_progress: on_progress
+                )
 
-            send(parent, {:async_result, key, result, payload})
+              send(parent, {:async_result, key, result, payload})
+            rescue
+              e ->
+                send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
+            catch
+              kind, reason ->
+                send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload})
+            end
           end)
 
         Process.monitor(pid)
+        Process.send_after(self(), {:check_timeout, key, pid}, 600_000)
         %{state | active_tasks: Map.put(state.active_tasks, key, pid)}
 
       {:error, reason} ->
