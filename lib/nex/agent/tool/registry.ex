@@ -131,15 +131,13 @@ defmodule Nex.Agent.Tool.Registry do
     defs =
       tools
       |> filter_tools(filter)
-      |> Enum.map(fn {_name, module} ->
-        def_map = module.definition()
-        tool_name = get_def_name(def_map)
-        params = get_def_params(def_map)
+      |> Enum.map(fn {name, module} ->
+        def_map = module.definition() |> normalize_definition()
 
         %{
-          "name" => tool_name,
+          "name" => get_def_name(def_map) || name,
           "description" => get_def_description(def_map),
-          "input_schema" => params
+          "input_schema" => get_def_params(def_map)
         }
       end)
 
@@ -278,6 +276,11 @@ defmodule Nex.Agent.Tool.Registry do
   defp get_def_params(%{input_schema: p}), do: p
   defp get_def_params(%{"input_schema" => p}), do: p
   defp get_def_params(_), do: %{"type" => "object", "properties" => %{}}
+
+  # Unwrap OpenAI-style nested definition: %{type: "function", function: %{name, description, parameters}}
+  defp normalize_definition(%{function: inner}) when is_map(inner), do: inner
+  defp normalize_definition(%{"function" => inner}) when is_map(inner), do: inner
+  defp normalize_definition(def_map), do: def_map
 
   @cron_tools ~w(bash read message memory_search web_search web_fetch)
 
