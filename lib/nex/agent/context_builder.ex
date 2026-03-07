@@ -17,13 +17,16 @@ defmodule Nex.Agent.ContextBuilder do
   @spec build_system_prompt(keyword()) :: String.t()
   def build_system_prompt(opts \\ []) do
     workspace = Keyword.get(opts, :workspace, default_workspace())
+    skip_skills = Keyword.get(opts, :skip_skills, false)
 
     parts =
       []
       |> add_identity(workspace)
       |> load_bootstrap_files(workspace)
       |> add_memory(workspace)
-      |> add_skills()
+      |> then(fn parts ->
+        if skip_skills, do: parts, else: add_skills(parts)
+      end)
 
     Enum.join(parts, "\n\n---\n\n")
   end
@@ -180,9 +183,10 @@ defmodule Nex.Agent.ContextBuilder do
           String.t(),
           String.t() | nil,
           String.t() | nil,
-          [String.t()] | nil
+          [String.t()] | nil,
+          keyword()
         ) :: [message()]
-  def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil) do
+  def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil, opts \\ []) do
     runtime_ctx = build_runtime_context(channel, chat_id)
     memory_ctx = build_memory_context(current_message)
 
@@ -194,7 +198,7 @@ defmodule Nex.Agent.ContextBuilder do
       end
 
     [
-      %{"role" => "system", "content" => build_system_prompt()},
+      %{"role" => "system", "content" => build_system_prompt(opts)},
       Enum.map(history, &clean_history_entry/1),
       build_user_content(merged_user_content, media)
     ]

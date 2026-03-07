@@ -74,7 +74,15 @@ defmodule Nex.Agent do
     chat_id = Keyword.get(opts, :chat_id, "default")
 
     session_key = "#{channel}:#{chat_id}"
-    session = SessionManager.get_or_create(session_key)
+    skip_consolidation = Keyword.get(opts, :skip_consolidation, false)
+
+    session =
+      if skip_consolidation do
+        # Cron: use ephemeral session, don't pollute user session
+        Session.new("cron:#{channel}:#{chat_id}:#{System.unique_integer()}")
+      else
+        SessionManager.get_or_create(session_key)
+      end
 
     on_progress = Keyword.get(opts, :on_progress)
     tools_filter = Keyword.get(opts, :tools_filter)
@@ -92,14 +100,17 @@ defmodule Nex.Agent do
       ]
       |> maybe_put(:on_progress, on_progress)
       |> maybe_put(:tools_filter, tools_filter)
+      |> maybe_put(:history_limit, Keyword.get(opts, :history_limit))
+      |> maybe_put(:skip_consolidation, Keyword.get(opts, :skip_consolidation))
+      |> maybe_put(:skip_skills, Keyword.get(opts, :skip_skills))
 
     case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->
-        SessionManager.save(session)
+        unless skip_consolidation, do: SessionManager.save(session)
         {:ok, result, %{agent | session: session}}
 
       {:error, reason, session} ->
-        SessionManager.save(session)
+        unless skip_consolidation, do: SessionManager.save(session)
         {:error, reason, %{agent | session: session}}
     end
   end

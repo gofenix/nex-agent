@@ -78,19 +78,20 @@ defmodule Nex.Agent.Tool.Registry do
   @impl true
   def init(_opts) do
     tools =
-      @default_tools
+      (@default_tools ++ discover_tool_modules())
+      |> Enum.uniq()
       |> Enum.reduce(%{}, fn module, acc ->
         case safe_tool_name(module) do
           {:ok, name} ->
             Map.put(acc, name, module)
 
           :error ->
-            Logger.warning("[Registry] Failed to register default tool: #{inspect(module)}")
+            Logger.warning("[Registry] Failed to register tool: #{inspect(module)}")
             acc
         end
       end)
 
-    Logger.info("[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools))}")
+    Logger.info("[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}")
     {:ok, %{tools: tools}}
   end
 
@@ -202,6 +203,68 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
+  # Scan tool directory for modules not in @default_tools.
+  # This picks up tools created via evolve that survive restarts.
+  defp discover_tool_modules do
+    tool_dir = Path.join([File.cwd!(), "lib", "nex", "agent", "tool"])
+
+    if File.dir?(tool_dir) do
+      tool_dir
+      |> File.ls!()
+      |> Enum.filter(&String.ends_with?(&1, ".ex"))
+      |> Enum.flat_map(fn file ->
+        # Extract actual module name from source file instead of guessing from filename
+        filepath = Path.join(tool_dir, file)
+
+        case extract_module_name(filepath) do
+          {:ok, module} when module not in @default_tools ->
+            Code.ensure_loaded(module)
+
+            if function_exported?(module, :name, 0) do
+              Logger.info("[Registry] Discovered evolved tool: #{inspect(module)}")
+              [module]
+            else
+              []
+            end
+
+          _ ->
+            []
+        end
+      end)
+    else
+      []
+    end
+  end
+
+  # Parse `defmodule Nex.Agent.Tool.Foo do` from source file.
+  defp extract_module_name(filepath) do
+    case File.open(filepath, [:read]) do
+      {:ok, device} ->
+        result = scan_for_module(device)
+        File.close(device)
+        result
+
+      _ ->
+        :error
+    end
+  end
+
+  defp scan_for_module(device) do
+    case IO.read(device, :line) do
+      :eof ->
+        :error
+
+      {:error, _} ->
+        :error
+
+      line ->
+        case Regex.run(~r/defmodule\s+([\w.]+)/, line) do
+          [_, module_str] -> {:ok, Module.concat([module_str])}
+          nil -> scan_for_module(device)
+        end
+    end
+  end
+
   defp get_def_name(%{name: n}), do: n
   defp get_def_name(%{"name" => n}), do: n
   defp get_def_name(_), do: nil
@@ -216,7 +279,13 @@ defmodule Nex.Agent.Tool.Registry do
   defp get_def_params(%{"input_schema" => p}), do: p
   defp get_def_params(_), do: %{"type" => "object", "properties" => %{}}
 
+  @cron_tools ~w(bash read message memory_search web_search web_fetch)
+
   defp filter_tools(tools, :all), do: tools
+
+  defp filter_tools(tools, :cron) do
+    Enum.filter(tools, fn {name, _module} -> name in @cron_tools end)
+  end
 
   defp filter_tools(tools, :base) do
     Enum.filter(tools, fn {_name, module} ->

@@ -416,17 +416,33 @@ defmodule Nex.Agent.Memory do
     else
       Logger.info("[Memory] Consolidating #{length(old_messages)} messages")
 
+      # Cap messages to avoid sending too much to LLM
+      old_messages =
+        if length(old_messages) > 80 do
+          Enum.take(old_messages, 10) ++ Enum.take(old_messages, -70)
+        else
+          old_messages
+        end
+
       lines =
         old_messages
         |> Enum.reject(fn m -> is_nil(Map.get(m, "content")) end)
         |> Enum.map(fn m ->
           role = Map.get(m, "role", "?") |> String.upcase()
-          content = Map.get(m, "content", "") |> to_string() |> String.slice(0, 500)
-          "[#{role}]: #{content}"
+          content = Map.get(m, "content", "") |> to_string()
+          max_len = if role == "TOOL", do: 100, else: 200
+          "[#{role}]: #{String.slice(content, 0, max_len)}"
         end)
         |> Enum.join("\n")
 
       current_memory = read_long_term()
+
+      memory_for_prompt =
+        if byte_size(current_memory) > 2000 do
+          String.slice(current_memory, 0, 2000) <> "\n... (truncated)"
+        else
+          current_memory
+        end
 
       consolidation_prompt = """
       You are a memory consolidation agent. Process the conversation below and call the save_memory tool.
@@ -435,7 +451,7 @@ defmodule Nex.Agent.Memory do
       Only report preferences that are clearly and consistently demonstrated — do not guess.
 
       ## Current Long-term Memory
-      #{if current_memory == "", do: "(empty)", else: current_memory}
+      #{if memory_for_prompt == "", do: "(empty)", else: memory_for_prompt}
 
       ## Conversation to Process
       #{lines}

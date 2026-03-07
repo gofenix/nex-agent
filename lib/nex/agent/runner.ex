@@ -13,7 +13,7 @@ defmodule Nex.Agent.Runner do
 
   @default_max_iterations 10
   @max_iterations_hard_limit 50
-  @memory_window 100
+  @memory_window 500
   @max_tool_result_length 2000
   @tool_hint_preview_length 220
 
@@ -29,15 +29,21 @@ defmodule Nex.Agent.Runner do
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
 
-    session = maybe_consolidate_memory(session, provider, model, api_key, base_url)
+    session =
+      if Keyword.get(opts, :skip_consolidation, false),
+        do: session,
+        else: maybe_consolidate_memory(session, provider, model, api_key, base_url)
 
-    history = Session.get_history(session, @memory_window)
+    history_limit = Keyword.get(opts, :history_limit, @memory_window)
+    history = Session.get_history(session, history_limit)
 
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")
 
     messages =
-      ContextBuilder.build_messages(history, prompt, channel, chat_id)
+      ContextBuilder.build_messages(history, prompt, channel, chat_id, nil,
+        skip_skills: Keyword.get(opts, :skip_skills, false)
+      )
 
     session = Session.add_message(session, "user", prompt)
 

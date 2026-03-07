@@ -27,29 +27,33 @@ defmodule Nex.Agent.Tool.BrowserMCP do
   @impl true
   def definition do
     %{
-      type: "object",
-      required: ["action"],
-      properties: %{
-        action: %{
-          type: "string",
-          enum: ["navigate", "click", "type", "screenshot", "evaluate", "get_content"],
-          description: "Browser action to perform"
-        },
-        url: %{
-          type: "string",
-          description: "URL for navigate action"
-        },
-        selector: %{
-          type: "string", 
-          description: "CSS selector for click/type actions"
-        },
-        text: %{
-          type: "string",
-          description: "Text to type"
-        },
-        script: %{
-          type: "string",
-          description: "JavaScript code for evaluate action"
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        required: ["action"],
+        properties: %{
+          action: %{
+            type: "string",
+            enum: ["navigate", "click", "type", "screenshot", "evaluate", "get_content"],
+            description: "Browser action to perform"
+          },
+          url: %{
+            type: "string",
+            description: "URL for navigate action"
+          },
+          selector: %{
+            type: "string",
+            description: "CSS selector for click/type actions"
+          },
+          text: %{
+            type: "string",
+            description: "Text to type"
+          },
+          script: %{
+            type: "string",
+            description: "JavaScript code for evaluate action"
+          }
         }
       }
     }

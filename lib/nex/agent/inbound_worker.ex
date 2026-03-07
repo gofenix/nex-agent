@@ -197,14 +197,23 @@ defmodule Nex.Agent.InboundWorker do
         from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
         on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
 
+        cron_opts =
+          if from_cron,
+            do: [
+              history_limit: 0,
+              tools_filter: :cron,
+              skip_consolidation: true,
+              max_iterations: 3,
+              skip_skills: true
+            ],
+            else: []
+
         {:ok, pid} =
           Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
             try do
               result =
                 state.agent_prompt_fun.(agent, content,
-                  channel: channel,
-                  chat_id: chat_id,
-                  on_progress: on_progress
+                  [channel: channel, chat_id: chat_id, on_progress: on_progress] ++ cron_opts
                 )
 
               send(parent, {:async_result, key, result, payload})

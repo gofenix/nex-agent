@@ -280,7 +280,13 @@ defmodule Nex.Agent.Surgeon do
 
       if function_exported?(module, :name, 0) do
         tool_name = module.name()
-        Registry.hot_swap(tool_name, module)
+
+        if Registry.get(tool_name) do
+          Registry.hot_swap(tool_name, module)
+        else
+          Logger.info("[Surgeon] Registering new tool: #{tool_name}")
+          Registry.register(module)
+        end
       end
     end
   end
