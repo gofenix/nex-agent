@@ -102,7 +102,45 @@ defmodule Nex.Agent.Channel.Telegram do
 
   @impl true
   def handle_info(:poll, state) do
-    state = poll_updates(state)
+    parent = self()
+
+    if Process.whereis(Nex.Agent.TaskSupervisor) do
+      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        result = do_poll(state)
+        send(parent, {:poll_result, result})
+      end)
+
+      {:noreply, state}
+    else
+      # TaskSupervisor not available (e.g. test), fall back to sync
+      {new_offset, inbounds} = do_poll(state)
+      state = if new_offset, do: %{state | offset: new_offset}, else: state
+
+      Enum.each(inbounds, fn inbound ->
+        if allowed?(inbound.sender_id, state.allow_from) do
+          Logger.info("Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}")
+          Bus.publish(:inbound, inbound)
+        end
+      end)
+
+      schedule_poll(state.poll_interval_ms)
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:poll_result, {new_offset, inbounds}}, state) do
+    state = if new_offset, do: %{state | offset: new_offset}, else: state
+
+    Enum.each(inbounds, fn inbound ->
+      if allowed?(inbound.sender_id, state.allow_from) do
+        Logger.info("Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}")
+        Bus.publish(:inbound, inbound)
+      else
+        Logger.warning("Telegram inbound denied by allow_from sender=#{inbound.sender_id}")
+      end
+    end)
+
     schedule_poll(state.poll_interval_ms)
     {:noreply, state}
   end
@@ -117,23 +155,43 @@ defmodule Nex.Agent.Channel.Telegram do
   @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp poll_updates(state) do
+  # Runs in a separate Task — must not touch GenServer state directly.
+  # Returns {new_offset | nil, [inbound_messages]}
+  defp do_poll(state) do
     case telegram_get(state, "getUpdates", update_params(state.offset)) do
-      {:ok, %{"ok" => true, "result" => updates}} when is_list(updates) ->
+      {:ok, %{"ok" => true, "result" => updates}} when is_list(updates) and updates != [] ->
         Logger.debug("Telegram poll updates_count=#{length(updates)}")
-        handle_updates(updates, state)
+        extract_updates(updates, state.offset)
+
+      {:ok, %{"ok" => true, "result" => []}} ->
+        {nil, []}
 
       {:ok, %{"ok" => false} = body} ->
         Logger.warning("Telegram getUpdates returned not ok: #{inspect(body)}")
-        state
+        {nil, []}
 
       {:error, reason} ->
         Logger.warning("Telegram getUpdates failed: #{inspect(reason)}")
-        state
+        {nil, []}
 
       _ ->
-        state
+        {nil, []}
     end
+  end
+
+  defp extract_updates(updates, current_offset) do
+    {max_offset, inbounds} =
+      Enum.reduce(updates, {current_offset || 0, []}, fn update, {max_off, acc} ->
+        update_id = Map.get(update, "update_id", 0)
+        new_max = max(max_off, update_id + 1)
+
+        case normalize_update(update) do
+          {:ok, inbound} -> {new_max, [inbound | acc]}
+          :ignore -> {new_max, acc}
+        end
+      end)
+
+    {max_offset, Enum.reverse(inbounds)}
   end
 
   defp drop_pending_updates(state) do
@@ -150,32 +208,6 @@ defmodule Nex.Agent.Channel.Telegram do
       _ ->
         state
     end
-  end
-
-  defp handle_updates(updates, state) do
-    Enum.reduce(updates, state, fn update, acc ->
-      acc = update_offset(acc, update)
-
-      case normalize_update(update) do
-        {:ok, inbound} ->
-          if allowed?(inbound.sender_id, acc.allow_from) do
-            Logger.info(
-              "Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}"
-            )
-
-            Bus.publish(:inbound, inbound)
-          else
-            Logger.warning(
-              "Telegram inbound denied by allow_from sender=#{inbound.sender_id} allow_from=#{inspect(acc.allow_from)}"
-            )
-          end
-
-          acc
-
-        :ignore ->
-          acc
-      end
-    end)
   end
 
   defp normalize_update(%{"message" => message}) when is_map(message) do
@@ -215,13 +247,6 @@ defmodule Nex.Agent.Channel.Telegram do
   end
 
   defp normalize_update(_), do: :ignore
-
-  defp update_offset(state, %{"update_id" => update_id}) when is_integer(update_id) do
-    current = state.offset || 0
-    %{state | offset: max(current, update_id + 1)}
-  end
-
-  defp update_offset(state, _), do: state
 
   defp do_send(%{chat_id: chat_id, content: content} = payload, state) do
     chat_id = to_string(chat_id)
