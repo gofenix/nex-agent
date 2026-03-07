@@ -58,6 +58,14 @@ defmodule Mix.Tasks.Nex.Agent do
     end
   end
 
+  defp ensure_app_started do
+    case Application.ensure_all_started(:nex_agent) do
+      {:ok, _apps} -> :ok
+      {:error, {:already_started, _app}} -> :ok
+      {:error, reason} -> Mix.raise("Failed to start :nex_agent application: #{inspect(reason)}")
+    end
+  end
+
   defp print_help do
     Mix.shell().info("Nex Agent CLI")
     Mix.shell().info("  mix nex.agent                  Interactive REPL")
@@ -134,13 +142,8 @@ defmodule Mix.Tasks.Nex.Agent do
           System.halt(1)
       end
 
-    case Process.whereis(Nex.Agent.Gateway) do
-      nil ->
-        {:ok, _} = Nex.Agent.Gateway.start_link()
-
-      _pid ->
-        :ok
-    end
+    # Start the full OTP application (supervision tree, all services)
+    ensure_app_started()
 
     persist_gateway_pid!()
     register_gateway_cleanup(lock_socket)
