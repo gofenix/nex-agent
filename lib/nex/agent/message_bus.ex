@@ -69,6 +69,7 @@ defmodule Nex.Agent.MessageBus do
     {:noreply, %{state | inbound: state.inbound ++ [msg]}}
   end
 
+  @impl true
   def handle_cast({:publish_outbound, msg}, state) do
     {:noreply, %{state | outbound: state.outbound ++ [msg]}}
   end
@@ -79,19 +80,23 @@ defmodule Nex.Agent.MessageBus do
     {:noreply, %{state | inbound: [from | state.inbound]}}
   end
 
+  @impl true
   def handle_call({:consume_inbound}, _from, %{inbound: [msg | rest]} = state) do
     {:reply, msg, %{state | inbound: rest}}
   end
 
+  @impl true
   def handle_call({:consume_outbound}, from, %{outbound: []} = state) do
     Logger.debug("[MessageBus] Waiting for outbound message")
     {:noreply, %{state | outbound: [from | state.outbound]}}
   end
 
+  @impl true
   def handle_call({:consume_outbound}, _from, %{outbound: [msg | rest]} = state) do
     {:reply, msg, %{state | outbound: rest}}
   end
 
+  @impl true
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
     {:noreply, state}
   end

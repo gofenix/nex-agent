@@ -10,7 +10,7 @@ defmodule Nex.Agent.Subagent do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Session, ContextBuilder}
+  alias Nex.Agent.{Bus, Session}
 
   @max_subagent_iterations 15
 
@@ -245,7 +245,7 @@ defmodule Nex.Agent.Subagent do
       send(server, {:task_failed, task_id, error_msg})
   end
 
-  defp announce_result(task_id, label, task, result, channel, chat_id, status) do
+  defp announce_result(task_id, label, _task, result, channel, chat_id, status) do
     if Process.whereis(Bus) do
       status_emoji = if status == :ok, do: "\u2705", else: "\u274c"
       content = "#{status_emoji} Subagent [#{label}] finished:\n#{result}"

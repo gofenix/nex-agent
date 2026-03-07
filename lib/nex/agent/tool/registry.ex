@@ -11,6 +11,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.Read,
     Nex.Agent.Tool.Write,
     Nex.Agent.Tool.Edit,
+    Nex.Agent.Tool.ListDir,
     Nex.Agent.Tool.Bash,
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
@@ -103,10 +104,12 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
+  @impl true
   def handle_cast({:unregister, name}, %{tools: tools} = state) do
     {:noreply, %{state | tools: Map.delete(tools, name)}}
   end
 
+  @impl true
   def handle_cast({:hot_swap, name, new_module}, %{tools: tools} = state) do
     case safe_tool_name(new_module) do
       {:ok, new_name} ->
@@ -120,6 +123,7 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
+  @impl true
   def handle_call({:definitions, filter}, _from, %{tools: tools} = state) do
     defs =
       tools
@@ -139,6 +143,7 @@ defmodule Nex.Agent.Tool.Registry do
     {:reply, defs, state}
   end
 
+  @impl true
   def handle_call({:execute, name, args, ctx}, from, %{tools: tools} = state) do
     case Map.get(tools, name) do
       nil ->
@@ -166,10 +171,12 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
+  @impl true
   def handle_call(:list, _from, %{tools: tools} = state) do
     {:reply, Map.keys(tools), state}
   end
 
+  @impl true
   def handle_call({:get, name}, _from, %{tools: tools} = state) do
     {:reply, Map.get(tools, name), state}
   end

@@ -41,9 +41,17 @@ defmodule Nex.Agent.Security do
     "rmdir",
     "cp",
     "mv",
+    "rm",
+    "touch",
+    "ln",
+    "stat",
+    "file",
     "chmod",
     "chown",
     "pwd",
+    "basename",
+    "dirname",
+    "realpath",
     # Text processing
     "awk",
     "sed",
@@ -51,6 +59,9 @@ defmodule Nex.Agent.Security do
     "cut",
     "tr",
     "tee",
+    "diff",
+    "patch",
+    "xargs",
     # Process
     "ps",
     "kill",
@@ -63,19 +74,41 @@ defmodule Nex.Agent.Security do
     "ssh",
     "scp",
     "rsync",
+    "ping",
+    "dig",
+    "nslookup",
+    "host",
     # Development
     "npm",
+    "npx",
     "node",
     "yarn",
     "pnpm",
+    "bun",
+    "deno",
     "python",
     "python3",
     "pip",
+    "pip3",
     "cargo",
     "rustc",
+    "go",
+    "ruby",
+    "gem",
+    "java",
+    "javac",
+    "gradle",
+    "mvn",
     # Docker (read-only)
     "docker",
     "podman",
+    # Package managers
+    "brew",
+    "apt",
+    "apt-get",
+    "yum",
+    "dnf",
+    "pacman",
     # Misc
     "date",
     "echo",
@@ -84,7 +117,22 @@ defmodule Nex.Agent.Security do
     "false",
     "which",
     "whoami",
-    "id"
+    "id",
+    "env",
+    "printenv",
+    "uname",
+    "hostname",
+    "tar",
+    "zip",
+    "unzip",
+    "gzip",
+    "gunzip",
+    "jq",
+    "yq",
+    "bc",
+    "md5sum",
+    "sha256sum",
+    "base64"
   ]
 
   # Commands allowed in test environment (includes extra testing utilities)
@@ -165,14 +213,47 @@ defmodule Nex.Agent.Security do
 
     # Check for dangerous patterns
     dangerous_patterns = [
-      {~r/^rm\s+-rf\s+\//, "Recursive delete from root not allowed"},
+      # Destructive file operations
+      {~r/rm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/, "Deleting system directories not allowed"},
+      {~r/rm\s+(-[^\s]*\s+)*\/\s/, "Deleting from root not allowed"},
+      {~r/rm\s+(-[^\s]*\s+)*~\/\s*$/, "Deleting entire home directory not allowed"},
+      # Disk/device operations
+      {~r/\bdd\s+.*if=\/dev\//, "Raw device read with dd not allowed"},
+      {~r/\bmkfs\b/, "Filesystem creation not allowed"},
+      {~r/\bfdisk\b/, "Disk partitioning not allowed"},
+      {~r/\bparted\b/, "Disk partitioning not allowed"},
+      # System control
+      {~r/\bshutdown\b/, "System shutdown not allowed"},
+      {~r/\breboot\b/, "System reboot not allowed"},
+      {~r/\bpoweroff\b/, "System poweroff not allowed"},
+      {~r/\binit\s+[06]\b/, "System init change not allowed"},
+      {~r/\bsystemctl\s+(halt|poweroff|reboot|shutdown)/, "System control not allowed"},
+      # Fork bombs and resource exhaustion
+      {~r/:\(\)\s*\{\s*:\|:&\s*\}\s*;:/, "Fork bomb not allowed"},
+      {~r/\bwhile\s+true.*do.*done/, "Infinite loop not allowed"},
+      {~r/\byes\s*\|/, "Infinite output pipe not allowed"},
+      # Dangerous permissions
+      {~r/chmod\s+(-[^\s]*\s+)*[0-7]*7[0-7]*\s+\//, "Dangerous permission change on system dirs not allowed"},
+      {~r/chown\s+.*\s+\//, "Changing ownership of system dirs not allowed"},
+      # Remote code execution
       {~r/^\.\.\//, "Relative path traversal not allowed"},
       {~r/;\s*sh\s*-i/, "Interactive shell spawn not allowed"},
       {~r/\|.*sh$/, "Shell pipe to interactive shell not allowed"},
-      {~r/curl.*\|.*sh/, "curl | sh pattern not allowed"},
-      {~r/wget.*\|.*sh/, "wget | sh pattern not allowed"},
+      {~r/curl.*\|\s*(ba)?sh/, "curl | sh pattern not allowed"},
+      {~r/wget.*\|\s*(ba)?sh/, "wget | sh pattern not allowed"},
+      {~r/\beval\s+"?\$\(curl/, "Remote code eval not allowed"},
+      # Device writes
       {~r/>\s*\/dev\//, "Writing to /dev not allowed"},
-      {~r/2>&1.*rm/, "Redirect stderr to rm not allowed"}
+      # Credential/key exfiltration
+      {~r/cat\s+.*\.(pem|key|p12|pfx|jks)\b/, "Reading key files not allowed"},
+      {~r/cat\s+.*\/\.ssh\//, "Reading SSH keys not allowed"},
+      {~r/cat\s+.*\/\.env\b/, "Reading .env files not allowed"},
+      # Network exfiltration
+      {~r/curl\s+.*-d\s+@/, "Sending file contents via curl not allowed"},
+      {~r/nc\s+-[^\s]*l/, "Netcat listener not allowed"},
+      # Other
+      {~r/2>&1.*rm/, "Redirect stderr to rm not allowed"},
+      {~r/\b(crontab|at)\s+-/, "Modifying scheduled tasks not allowed"}
     ]
 
     # Check dangerous patterns first

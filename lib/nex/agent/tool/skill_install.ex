@@ -4,7 +4,6 @@ defmodule Nex.Agent.Tool.SkillInstall do
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
-  require Logger
   alias Nex.Agent.Skills
 
   def name, do: "skill_install"

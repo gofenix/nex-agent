@@ -11,7 +11,10 @@ defmodule Nex.Agent.Config do
             defaults: %{},
             gateway: %{},
             telegram: %{},
-            feishu: %{}
+            feishu: %{},
+            discord: %{},
+            slack: %{},
+            dingtalk: %{}
 
   @type t :: %__MODULE__{
           provider: String.t(),
@@ -20,7 +23,10 @@ defmodule Nex.Agent.Config do
           defaults: map(),
           gateway: map(),
           telegram: map(),
-          feishu: map()
+          feishu: map(),
+          discord: map(),
+          slack: map(),
+          dingtalk: map()
         }
 
   @doc """
@@ -48,7 +54,10 @@ defmodule Nex.Agent.Config do
             defaults: Map.get(data, "defaults", default_defaults()),
             gateway: Map.get(data, "gateway", default_gateway()),
             telegram: Map.get(data, "telegram", default_telegram()),
-            feishu: Map.get(data, "feishu", default_feishu())
+            feishu: Map.get(data, "feishu", default_feishu()),
+            discord: Map.get(data, "discord", default_discord()),
+            slack: Map.get(data, "slack", default_slack()),
+            dingtalk: Map.get(data, "dingtalk", default_dingtalk())
           }
 
         _ ->
@@ -74,7 +83,10 @@ defmodule Nex.Agent.Config do
       "defaults" => config.defaults,
       "gateway" => config.gateway,
       "telegram" => config.telegram,
-      "feishu" => config.feishu
+      "feishu" => config.feishu,
+      "discord" => config.discord,
+      "slack" => config.slack,
+      "dingtalk" => config.dingtalk
     }
 
     File.write(path, Jason.encode!(data, pretty: true))
@@ -92,7 +104,10 @@ defmodule Nex.Agent.Config do
       defaults: default_defaults(),
       gateway: default_gateway(),
       telegram: default_telegram(),
-      feishu: default_feishu()
+      feishu: default_feishu(),
+      discord: default_discord(),
+      slack: default_slack(),
+      dingtalk: default_dingtalk()
     }
   end
 
@@ -360,6 +375,63 @@ defmodule Nex.Agent.Config do
     %{config | feishu: Map.put(feishu(config), "react_emoji", value)}
   end
 
+  # Discord setters
+
+  def set(%__MODULE__{} = config, :discord_enabled, value) when is_boolean(value) do
+    %{config | discord: Map.put(discord(config), "enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :discord_token, value) when is_binary(value) do
+    %{config | discord: Map.put(discord(config), "token", value)}
+  end
+
+  def set(%__MODULE__{} = config, :discord_allow_from, value) when is_list(value) do
+    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    %{config | discord: Map.put(discord(config), "allow_from", allow_from)}
+  end
+
+  # Slack setters
+
+  def set(%__MODULE__{} = config, :slack_enabled, value) when is_boolean(value) do
+    %{config | slack: Map.put(slack(config), "enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :slack_app_token, value) when is_binary(value) do
+    %{config | slack: Map.put(slack(config), "app_token", value)}
+  end
+
+  def set(%__MODULE__{} = config, :slack_bot_token, value) when is_binary(value) do
+    %{config | slack: Map.put(slack(config), "bot_token", value)}
+  end
+
+  def set(%__MODULE__{} = config, :slack_allow_from, value) when is_list(value) do
+    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    %{config | slack: Map.put(slack(config), "allow_from", allow_from)}
+  end
+
+  # DingTalk setters
+
+  def set(%__MODULE__{} = config, :dingtalk_enabled, value) when is_boolean(value) do
+    %{config | dingtalk: Map.put(dingtalk(config), "enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :dingtalk_app_key, value) when is_binary(value) do
+    %{config | dingtalk: Map.put(dingtalk(config), "app_key", value)}
+  end
+
+  def set(%__MODULE__{} = config, :dingtalk_app_secret, value) when is_binary(value) do
+    %{config | dingtalk: Map.put(dingtalk(config), "app_secret", value)}
+  end
+
+  def set(%__MODULE__{} = config, :dingtalk_robot_code, value) when is_binary(value) do
+    %{config | dingtalk: Map.put(dingtalk(config), "robot_code", value)}
+  end
+
+  def set(%__MODULE__{} = config, :dingtalk_allow_from, value) when is_list(value) do
+    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    %{config | dingtalk: Map.put(dingtalk(config), "allow_from", allow_from)}
+  end
+
   def set(%__MODULE__{} = config, :base_url, {provider, url}) when is_binary(provider) do
     providers =
       Map.update(
@@ -372,6 +444,87 @@ defmodule Nex.Agent.Config do
       )
 
     %{config | providers: providers}
+  end
+
+  @doc """
+  获取 Discord 配置
+  """
+  @spec discord(t()) :: map()
+  def discord(%__MODULE__{} = config) do
+    Map.merge(default_discord(), config.discord || %{})
+  end
+
+  @doc """
+  Discord 是否启用
+  """
+  @spec discord_enabled?(t()) :: boolean()
+  def discord_enabled?(%__MODULE__{} = config) do
+    config |> discord() |> Map.get("enabled", false) |> Kernel.==(true)
+  end
+
+  @doc """
+  获取 Discord allow_from
+  """
+  @spec discord_allow_from(t()) :: [String.t()]
+  def discord_allow_from(%__MODULE__{} = config) do
+    case Map.get(discord(config), "allow_from") do
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      _ -> []
+    end
+  end
+
+  @doc """
+  获取 Slack 配置
+  """
+  @spec slack(t()) :: map()
+  def slack(%__MODULE__{} = config) do
+    Map.merge(default_slack(), config.slack || %{})
+  end
+
+  @doc """
+  Slack 是否启用
+  """
+  @spec slack_enabled?(t()) :: boolean()
+  def slack_enabled?(%__MODULE__{} = config) do
+    config |> slack() |> Map.get("enabled", false) |> Kernel.==(true)
+  end
+
+  @doc """
+  获取 Slack allow_from
+  """
+  @spec slack_allow_from(t()) :: [String.t()]
+  def slack_allow_from(%__MODULE__{} = config) do
+    case Map.get(slack(config), "allow_from") do
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      _ -> []
+    end
+  end
+
+  @doc """
+  获取 DingTalk 配置
+  """
+  @spec dingtalk(t()) :: map()
+  def dingtalk(%__MODULE__{} = config) do
+    Map.merge(default_dingtalk(), config.dingtalk || %{})
+  end
+
+  @doc """
+  DingTalk 是否启用
+  """
+  @spec dingtalk_enabled?(t()) :: boolean()
+  def dingtalk_enabled?(%__MODULE__{} = config) do
+    config |> dingtalk() |> Map.get("enabled", false) |> Kernel.==(true)
+  end
+
+  @doc """
+  获取 DingTalk allow_from
+  """
+  @spec dingtalk_allow_from(t()) :: [String.t()]
+  def dingtalk_allow_from(%__MODULE__{} = config) do
+    case Map.get(dingtalk(config), "allow_from") do
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      _ -> []
+    end
   end
 
   @doc """
@@ -396,7 +549,8 @@ defmodule Nex.Agent.Config do
         _ -> true
       end
 
-    provider_valid? and telegram_valid?(config) and feishu_valid?(config)
+    provider_valid? and telegram_valid?(config) and feishu_valid?(config) and
+      discord_valid?(config) and slack_valid?(config) and dingtalk_valid?(config)
   end
 
   defp telegram_valid?(%__MODULE__{} = config) do
@@ -410,6 +564,37 @@ defmodule Nex.Agent.Config do
   defp feishu_valid?(%__MODULE__{} = config) do
     if feishu_enabled?(config) do
       not is_nil(feishu_app_id(config)) and not is_nil(feishu_app_secret(config))
+    else
+      true
+    end
+  end
+
+  defp discord_valid?(%__MODULE__{} = config) do
+    if discord_enabled?(config) do
+      token = Map.get(discord(config), "token", "")
+      is_binary(token) and token != ""
+    else
+      true
+    end
+  end
+
+  defp slack_valid?(%__MODULE__{} = config) do
+    if slack_enabled?(config) do
+      slack_cfg = slack(config)
+      app_token = Map.get(slack_cfg, "app_token", "")
+      bot_token = Map.get(slack_cfg, "bot_token", "")
+      is_binary(app_token) and app_token != "" and is_binary(bot_token) and bot_token != ""
+    else
+      true
+    end
+  end
+
+  defp dingtalk_valid?(%__MODULE__{} = config) do
+    if dingtalk_enabled?(config) do
+      dt = dingtalk(config)
+      app_key = Map.get(dt, "app_key", "")
+      app_secret = Map.get(dt, "app_secret", "")
+      is_binary(app_key) and app_key != "" and is_binary(app_secret) and app_secret != ""
     else
       true
     end
@@ -457,6 +642,34 @@ defmodule Nex.Agent.Config do
       "verification_token" => "",
       "allow_from" => [],
       "react_emoji" => "THUMBSUP"
+    }
+  end
+
+  defp default_discord do
+    %{
+      "enabled" => false,
+      "token" => "",
+      "allow_from" => [],
+      "guild_id" => nil
+    }
+  end
+
+  defp default_slack do
+    %{
+      "enabled" => false,
+      "app_token" => "",
+      "bot_token" => "",
+      "allow_from" => []
+    }
+  end
+
+  defp default_dingtalk do
+    %{
+      "enabled" => false,
+      "app_key" => "",
+      "app_secret" => "",
+      "robot_code" => "",
+      "allow_from" => []
     }
   end
 end

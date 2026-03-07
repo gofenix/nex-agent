@@ -5,7 +5,6 @@ defmodule Nex.Agent.SessionManager do
   """
 
   use GenServer
-  require Logger
 
   alias Nex.Agent.Session
 

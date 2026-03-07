@@ -77,7 +77,7 @@ defmodule Nex.Agent.Runner do
     else
       llm_result =
         try do
-          call_llm(messages, opts)
+          call_llm_with_retry(messages, opts, _retries = 1)
         rescue
           e ->
             Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
@@ -279,6 +279,33 @@ defmodule Nex.Agent.Runner do
 
   defp truncate_result(result) when is_binary(result), do: result
   defp truncate_result(result), do: inspect(result)
+
+  defp call_llm_with_retry(messages, opts, retries_left) do
+    case call_llm(messages, opts) do
+      {:ok, _} = success ->
+        success
+
+      {:error, reason} = error ->
+        if retries_left > 0 and transient_error?(reason) do
+          Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
+          Process.sleep(2_000)
+          call_llm_with_retry(messages, opts, retries_left - 1)
+        else
+          error
+        end
+    end
+  end
+
+  defp transient_error?(%{__struct__: struct}) do
+    struct_name = to_string(struct)
+    String.contains?(struct_name, "TransportError") or String.contains?(struct_name, "Mint")
+  end
+
+  defp transient_error?(%{status: status}) when status in [429, 500, 502, 503, 504], do: true
+  defp transient_error?(:timeout), do: true
+  defp transient_error?(:closed), do: true
+  defp transient_error?(reason) when is_binary(reason), do: String.contains?(reason, "timeout")
+  defp transient_error?(_), do: false
 
   defp call_llm(messages, opts) do
     tools =

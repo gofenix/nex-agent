@@ -8,7 +8,7 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config, Session}
+  alias Nex.Agent.{Bus, Config}
 
   defstruct [
     :config,
@@ -185,10 +185,6 @@ defmodule Nex.Agent.InboundWorker do
         Process.monitor(pid)
         Process.send_after(self(), {:check_timeout, key, pid}, 600_000)
         %{state | active_tasks: Map.put(state.active_tasks, key, pid)}
-
-      {:error, reason} ->
-        publish_outbound(payload, "Error: #{format_reason(reason)}")
-        state
     end
   end
 

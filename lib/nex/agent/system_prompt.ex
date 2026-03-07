@@ -79,9 +79,10 @@ defmodule Nex.Agent.SystemPrompt do
     chat_id = Keyword.get(opts, :chat_id)
 
     now = DateTime.utc_now()
+    weekday = Calendar.strftime(now, "%A")
 
     time_str =
-      "#{now.year}-#{pad(now.month)}-#{pad(now.day)} (#{DateTime.day_of_week(now, :sunday)})"
+      "#{now.year}-#{pad(now.month)}-#{pad(now.day)} (#{weekday})"
 
     lines = [@runtime_context_tag, "Current Time: #{time_str}"]
 

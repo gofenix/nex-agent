@@ -4,8 +4,7 @@ defmodule Nex.Agent do
     Session,
     Runner,
     Onboarding,
-    Skills,
-    ContextBuilder
+    Skills
   }
 
   @type t :: %__MODULE__{
@@ -39,7 +38,6 @@ defmodule Nex.Agent do
     api_key = Keyword.get(opts, :api_key) || default_api_key(provider)
     base_url = Keyword.get(opts, :base_url)
     max_iterations = Keyword.get(opts, :max_iterations, 10)
-    project = Keyword.get(opts, :project, Path.basename(File.cwd!()))
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")

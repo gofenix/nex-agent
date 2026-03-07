@@ -203,8 +203,6 @@ defmodule Nex.Agent.Skills do
     list()
     |> Enum.filter(& &1.user_invocable)
     |> Enum.map(fn skill ->
-      schema = skill.parameters || %{}
-
       %{
         "name" => "skill_#{skill.name}",
         "description" => skill.description,
@@ -288,7 +286,7 @@ defmodule Nex.Agent.Skills do
     end
   end
 
-  defp execute_mcp_skill(skill, arguments, _opts) do
+  defp execute_mcp_skill(skill, _arguments, _opts) do
     # For MCP skills, the code field contains MCP config JSON
     case Jason.decode(skill.code) do
       {:ok, mcp_config} ->
@@ -384,7 +382,7 @@ defmodule Nex.Agent.Skills do
     {:ok, get(name)}
   end
 
-  defp save_markdown_skill(skill_dir, name, description, content, parameters, allowed_tools) do
+  defp save_markdown_skill(skill_dir, name, description, content, _parameters, _allowed_tools) do
     # Save SKILL.md
     skill_file = Path.join(skill_dir, "SKILL.md")
 

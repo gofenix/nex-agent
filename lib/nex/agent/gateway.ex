@@ -12,6 +12,7 @@ defmodule Nex.Agent.Gateway do
   """
 
   use GenServer
+  require Logger
 
   defstruct [:config, :status, :started_at]
 
@@ -166,7 +167,10 @@ defmodule Nex.Agent.Gateway do
         subagent: Process.whereis(Nex.Agent.Subagent) != nil,
         harness: Process.whereis(Nex.Agent.Harness) != nil,
         telegram_channel: Process.whereis(Nex.Agent.Channel.Telegram) != nil,
-        feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil
+        feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil,
+        discord_channel: Process.whereis(Nex.Agent.Channel.Discord) != nil,
+        slack_channel: Process.whereis(Nex.Agent.Channel.Slack) != nil,
+        dingtalk_channel: Process.whereis(Nex.Agent.Channel.DingTalk) != nil
       }
     }
 
@@ -191,8 +195,6 @@ defmodule Nex.Agent.Gateway do
 
   @impl true
   def handle_info({:EXIT, pid, reason}, state) do
-    require Logger
-
     if reason != :shutdown and reason != :normal do
       Logger.warning("[Gateway] Child process #{inspect(pid)} exited: #{inspect(reason)}")
       state = maybe_restart_critical_service(pid, state)
@@ -216,6 +218,9 @@ defmodule Nex.Agent.Gateway do
       ensure_harness_started(state.config)
       ensure_telegram_channel_started(state.config)
       ensure_feishu_channel_started(state.config)
+      ensure_discord_channel_started(state.config)
+      ensure_slack_channel_started(state.config)
+      ensure_dingtalk_channel_started(state.config)
 
       {:ok,
        %{
@@ -227,6 +232,9 @@ defmodule Nex.Agent.Gateway do
   end
 
   defp do_stop(state) do
+    stop_dingtalk_channel()
+    stop_slack_channel()
+    stop_discord_channel()
     stop_feishu_channel()
     stop_telegram_channel()
     stop_harness()
@@ -436,8 +444,6 @@ defmodule Nex.Agent.Gateway do
   end
 
   defp maybe_restart_critical_service(pid, state) do
-    require Logger
-
     cond do
       pid == Process.whereis(Nex.Agent.InboundWorker) or
           not is_nil(state.config) and Process.whereis(Nex.Agent.InboundWorker) == nil ->

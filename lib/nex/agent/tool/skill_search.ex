@@ -4,7 +4,6 @@ defmodule Nex.Agent.Tool.SkillSearch do
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
-  require Logger
 
   @api_url "https://skills.sh/api/search"
 

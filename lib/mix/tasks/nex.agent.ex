@@ -4,7 +4,6 @@ defmodule Mix.Tasks.Nex.Agent do
   """
 
   use Mix.Task
-  require Logger
 
   @shortdoc "Nex Agent CLI"
 
