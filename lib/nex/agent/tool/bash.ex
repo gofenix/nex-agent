@@ -53,6 +53,9 @@ defmodule Nex.Agent.Tool.Bash do
       end
 
     case result do
+      {:error, :timeout} ->
+        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
+
       {output, exit_code} ->
         truncated =
           if byte_size(output) > 50_000 do
@@ -66,9 +69,6 @@ defmodule Nex.Agent.Tool.Bash do
         else
           {:ok, "Exit code #{exit_code}\n#{truncated}"}
         end
-
-      {:error, :timeout} ->
-        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
     end
   end
 end

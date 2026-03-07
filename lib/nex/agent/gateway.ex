@@ -76,6 +76,51 @@ defmodule Nex.Agent.Gateway do
     end
   end
 
+  defp ensure_discord_channel_started(config) do
+    if Nex.Agent.Config.discord_enabled?(config) do
+      case Process.whereis(Nex.Agent.Channel.Discord) do
+        nil ->
+          {:ok, _} = Nex.Agent.Channel.Discord.start_link(config: config)
+          :ok
+
+        _pid ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp ensure_slack_channel_started(config) do
+    if Nex.Agent.Config.slack_enabled?(config) do
+      case Process.whereis(Nex.Agent.Channel.Slack) do
+        nil ->
+          {:ok, _} = Nex.Agent.Channel.Slack.start_link(config: config)
+          :ok
+
+        _pid ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp ensure_dingtalk_channel_started(config) do
+    if Nex.Agent.Config.dingtalk_enabled?(config) do
+      case Process.whereis(Nex.Agent.Channel.DingTalk) do
+        nil ->
+          {:ok, _} = Nex.Agent.Channel.DingTalk.start_link(config: config)
+          :ok
+
+        _pid ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
   @doc """
   启动所有服务
   """
@@ -412,6 +457,27 @@ defmodule Nex.Agent.Gateway do
       pid ->
         _ = Nex.Agent.Channel.Feishu.stop_websocket()
         GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_discord_channel do
+    case Process.whereis(Nex.Agent.Channel.Discord) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_slack_channel do
+    case Process.whereis(Nex.Agent.Channel.Slack) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
+    end
+  end
+
+  defp stop_dingtalk_channel do
+    case Process.whereis(Nex.Agent.Channel.DingTalk) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :shutdown)
     end
   end
 

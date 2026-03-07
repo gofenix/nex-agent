@@ -204,10 +204,6 @@ defmodule Nex.Agent.Harness do
           }
 
           {:ok, result, new_state}
-
-        {:error, reason} ->
-          Logger.warning("[Harness] Reflection failed: #{inspect(reason)}")
-          {:error, reason, state}
       end
     end
   end

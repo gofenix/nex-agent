@@ -342,27 +342,33 @@ defmodule Nex.Agent.Channel.Discord do
   defp connect_gateway(_state) do
     parent = self()
 
-    pid = spawn_link(fn ->
-      case :websocket_client.start_link(
-             String.to_charlist(@gateway_url),
-             __MODULE__.WsHandler,
-             [parent: parent],
-             []
-           ) do
-        {:ok, ws_pid} ->
-          send(parent, {:ws_connected, ws_pid})
-          ref = Process.monitor(ws_pid)
-          send(parent, {:ws_monitor, ref})
-          Process.sleep(:infinity)
+    if Code.ensure_loaded?(:websocket_client) and function_exported?(:websocket_client, :start_link, 4) do
+      _pid =
+        spawn_link(fn ->
+          case apply(:websocket_client, :start_link, [
+                 String.to_charlist(@gateway_url),
+                 __MODULE__.WsHandler,
+                 [parent: parent],
+                 []
+               ]) do
+            {:ok, ws_pid} ->
+              send(parent, {:ws_connected, ws_pid})
+              ref = Process.monitor(ws_pid)
+              send(parent, {:ws_monitor, ref})
+              Process.sleep(:infinity)
 
-        {:error, reason} ->
-          send(parent, {:ws_error, reason})
-      end
-    end)
+            {:error, reason} ->
+              send(parent, {:ws_error, reason})
+          end
+        end)
+
+      {:ok, %{ws_pid: nil, ws_ref: nil}}
+    else
+      {:error, :websocket_unavailable}
+    end
 
     # For now, use a simple WebSocket approach via Mint
     # The actual WebSocket implementation will use Mint.WebSocket
-    {:ok, %{ws_pid: nil, ws_ref: nil}}
   rescue
     _ -> {:error, :websocket_unavailable}
   end
