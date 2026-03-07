@@ -1,7 +1,7 @@
 defmodule Nex.Agent.Tool.Cron do
   @moduledoc """
-  CronTool — Agent 通过 LLM 自主管理定时任务。
-  支持 add/list/remove/enable/disable/run/status 七种操作。
+  CronTool — allows the agent to manage scheduled tasks autonomously via the LLM.
+  Supports seven operations: add, list, remove, enable, disable, run, and status.
   """
 
   @behaviour Nex.Agent.Tool.Behaviour

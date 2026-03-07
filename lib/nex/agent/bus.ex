@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Bus do
   @moduledoc """
-  消息总线 - 简单的 PubSub 实现
+  Message bus - a simple PubSub implementation.
   """
 
   use GenServer
@@ -12,7 +12,7 @@ defmodule Nex.Agent.Bus do
         }
 
   @doc """
-  启动 Bus
+  Start the Bus.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -21,7 +21,7 @@ defmodule Nex.Agent.Bus do
   end
 
   @doc """
-  订阅主题
+  Subscribe to a topic.
   """
   @spec subscribe(term(), pid()) :: :ok
   def subscribe(topic \\ :default, pid \\ nil) do
@@ -30,7 +30,7 @@ defmodule Nex.Agent.Bus do
   end
 
   @doc """
-  取消订阅
+  Unsubscribe from a topic.
   """
   @spec unsubscribe(term(), pid()) :: :ok
   def unsubscribe(topic \\ :default, pid \\ nil) do
@@ -39,7 +39,7 @@ defmodule Nex.Agent.Bus do
   end
 
   @doc """
-  发布消息
+  Publish a message.
   """
   @spec publish(term(), term()) :: :ok
   def publish(topic \\ :default, message) do
@@ -47,7 +47,7 @@ defmodule Nex.Agent.Bus do
   end
 
   @doc """
-  同步发布消息（等待所有订阅者处理完成）
+  Publish a message synchronously and wait for all subscribers to finish processing.
   """
   @spec publish_sync(term(), term()) :: :ok
   def publish_sync(topic \\ :default, message) do
@@ -55,7 +55,7 @@ defmodule Nex.Agent.Bus do
   end
 
   @doc """
-  获取订阅者列表
+  Get the list of subscribers.
   """
   @spec subscribers(term()) :: [pid()]
   def subscribers(topic \\ :default) do

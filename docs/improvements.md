@@ -1,6 +1,6 @@
-# NexAgent 改进实施记录
+# NexAgent Improvement Implementation Log
 
-基于 NexAgent vs Nanobot 对比分析，实施的改进清单。
+Implementation checklist based on the NexAgent vs Nanobot comparison analysis.
 
 ---
 
@@ -13,15 +13,15 @@
 
 ---
 
-## 已完成的改进
+## Completed Improvements
 
-### 高优先级
+### High Priority
 
-#### 1. 工具安全加固 — Bash 命令黑名单
+#### 1. Tool hardening — Bash command blacklist
 
-**文件**: `lib/nex/agent/tool/bash.ex`
+**File**: `lib/nex/agent/tool/bash.ex`
 
-**改动**: Bash 工具执行命令前调用 `Security.validate_command()` 进行安全校验。
+**Change**: The Bash tool now calls `Security.validate_command()` before executing commands.
 
 ```elixir
 def execute(%{"command" => command}, ctx) do
@@ -32,50 +32,50 @@ def execute(%{"command" => command}, ctx) do
 end
 ```
 
-被拦截的危险模式包括：
-- 系统目录删除 (`rm -rf /usr`, `rm ~/`)
-- 磁盘操作 (`dd if=/dev/`, `mkfs`, `fdisk`)
-- 系统控制 (`shutdown`, `reboot`, `poweroff`)
+Blocked dangerous patterns include:
+- System directory deletion (`rm -rf /usr`, `rm ~/`)
+- Disk operations (`dd if=/dev/`, `mkfs`, `fdisk`)
+- System control (`shutdown`, `reboot`, `poweroff`)
 - Fork bombs (`:(){:|:&};:`)
-- 无限循环 (`while true...done`)
-- 远程代码执行 (`curl | sh`, `eval $(curl`)
-- 凭证窃取 (`cat ~/.ssh/`, `cat .env`, `cat *.pem`)
-- 网络外泄 (`curl -d @file`, `nc -l`)
-- 计划任务篡改 (`crontab -`)
+- Infinite loops (`while true...done`)
+- Remote code execution (`curl | sh`, `eval $(curl`)
+- Credential theft (`cat ~/.ssh/`, `cat .env`, `cat *.pem`)
+- Network exfiltration (`curl -d @file`, `nc -l`)
+- Cron tampering (`crontab -`)
 
-#### 2. Workspace 沙箱 — 文件读写路径限制
+#### 2. Workspace sandbox — file read/write path restrictions
 
-**文件**: `lib/nex/agent/tool/read.ex`, `lib/nex/agent/tool/write.ex`, `lib/nex/agent/tool/edit.ex`
+**Files**: `lib/nex/agent/tool/read.ex`, `lib/nex/agent/tool/write.ex`, `lib/nex/agent/tool/edit.ex`
 
-**改动**: 所有文件操作工具在执行前调用 `Security.validate_path()`, 路径必须在以下允许范围内：
-- 项目目录 (`File.cwd!()`)
+**Change**: All file operation tools now call `Security.validate_path()` before execution, and the path must be inside one of the following allowed roots:
+- Project directory (`File.cwd!()`)
 - Agent workspace (`~/.nex/agent`)
-- 临时目录 (`/tmp`)
+- Temporary directory (`/tmp`)
 
-可通过 `NEX_ALLOWED_ROOTS` 环境变量扩展。
+The allowed roots can be extended via the `NEX_ALLOWED_ROOTS` environment variable.
 
-#### 3. Security.ex 危险模式增强
+#### 3. Enhanced dangerous-pattern coverage in `Security.ex`
 
-**文件**: `lib/nex/agent/security.ex`
+**File**: `lib/nex/agent/security.ex`
 
-**改动**:
-- 危险命令模式从 8 个增加到 30+
-- 命令白名单从 ~40 个增加到 ~80 个，覆盖更多开发工具
-- 新增: `bun`, `deno`, `go`, `ruby`, `gem`, `java`, `gradle`, `mvn`, `jq`, `yq`, `tar`, `zip`, `base64` 等
+**Changes**:
+- Dangerous command patterns increased from 8 to 30+
+- The command allowlist increased from about 40 to about 80, covering more developer tools
+- Added support for `bun`, `deno`, `go`, `ruby`, `gem`, `java`, `gradle`, `mvn`, `jq`, `yq`, `tar`, `zip`, `base64`, and more
 
-#### 4. 新增渠道 — Discord
+#### 4. New channel — Discord
 
-**文件**: `lib/nex/agent/channel/discord.ex`
+**File**: `lib/nex/agent/channel/discord.ex`
 
-**实现**:
-- WebSocket Gateway API (v10) 接入
-- 心跳维持 + identify/resume 机制
-- 支持 DM 和群组 @mention 两种触发方式
-- 2000 字符消息分片
-- Rate limit 自动重试
-- `allow_from` 频道白名单
+**Implementation**:
+- WebSocket Gateway API (v10) integration
+- Heartbeat maintenance plus identify/resume flow
+- Supports both DM and group `@mention` triggers
+- 2000-character message chunking
+- Automatic rate-limit retry
+- `allow_from` channel allowlist
 
-**配置**:
+**Configuration**:
 ```json
 {
   "discord": {
@@ -87,18 +87,18 @@ end
 }
 ```
 
-#### 5. 新增渠道 — Slack
+#### 5. New channel — Slack
 
-**文件**: `lib/nex/agent/channel/slack.ex`
+**File**: `lib/nex/agent/channel/slack.ex`
 
-**实现**:
-- Socket Mode (WebSocket) 接收事件
-- Web API 发送消息
-- 支持 `message` 和 `app_mention` 事件
-- 线程回复 (thread_ts)
-- Bot 身份自动检测
+**Implementation**:
+- Receives events via Socket Mode (WebSocket)
+- Sends messages through the Web API
+- Supports `message` and `app_mention` events
+- Thread replies via `thread_ts`
+- Automatic bot identity detection
 
-**配置**:
+**Configuration**:
 ```json
 {
   "slack": {
@@ -110,17 +110,17 @@ end
 }
 ```
 
-#### 6. 新增渠道 — DingTalk (钉钉)
+#### 6. New channel — DingTalk
 
-**文件**: `lib/nex/agent/channel/dingtalk.ex`
+**File**: `lib/nex/agent/channel/dingtalk.ex`
 
-**实现**:
-- Stream Mode API 接收机器人消息
-- OAuth2 access token 管理 + 自动刷新
-- Session webhook 优先回复，Robot API 兜底
-- 支持单聊和群聊
+**Implementation**:
+- Receives bot messages through the Stream Mode API
+- OAuth2 access-token management with automatic refresh
+- Session webhook preferred for replies, Robot API as fallback
+- Supports both direct chat and group chat
 
-**配置**:
+**Configuration**:
 ```json
 {
   "dingtalk": {
@@ -133,70 +133,70 @@ end
 }
 ```
 
-#### 7. 新增工具 — ListDir
+#### 7. New tool — ListDir
 
-**文件**: `lib/nex/agent/tool/list_dir.ex`
+**File**: `lib/nex/agent/tool/list_dir.ex`
 
-**实现**:
-- 列出目录内容，显示文件类型、大小、修改时间
-- 支持递归列出 (`recursive: true`)
-- 路径通过 Security 沙箱校验
+**Implementation**:
+- Lists directory contents including file type, size, and modification time
+- Supports recursive listing with `recursive: true`
+- Paths are validated by the Security sandbox
 
-**工具定义**:
+**Tool definition**:
 ```json
 {
   "name": "list_dir",
   "parameters": {
-    "path": "目录路径",
-    "recursive": "是否递归 (default: false)"
+    "path": "directory path",
+    "recursive": "whether to recurse (default: false)"
   }
 }
 ```
 
-### 集成变更
+### Integration Changes
 
-#### Config.ex 扩展
+#### `Config.ex` expansion
 
-**文件**: `lib/nex/agent/config.ex`
+**File**: `lib/nex/agent/config.ex`
 
-新增 `discord`, `slack`, `dingtalk` 三个配置段，包含：
-- struct 字段定义
-- 默认值
-- getter/setter 方法
-- 配置校验 (`valid?/1`)
-- 序列化/反序列化
+Added `discord`, `slack`, and `dingtalk` configuration sections, including:
+- Struct fields
+- Default values
+- Getter/setter methods
+- Configuration validation via `valid?/1`
+- Serialization and deserialization
 
-#### Gateway.ex 扩展
+#### `Gateway.ex` expansion
 
-**文件**: `lib/nex/agent/gateway.ex`
+**File**: `lib/nex/agent/gateway.ex`
 
-- 新增 `ensure_discord_channel_started/1`
-- 新增 `ensure_slack_channel_started/1`
-- 新增 `ensure_dingtalk_channel_started/1`
-- 新增对应的 `stop_*_channel/0`
-- `status/0` 返回新渠道状态
+- Added `ensure_discord_channel_started/1`
+- Added `ensure_slack_channel_started/1`
+- Added `ensure_dingtalk_channel_started/1`
+- Added matching `stop_*_channel/0` functions
+- `status/0` now returns the new channel statuses
 
-#### Tool Registry 扩展
+#### Tool registry expansion
 
-**文件**: `lib/nex/agent/tool/registry.ex`
+**File**: `lib/nex/agent/tool/registry.ex`
 
-- `@default_tools` 新增 `Nex.Agent.Tool.ListDir`
-- 默认工具数从 15 增加到 16
+- Added `Nex.Agent.Tool.ListDir` to `@default_tools`
+- Default tool count increased from 15 to 16
 
 ---
 
-## 未来改进方向
+## Future Improvement Directions
 
-### 中优先级
+### Medium Priority
 
-| # | 改进 | 说明 |
+| # | Improvement | Notes |
 |---|------|------|
-| 1 | **LiteLLM 集成** | 考虑引入 LiteLLM 的 HTTP bridge 扩展 provider 覆盖 |
-| 2 | **Provider Registry** | 统一的 provider 元数据 (API key 前缀检测, 模型名映射) |
+| 1 | **LiteLLM Integration** | Consider using LiteLLM's HTTP bridge to expand provider coverage |
+| 2 | **Provider Registry** | Unified provider metadata such as API key prefix detection and model-name mapping |
 
-### 低优先级
+### Low Priority
 
-| # | 改进 | 说明 |
+| # | Improvement | Notes |
 |---|------|------|
-| 3 | **Cron Tool** | 让 agent 通过工具自主创建定时任务 (Cron GenServer 已存在) |
-| 4 | **更多渠道** | WhatsApp, QQ, Matrix, Email |
+| 3 | **Cron Tool** | Let the agent create scheduled tasks autonomously through a tool interface, since the Cron GenServer already exists |
+| 4 | **More Channels** | WhatsApp, QQ, Matrix, Email |

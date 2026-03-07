@@ -136,7 +136,7 @@ defmodule Nex.Agent.Runner do
     maybe_publish_tool_results(results, opts)
 
     # Check if message tool was used
-    message_sent = Enum.any?(results, fn {_id, name, _r} -> name == "message" end)
+    message_sent = Enum.any?(results, fn {_id, name, _r, _args} -> name == "message" end)
 
     effective_max =
       if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit do
@@ -258,13 +258,14 @@ defmodule Nex.Agent.Runner do
 
   defp maybe_publish_tool_results(results, opts) do
     if Process.whereis(Nex.Agent.Bus) do
-      Enum.each(results, fn {_id, tool_name, result} ->
+      Enum.each(results, fn {_id, tool_name, result, args} ->
         success = not String.starts_with?(to_string(result), "Error")
 
         Bus.publish(:tool_result, %{
           tool: tool_name,
           success: success,
           result: truncate_result(result),
+          args: summarize_args(tool_name, args),
           channel: Keyword.get(opts, :channel),
           chat_id: Keyword.get(opts, :chat_id)
         })
@@ -279,6 +280,20 @@ defmodule Nex.Agent.Runner do
 
   defp truncate_result(result) when is_binary(result), do: result
   defp truncate_result(result), do: inspect(result)
+
+  defp summarize_args("bash", %{"command" => cmd}) when is_binary(cmd), do: %{"command" => cmd}
+  defp summarize_args("bash", %{command: cmd}) when is_binary(cmd), do: %{"command" => cmd}
+
+  defp summarize_args(_tool_name, args) when is_map(args) do
+    args
+    |> Enum.take(3)
+    |> Map.new(fn {k, v} ->
+      v_str = if is_binary(v), do: String.slice(v, 0, 100), else: inspect(v, limit: 3)
+      {to_string(k), v_str}
+    end)
+  end
+
+  defp summarize_args(_tool_name, _args), do: %{}
 
   defp call_llm_with_retry(messages, opts, retries_left) do
     case call_llm(messages, opts) do
@@ -406,13 +421,13 @@ defmodule Nex.Agent.Runner do
       indexed_calls
       |> Task.async_stream(
         fn {tool_call_id, tool_name, args} ->
-          args = parse_args(args)
-          Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(args)})")
+          parsed_args = parse_args(args)
+          Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
 
-          result = execute_tool(tool_name, args, ctx)
+          result = execute_tool(tool_name, parsed_args, ctx)
           truncated = truncate_result(result)
 
-          {tool_call_id, tool_name, truncated}
+          {tool_call_id, tool_name, truncated, parsed_args}
         end,
         ordered: true,
         timeout: 60_000,
@@ -423,13 +438,13 @@ defmodule Nex.Agent.Runner do
         {{:ok, result}, _meta} ->
           result
 
-        {{:exit, reason}, {tool_call_id, tool_name, _args}} ->
+        {{:exit, reason}, {tool_call_id, tool_name, args}} ->
           Logger.error("[Runner] Tool task exited: #{tool_name} #{inspect(reason)}")
-          {tool_call_id, tool_name, "Error: tool timed out or crashed (#{inspect(reason)})"}
+          {tool_call_id, tool_name, "Error: tool timed out or crashed (#{inspect(reason)})", parse_args(args)}
       end)
 
     {new_messages, session} =
-      Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result},
+      Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result, _args},
                                                    {msgs, sess} ->
         msgs = ContextBuilder.add_tool_result(msgs, tool_call_id, tool_name, result)
         sess = Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)

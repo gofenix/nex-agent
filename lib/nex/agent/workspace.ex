@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Workspace do
   @moduledoc """
-  Workspace 管理 - 模板文件和上下文加载
+  Workspace management - template files and context loading.
   """
 
   @default_workspace Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
@@ -134,7 +134,7 @@ defmodule Nex.Agent.Workspace do
   }
 
   @doc """
-  获取 workspace 路径
+  Get the workspace path.
   """
   @spec workspace_path() :: String.t()
   def workspace_path do
@@ -142,7 +142,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  初始化 workspace 目录和模板文件
+  Initialize the workspace directory and template files.
   """
   @spec init_workspace() :: :ok
   def init_workspace do
@@ -153,7 +153,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  同步模板文件（不覆盖已存在的文件）
+  Sync template files without overwriting existing files.
   """
   @spec sync_templates(String.t()) :: :ok
   def sync_templates(path) do
@@ -169,7 +169,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  加载所有上下文文件
+  Load all context files.
   """
   @spec load_context() :: String.t()
   def load_context do
@@ -196,7 +196,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  加载单个文件
+  Load a single file.
   """
   @spec load_file(String.t()) :: {:ok, String.t()} | {:error, :not_found}
   def load_file(filename) do
@@ -209,7 +209,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  保存到 MEMORY.md
+  Save content to MEMORY.md.
   """
   @spec save_memory(String.t()) :: :ok
   def save_memory(content) do
@@ -219,7 +219,7 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  追加到 MEMORY.md
+  Append content to MEMORY.md.
   """
   @spec append_memory(String.t()) :: :ok
   def append_memory(content) do
@@ -229,13 +229,13 @@ defmodule Nex.Agent.Workspace do
   end
 
   @doc """
-  获取模板列表
+  Get the template list.
   """
   @spec templates() :: map()
   def templates, do: @templates
 
   @doc """
-  构建系统提示 - 组合所有上下文文件
+  Build the system prompt by combining all context files.
   """
   @spec build_system_prompt() :: String.t()
   def build_system_prompt do

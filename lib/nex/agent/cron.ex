@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Cron do
   @moduledoc """
-  定时任务 - 支持 every/at/cron 三种调度模式，智能定时器，delivery context，job 状态追踪。
+  Scheduled jobs - supports `every`, `at`, and `cron` scheduling modes, intelligent timers, delivery context, and job state tracking.
   """
 
   use GenServer

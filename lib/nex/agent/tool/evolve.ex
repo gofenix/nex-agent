@@ -6,10 +6,10 @@ defmodule Nex.Agent.Tool.Evolve do
   @behaviour Nex.Agent.Tool.Behaviour
   require Logger
 
-  alias Nex.Agent.{Evolution, Tool.Registry}
+  alias Nex.Agent.Surgeon
 
   def name, do: "evolve"
-  def description, do: "Modify and hot-reload any agent module. Use to improve tools, fix bugs, or add capabilities."
+  def description, do: "Modify and hot-reload any agent module. Use to improve tools, fix bugs, or add capabilities. Surgeon auto-protects core modules with canary monitoring."
   def category, do: :evolution
 
   def definition do
@@ -33,10 +33,13 @@ defmodule Nex.Agent.Tool.Evolve do
 
     Logger.info("[Evolve] Upgrading #{module_str}: #{reason}")
 
-    case Evolution.upgrade_module(module, code, validate: true) do
+    surgery_type = if Surgeon.core_module?(module), do: "precision", else: "normal"
+    Logger.info("[Evolve] Surgery type: #{surgery_type} for #{module_str}")
+
+    case Surgeon.upgrade(module, code, reason: reason) do
       {:ok, version} ->
-        maybe_hot_swap_registry(module)
-        {:ok, "Module #{module_str} upgraded to version #{version.id}. Hot-reloaded. Reason: #{reason}"}
+        version_id = Map.get(version, :id, "ok")
+        {:ok, "Module #{module_str} upgraded (#{surgery_type} surgery, v#{version_id}). Reason: #{reason}"}
 
       {:error, error} ->
         {:error, "Evolution failed for #{module_str}: #{error}. Fix the code and try again."}
@@ -44,16 +47,4 @@ defmodule Nex.Agent.Tool.Evolve do
   end
 
   def execute(_args, _ctx), do: {:error, "module, code, and reason are required"}
-
-  defp maybe_hot_swap_registry(module) do
-    if Process.whereis(Registry) do
-      Code.ensure_loaded(module)
-
-      if function_exported?(module, :name, 0) do
-        tool_name = module.name()
-        Registry.hot_swap(tool_name, module)
-        Logger.info("[Evolve] Hot-swapped tool #{tool_name} in Registry")
-      end
-    end
-  end
 end

@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Config do
   @moduledoc """
-  配置管理 - 从 ~/.nex/agent/config.json 加载配置
+  Configuration management - loads config from ~/.nex/agent/config.json.
   """
 
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
@@ -30,7 +30,7 @@ defmodule Nex.Agent.Config do
         }
 
   @doc """
-  获取配置文件路径
+  Get the configuration file path.
   """
   @spec config_path() :: String.t()
   def config_path do
@@ -38,7 +38,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  加载配置文件
+  Load the configuration file.
   """
   @spec load() :: t()
   def load do
@@ -69,7 +69,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  保存配置文件
+  Save the configuration file.
   """
   @spec save(t()) :: :ok | {:error, term()}
   def save(%__MODULE__{} = config) do
@@ -93,7 +93,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取默认配置
+  Get the default configuration.
   """
   @spec default() :: t()
   def default do
@@ -112,7 +112,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Telegram 配置
+  Get the Telegram configuration.
   """
   @spec telegram(t()) :: map()
   def telegram(%__MODULE__{} = config) do
@@ -120,7 +120,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu 配置
+  Get the Feishu configuration.
   """
   @spec feishu(t()) :: map()
   def feishu(%__MODULE__{} = config) do
@@ -128,7 +128,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Telegram 是否启用
+  Whether Telegram is enabled.
   """
   @spec telegram_enabled?(t()) :: boolean()
   def telegram_enabled?(%__MODULE__{} = config) do
@@ -139,7 +139,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Telegram token
+  Get the Telegram token.
   """
   @spec telegram_token(t()) :: String.t() | nil
   def telegram_token(%__MODULE__{} = config) do
@@ -150,7 +150,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Telegram allow_from
+  Get the Telegram `allow_from` list.
   """
   @spec telegram_allow_from(t()) :: [String.t()]
   def telegram_allow_from(%__MODULE__{} = config) do
@@ -161,7 +161,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Telegram 是否启用回复模式
+  Whether Telegram reply mode is enabled.
   """
   @spec telegram_reply_to_message?(t()) :: boolean()
   def telegram_reply_to_message?(%__MODULE__{} = config) do
@@ -172,7 +172,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Feishu 是否启用
+  Whether Feishu is enabled.
   """
   @spec feishu_enabled?(t()) :: boolean()
   def feishu_enabled?(%__MODULE__{} = config) do
@@ -183,7 +183,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu app_id
+  Get the Feishu `app_id`.
   """
   @spec feishu_app_id(t()) :: String.t() | nil
   def feishu_app_id(%__MODULE__{} = config) do
@@ -194,7 +194,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu app_secret
+  Get the Feishu `app_secret`.
   """
   @spec feishu_app_secret(t()) :: String.t() | nil
   def feishu_app_secret(%__MODULE__{} = config) do
@@ -205,7 +205,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu allow_from
+  Get the Feishu `allow_from` list.
   """
   @spec feishu_allow_from(t()) :: [String.t()]
   def feishu_allow_from(%__MODULE__{} = config) do
@@ -216,7 +216,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu reaction emoji
+  Get the Feishu reaction emoji.
   """
   @spec feishu_react_emoji(t()) :: String.t()
   def feishu_react_emoji(%__MODULE__{} = config) do
@@ -227,7 +227,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu encrypt_key
+  Get the Feishu `encrypt_key`.
   """
   @spec feishu_encrypt_key(t()) :: String.t() | nil
   def feishu_encrypt_key(%__MODULE__{} = config) do
@@ -238,7 +238,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Feishu verification_token
+  Get the Feishu `verification_token`.
   """
   @spec feishu_verification_token(t()) :: String.t() | nil
   def feishu_verification_token(%__MODULE__{} = config) do
@@ -249,7 +249,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取指定 provider 的 API key
+  Get the API key for the specified provider.
   """
   @spec get_api_key(t(), String.t()) :: String.t() | nil
   def get_api_key(%__MODULE__{} = config, provider) do
@@ -260,7 +260,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取指定 provider 的 base URL
+  Get the base URL for the specified provider.
   """
   @spec get_base_url(t(), String.t()) :: String.t() | nil
   def get_base_url(%__MODULE__{} = config, provider) do
@@ -271,7 +271,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取当前 provider 的 API key
+  Get the API key for the current provider.
   """
   @spec get_current_api_key(t()) :: String.t() | nil
   def get_current_api_key(%__MODULE__{provider: provider} = config) do
@@ -279,7 +279,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取当前 provider 的 base URL
+  Get the base URL for the current provider.
   """
   @spec get_current_base_url(t()) :: String.t() | nil
   def get_current_base_url(%__MODULE__{provider: provider} = config) do
@@ -287,7 +287,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  更新配置
+  Update the configuration.
   """
   @spec set(t(), atom(), term()) :: t()
   def set(%__MODULE__{} = config, :provider, value) when is_binary(value) do
@@ -447,7 +447,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Discord 配置
+  Get the Discord configuration.
   """
   @spec discord(t()) :: map()
   def discord(%__MODULE__{} = config) do
@@ -455,7 +455,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Discord 是否启用
+  Whether Discord is enabled.
   """
   @spec discord_enabled?(t()) :: boolean()
   def discord_enabled?(%__MODULE__{} = config) do
@@ -463,7 +463,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Discord allow_from
+  Get the Discord `allow_from` list.
   """
   @spec discord_allow_from(t()) :: [String.t()]
   def discord_allow_from(%__MODULE__{} = config) do
@@ -474,7 +474,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Slack 配置
+  Get the Slack configuration.
   """
   @spec slack(t()) :: map()
   def slack(%__MODULE__{} = config) do
@@ -482,7 +482,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Slack 是否启用
+  Whether Slack is enabled.
   """
   @spec slack_enabled?(t()) :: boolean()
   def slack_enabled?(%__MODULE__{} = config) do
@@ -490,7 +490,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 Slack allow_from
+  Get the Slack `allow_from` list.
   """
   @spec slack_allow_from(t()) :: [String.t()]
   def slack_allow_from(%__MODULE__{} = config) do
@@ -501,7 +501,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 DingTalk 配置
+  Get the DingTalk configuration.
   """
   @spec dingtalk(t()) :: map()
   def dingtalk(%__MODULE__{} = config) do
@@ -509,7 +509,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  DingTalk 是否启用
+  Whether DingTalk is enabled.
   """
   @spec dingtalk_enabled?(t()) :: boolean()
   def dingtalk_enabled?(%__MODULE__{} = config) do
@@ -517,7 +517,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取 DingTalk allow_from
+  Get the DingTalk `allow_from` list.
   """
   @spec dingtalk_allow_from(t()) :: [String.t()]
   def dingtalk_allow_from(%__MODULE__{} = config) do
@@ -528,7 +528,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  获取最大迭代次数
+  Get the maximum iteration count.
   """
   @spec get_max_iterations(t()) :: pos_integer()
   def get_max_iterations(%__MODULE__{} = config) do
@@ -539,7 +539,7 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  验证配置是否有效
+  Validate whether the configuration is valid.
   """
   @spec valid?(t()) :: boolean()
   def valid?(%__MODULE__{provider: provider} = config) do

@@ -30,7 +30,7 @@ defmodule Nex.Agent.Evolution do
   def upgrade_module(module, code, opts \\ []) do
     validate = Keyword.get(opts, :validate, true)
 
-    source_path = get_source_path(module)
+    source_path = source_path(module)
 
     with :ok <- maybe_validate_code(validate, code),
          :ok <- create_backup(module, source_path),
@@ -57,7 +57,7 @@ defmodule Nex.Agent.Evolution do
 
     if length(versions) > 1 do
       previous = Enum.at(versions, -2)
-      source_path = get_source_path(module)
+      source_path = source_path(module)
       write_source(source_path, previous.code)
       compile_and_load(module, previous.code)
       :ok
@@ -68,7 +68,7 @@ defmodule Nex.Agent.Evolution do
 
       if File.exists?(backup_path) do
         code = File.read!(backup_path)
-        source_path = get_source_path(module)
+        source_path = source_path(module)
         write_source(source_path, code)
         compile_and_load(module, code)
         :ok
@@ -86,7 +86,7 @@ defmodule Nex.Agent.Evolution do
     version = get_version(module, version_id)
 
     if version do
-      source_path = get_source_path(module)
+      source_path = source_path(module)
       write_source(source_path, version.code)
       compile_and_load(module, version.code)
       :ok
@@ -155,7 +155,7 @@ defmodule Nex.Agent.Evolution do
   """
   @spec get_source(atom()) :: {:ok, String.t()} | {:error, String.t()}
   def get_source(module) do
-    path = get_source_path(module)
+    path = source_path(module)
 
     if File.exists?(path) do
       File.read(path)
@@ -197,7 +197,11 @@ defmodule Nex.Agent.Evolution do
     end
   end
 
-  defp get_source_path(module) do
+  @doc """
+  Get the source file path for a module.
+  """
+  @spec source_path(atom()) :: String.t()
+  def source_path(module) do
     beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
     cond do
@@ -224,13 +228,6 @@ defmodule Nex.Agent.Evolution do
         |> String.replace("_build/", "lib/")
         |> String.replace("/ebin/", "/lib/")
         |> String.replace_suffix("", ".ex")
-    end
-  end
-
-  defp validate_code(code) do
-    case Code.string_to_quoted(code) do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, Exception.message(error)}
     end
   end
 

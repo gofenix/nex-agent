@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Channel.DingTalk do
   @moduledoc """
-  DingTalk (钉钉) channel using Stream Mode (long-lived HTTP connection).
+  DingTalk channel using Stream Mode (long-lived HTTP connection).
 
   Connects to DingTalk via the Stream Mode API for receiving events, and uses
   the Robot API for sending messages. Follows the same Bus pub/sub pattern as other channels.

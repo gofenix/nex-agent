@@ -431,6 +431,9 @@ defmodule Nex.Agent.Memory do
       consolidation_prompt = """
       You are a memory consolidation agent. Process the conversation below and call the save_memory tool.
 
+      Also identify any clear user preferences (language, communication style, coding conventions, workflow habits) visible in the conversation.
+      Only report preferences that are clearly and consistently demonstrated — do not guess.
+
       ## Current Long-term Memory
       #{if current_memory == "", do: "(empty)", else: current_memory}
 
@@ -456,6 +459,19 @@ defmodule Nex.Agent.Memory do
                   "type" => "string",
                   "description" =>
                     "Full updated long-term memory as markdown. Include all existing facts plus new ones. Return unchanged if nothing new."
+                },
+                "user_preferences" => %{
+                  "type" => "array",
+                  "description" =>
+                    "Optional: user preferences clearly demonstrated in this conversation. Only include if pattern is obvious.",
+                  "items" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "field" => %{"type" => "string", "description" => "Preference name (e.g. 'Language', 'Code Style')"},
+                      "value" => %{"type" => "string", "description" => "Preference value (e.g. 'Chinese', 'Functional style')"}
+                    },
+                    "required" => ["field", "value"]
+                  }
                 }
               },
               "required" => ["history_entry", "memory_update"]
@@ -478,16 +494,17 @@ defmodule Nex.Agent.Memory do
         model: model,
         api_key: api_key,
         base_url: base_url,
-        tools: save_memory_tool
+        tools: save_memory_tool,
+        tool_choice: tool_choice_for(provider, "save_memory")
       ]
 
       case Nex.Agent.Runner.call_llm_for_consolidation(consolidation_messages, llm_opts) do
-        {:ok, result} when is_map(result) ->
+        {:ok, result} when is_map(result) and map_size(result) > 0 ->
           handle_consolidation_result(result, session, messages, keep_count, current_memory)
 
-        {:ok, result} ->
-          Logger.warning("[Memory] Consolidation returned unexpected result: #{inspect(result)}")
-          {:error, :unexpected_result}
+        {:ok, empty} ->
+          Logger.warning("[Memory] Consolidation returned empty result: #{inspect(empty)}, skipping")
+          {:ok, session}
 
         {:error, reason} ->
           {:error, reason}
@@ -500,6 +517,7 @@ defmodule Nex.Agent.Memory do
 
     history_entry = Map.get(result, "history_entry")
     memory_update = Map.get(result, "memory_update")
+    user_preferences = Map.get(result, "user_preferences")
 
     cond do
       not is_binary(history_entry) or String.trim(history_entry) == "" ->
@@ -517,6 +535,24 @@ defmodule Nex.Agent.Memory do
           write_long_term(memory_update)
         end
 
+        # Apply user preferences if present
+        if is_list(user_preferences) and user_preferences != [] do
+          Enum.each(user_preferences, fn pref ->
+            field = pref["field"]
+            value = pref["value"]
+
+            if is_binary(field) and is_binary(value) do
+              Nex.Agent.Reflection.apply_suggestion(%{
+                type: :user_preference,
+                name: field,
+                action: value
+              })
+
+              Logger.info("[Memory] Learned user preference: #{field} = #{value}")
+            end
+          end)
+        end
+
         new_last_consolidated = length(messages) - keep_count
         updated_session = %{session | last_consolidated: new_last_consolidated}
         Nex.Agent.SessionManager.save(updated_session)
@@ -525,4 +561,10 @@ defmodule Nex.Agent.Memory do
         {:ok, updated_session}
     end
   end
+
+  defp tool_choice_for(:anthropic, name),
+    do: %{"type" => "tool", "name" => name}
+
+  defp tool_choice_for(_provider, name),
+    do: %{"type" => "function", "function" => %{"name" => name}}
 end

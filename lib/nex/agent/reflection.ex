@@ -5,7 +5,7 @@ defmodule Nex.Agent.Reflection do
   This is the core of the self-evolving agent. It:
   1. Collects tool execution results from the Bus
   2. Uses an LLM to analyze patterns and generate structured suggestions
-  3. Can auto-apply improvements (new skills, soul updates, memory entries)
+  3. Can auto-apply improvements (new skills, soul updates, memory entries, code fixes, user preferences, memory pruning)
 
   ## Usage
 
@@ -32,7 +32,8 @@ defmodule Nex.Agent.Reflection do
   @doc """
   Run LLM-driven reflection on a list of tool results.
 
-  Returns structured suggestions: `:new_skill`, `:soul_update`, `:memory_entry`, `:strategy_change`.
+  Returns structured suggestions: `:new_skill`, `:soul_update`, `:memory_entry`,
+  `:strategy_change`, `:code_fix`, `:user_preference`, `:memory_prune`.
 
   ## Options
 
@@ -74,8 +75,14 @@ defmodule Nex.Agent.Reflection do
     ]
 
     tools = [reflection_tool_schema()]
+    provider = Keyword.get(opts, :provider, :openai)
 
-    case Runner.call_llm_for_consolidation(messages, Keyword.put(opts, :tools, tools)) do
+    llm_opts =
+      opts
+      |> Keyword.put(:tools, tools)
+      |> Keyword.put(:tool_choice, tool_choice_for(provider, @reflection_tool_name))
+
+    case Runner.call_llm_for_consolidation(messages, llm_opts) do
       {:ok, args} ->
         suggestions = parse_suggestions(args)
         Logger.info("[Reflection] LLM generated #{length(suggestions)} suggestion(s)")
@@ -156,12 +163,17 @@ defmodule Nex.Agent.Reflection do
 
   @spec apply_suggestion(map()) :: :ok | {:error, String.t()}
   def apply_suggestion(%{type: :new_skill} = s) do
-    case Skills.create(%{
-           name: s[:name] || "auto_skill",
-           description: s[:description] || s.action,
-           type: :markdown,
-           content: s[:content] || s.action
-         }) do
+    skill_type = Map.get(s, :skill_type, :markdown)
+    content_key = if skill_type == :script, do: :code, else: :content
+
+    attrs = %{
+      name: s[:name] || "auto_skill",
+      description: s[:description] || s.action,
+      type: skill_type
+    }
+    |> Map.put(content_key, s[:content] || s.action)
+
+    case Skills.create(attrs) do
       r when r in [:ok] -> :ok
       {:ok, _} -> :ok
       {:error, reason} -> {:error, "Skill creation failed: #{inspect(reason)}"}
@@ -187,6 +199,33 @@ defmodule Nex.Agent.Reflection do
       "REFLECTION",
       %{type: :reflection, suggestion: s.action}
     )
+  end
+
+  def apply_suggestion(%{type: :code_fix} = s) do
+    # Conservative: write to memory so agent sees it and decides whether to evolve
+    module = s[:name] || "unknown"
+    error_pattern = s[:description] || ""
+    fix_direction = s[:action] || ""
+
+    entry = """
+    [CODE_FIX] Module: #{module}
+    Error: #{error_pattern}
+    Suggested fix: #{fix_direction}
+    """
+
+    Memory.append(entry, "CODE_FIX", %{type: :code_fix, module: module})
+  end
+
+  def apply_suggestion(%{type: :user_preference} = s) do
+    field = s[:name] || "unknown"
+    value = s[:action] || ""
+    update_user_preference(field, value)
+  end
+
+  def apply_suggestion(%{type: :memory_prune} = s) do
+    section_header = s[:name] || ""
+    action = s[:action] || "remove"
+    prune_memory_section(section_header, action)
   end
 
   def apply_suggestion(%{type: type} = s) when type in [:avoid_pattern, :reinforce_pattern, :strategy_change] do
@@ -215,6 +254,79 @@ defmodule Nex.Agent.Reflection do
     %{analysis: analysis, suggestions: suggestions, applied: auto_apply}
   end
 
+  # --- User preference management ---
+
+  @doc """
+  Update a user preference in USER.md.
+  """
+  @spec update_user_preference(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_user_preference(field, value) do
+    user_path = Path.join([System.get_env("HOME", "."), ".nex", "agent", "workspace", "USER.md"])
+    File.mkdir_p!(Path.dirname(user_path))
+
+    current = case File.read(user_path) do
+      {:ok, c} -> c
+      _ -> ""
+    end
+
+    timestamp = Date.utc_today() |> Date.to_string()
+    entry_line = "- **#{field}**: #{value} _(learned #{timestamp})_"
+
+    # Check if field already exists
+    field_regex = ~r/^- \*\*#{Regex.escape(field)}\*\*:.*$/m
+
+    updated =
+      if Regex.match?(field_regex, current) do
+        String.replace(current, field_regex, entry_line)
+      else
+        # Append under ## Auto-learned section
+        if String.contains?(current, "## Auto-learned") do
+          String.replace(current, "## Auto-learned", "## Auto-learned\n#{entry_line}", global: false)
+        else
+          current <> "\n\n## Auto-learned\n#{entry_line}\n"
+        end
+      end
+
+    File.write(user_path, updated)
+  end
+
+  # --- Memory pruning ---
+
+  @doc """
+  Prune a section from MEMORY.md by header.
+  """
+  @spec prune_memory_section(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def prune_memory_section(section_header, action) do
+    memory_path = Path.join([System.get_env("HOME", "."), ".nex", "agent", "workspace", "memory", "MEMORY.md"])
+
+    case File.read(memory_path) do
+      {:ok, content} ->
+        sections = String.split(content, ~r/(?=^## )/m, trim: true)
+
+        updated_sections =
+          case action do
+            "remove" ->
+              Enum.reject(sections, fn s ->
+                String.starts_with?(s, "## #{section_header}")
+              end)
+
+            "update" ->
+              # For update action, the new content should be in the suggestion
+              # Just keep as-is for now — the LLM will provide specific content via memory_entry
+              sections
+
+            _ ->
+              sections
+          end
+
+        new_content = Enum.join(updated_sections)
+        File.write(memory_path, new_content)
+
+      {:error, _} ->
+        {:error, "MEMORY.md not found"}
+    end
+  end
+
   # --- Private: LLM helpers ---
 
   defp reflection_system_prompt do
@@ -222,17 +334,21 @@ defmodule Nex.Agent.Reflection do
     You are an agent reflection system. Analyze the provided tool execution results and generate structured improvement suggestions.
 
     You MUST call the `#{@reflection_tool_name}` tool with a JSON array of suggestions. Each suggestion should have:
-    - "type": one of "new_skill", "soul_update", "memory_entry", "strategy_change"
+    - "type": one of "new_skill", "soul_update", "memory_entry", "strategy_change", "code_fix", "user_preference", "memory_prune"
     - "description": what you observed
     - "action": specific actionable improvement
-    - "name": (for new_skill only) snake_case skill name
+    - "name": (for new_skill) snake_case skill name; (for code_fix) module name; (for user_preference) preference field name; (for memory_prune) section header
     - "content": (for new_skill only) the skill content
+    - "skill_type": (for new_skill only) "markdown" or "script"
 
     Focus on:
-    1. Repeated failure patterns → suggest new skills or strategy changes
-    2. Successful patterns worth reinforcing → memory entries
-    3. Behavioral adjustments → soul_update (use sparingly)
-    4. Automatable sequences → new_skill
+    1. **Repeated bash patterns** (3+ times same command pattern succeeds) → new_skill with skill_type "script"
+    2. **Repeated failures** on same tool → code_fix (include module name, error pattern, fix direction)
+    3. **Successful patterns** worth reinforcing → memory_entry
+    4. **User behavioral patterns** (consistent language, style, preferences seen across multiple interactions) → user_preference (be conservative, only when pattern is clear)
+    5. **Behavioral adjustments** → soul_update (use sparingly)
+    6. **Outdated/redundant memory** → memory_prune (with section header and action "remove")
+    7. **Automatable sequences** → new_skill
 
     Be concise. Only suggest genuinely useful improvements.
     """
@@ -250,11 +366,20 @@ defmodule Nex.Agent.Reflection do
             "items" => %{
               "type" => "object",
               "properties" => %{
-                "type" => %{"type" => "string", "enum" => ["new_skill", "soul_update", "memory_entry", "strategy_change"]},
+                "type" => %{
+                  "type" => "string",
+                  "enum" => ["new_skill", "soul_update", "memory_entry", "strategy_change",
+                             "code_fix", "user_preference", "memory_prune"]
+                },
                 "description" => %{"type" => "string"},
                 "action" => %{"type" => "string"},
                 "name" => %{"type" => "string"},
-                "content" => %{"type" => "string"}
+                "content" => %{"type" => "string"},
+                "skill_type" => %{
+                  "type" => "string",
+                  "enum" => ["markdown", "script"],
+                  "description" => "For new_skill: markdown for instructions, script for executable bash"
+                }
               },
               "required" => ["type", "description", "action"]
             }
@@ -274,23 +399,51 @@ defmodule Nex.Agent.Reflection do
       result_preview = Map.get(r, :result) || Map.get(r, "result") || ""
       result_preview = truncate(to_string(result_preview), 100)
       status = if success, do: "OK", else: "FAIL"
-      "- [#{status}] #{tool}: #{result_preview}"
+
+      # Include args preview for richer reflection
+      args = Map.get(r, :args) || Map.get(r, "args") || %{}
+      args_preview = format_args_preview(tool, args)
+
+      "- [#{status}] #{tool}#{args_preview}: #{result_preview}"
     end)
   end
 
+  defp format_args_preview("bash", %{"command" => cmd}) when is_binary(cmd) do
+    "(cmd=#{truncate(cmd, 60)})"
+  end
+
+  defp format_args_preview(_tool, args) when map_size(args) > 0 do
+    preview =
+      args
+      |> Enum.take(2)
+      |> Enum.map_join(", ", fn {k, v} -> "#{k}=#{truncate(to_string(v), 30)}" end)
+
+    "(#{preview})"
+  end
+
+  defp format_args_preview(_tool, _args), do: ""
+
+  @valid_suggestion_types ~w(new_skill soul_update memory_entry strategy_change code_fix user_preference memory_prune)
+
   defp parse_suggestions(%{"suggestions" => suggestions}) when is_list(suggestions) do
-    Enum.map(suggestions, fn s ->
+    suggestions
+    |> Enum.filter(fn s -> (s["type"] || "") in @valid_suggestion_types end)
+    |> Enum.map(fn s ->
       %{
-        type: String.to_atom(s["type"] || "memory_entry"),
+        type: String.to_existing_atom(s["type"]),
         description: s["description"] || "",
         action: s["action"] || "",
         name: s["name"],
-        content: s["content"]
+        content: s["content"],
+        skill_type: parse_skill_type(s["skill_type"])
       }
     end)
   end
 
   defp parse_suggestions(_), do: []
+
+  defp parse_skill_type("script"), do: :script
+  defp parse_skill_type(_), do: :markdown
 
   # --- Private: rule-based helpers ---
 
@@ -338,4 +491,10 @@ defmodule Nex.Agent.Reflection do
   defp truncate(str, _max) when is_binary(str), do: str
   defp truncate(nil, _max), do: ""
   defp truncate(other, max), do: truncate(inspect(other), max)
+
+  defp tool_choice_for(:anthropic, name),
+    do: %{"type" => "tool", "name" => name}
+
+  defp tool_choice_for(_provider, name),
+    do: %{"type" => "function", "function" => %{"name" => name}}
 end

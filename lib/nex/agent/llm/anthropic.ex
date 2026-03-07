@@ -10,6 +10,7 @@ defmodule Nex.Agent.LLM.Anthropic do
     temperature = Keyword.get(options, :temperature, 1.0)
     http_client = Keyword.get(options, :http_client, &Req.post/2)
     tools = Keyword.get(options, :tools, [])
+    tool_choice = Keyword.get(options, :tool_choice)
 
     system_content = extract_system(messages)
 
@@ -31,7 +32,13 @@ defmodule Nex.Agent.LLM.Anthropic do
 
     body =
       if tools != [] do
-        Map.put(body, :tools, transform_tools(tools))
+        body = Map.put(body, :tools, transform_tools(tools))
+
+        if tool_choice do
+          Map.put(body, :tool_choice, tool_choice)
+        else
+          body
+        end
       else
         body
       end

@@ -64,6 +64,14 @@ defmodule Nex.Agent.ContextBuilder do
     - **evolve**: Modify any agent module and hot-reload it immediately. Use this instead of write for .ex files.
     - **reflect**: Read your own source code, list modules, view version history.
     Writing .ex files with write/edit also triggers auto-reload, but evolve is preferred for self-modification.
+    All modules can be evolved. The Surgeon automatically protects core modules (Runner, Session, etc.) with canary monitoring and instant rollback.
+
+    ## Self-Repair
+    When a tool fails repeatedly (2+ consecutive failures on same tool):
+    1. Use **reflect** to read the tool's source code and understand the failure
+    2. Use **evolve** to fix the bug and hot-reload — Surgeon protects core modules automatically
+    3. If the failure is from an external cause (network, permissions), try a different approach instead
+    Do NOT retry the same failing action in a loop. Diagnose first, then fix or adapt.
     """
 
     parts ++ [identity]

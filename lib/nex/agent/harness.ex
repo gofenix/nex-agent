@@ -31,17 +31,21 @@ defmodule Nex.Agent.Harness do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Reflection}
+  alias Nex.Agent.{Bus, Reflection, Memory}
 
   @default_reflection_interval 15 * 60 * 1000
   @default_min_results 20
   @max_results_window 200
+  @memory_review_interval 24 * 60 * 60 * 1000
+  @daily_log_retention_days 30
 
   defstruct [
     :opts,
     :reflection_timer,
+    :memory_review_timer,
     results: [],
     last_reflection_at: nil,
+    last_memory_review_at: nil,
     reflection_count: 0,
     auto_apply: false
   ]
@@ -49,8 +53,10 @@ defmodule Nex.Agent.Harness do
   @type t :: %__MODULE__{
           opts: keyword(),
           reflection_timer: reference() | nil,
+          memory_review_timer: reference() | nil,
           results: [map()],
           last_reflection_at: DateTime.t() | nil,
+          last_memory_review_at: DateTime.t() | nil,
           reflection_count: non_neg_integer(),
           auto_apply: boolean()
         }
@@ -109,10 +115,12 @@ defmodule Nex.Agent.Harness do
       auto_apply: auto_apply,
       results: [],
       last_reflection_at: nil,
+      last_memory_review_at: nil,
       reflection_count: 0
     }
 
     state = schedule_reflection(state, interval)
+    state = schedule_memory_review(state)
 
     Logger.info("[Harness] Started auto_apply=#{auto_apply} interval=#{interval}ms")
     {:ok, state}
@@ -131,11 +139,22 @@ defmodule Nex.Agent.Harness do
 
   @impl true
   def handle_call(:status, _from, state) do
+    memory_sections = Memory.read_memory_sections()
+    memory_size = case File.stat(Path.join([System.get_env("HOME", "~"), ".nex", "agent", "workspace", "memory", "MEMORY.md"])) do
+      {:ok, %{size: size}} -> size
+      _ -> 0
+    end
+
     status = %{
       results_count: length(state.results),
       last_reflection_at: state.last_reflection_at,
       reflection_count: state.reflection_count,
-      auto_apply: state.auto_apply
+      auto_apply: state.auto_apply,
+      memory: %{
+        sections: length(memory_sections),
+        size_bytes: memory_size,
+        last_review_at: state.last_memory_review_at
+      }
     }
 
     {:reply, status, state}
@@ -177,6 +196,18 @@ defmodule Nex.Agent.Harness do
   end
 
   @impl true
+  def handle_info(:memory_review, state) do
+    Logger.info("[Harness] Starting memory review cycle")
+
+    Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+      run_memory_review(state.opts)
+    end)
+
+    state = %{state | last_memory_review_at: DateTime.utc_now()}
+    {:noreply, schedule_memory_review(state)}
+  end
+
+  @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
   # --- Private ---
@@ -210,10 +241,6 @@ defmodule Nex.Agent.Harness do
           }
 
           {:ok, result, new_state}
-
-        {:error, reason} ->
-          Logger.warning("[Harness] Reflection failed: #{inspect(reason)}")
-          {:error, reason, state}
       end
     end
   end
@@ -225,6 +252,138 @@ defmodule Nex.Agent.Harness do
   end
 
   defp schedule_reflection(state, _), do: state
+
+  defp schedule_memory_review(state) do
+    if state.memory_review_timer, do: Process.cancel_timer(state.memory_review_timer)
+    timer = Process.send_after(self(), :memory_review, @memory_review_interval)
+    %{state | memory_review_timer: timer}
+  end
+
+  defp run_memory_review(_opts) do
+    # 1. Cleanup old daily logs
+    cleanup_old_daily_logs(@daily_log_retention_days)
+
+    # 2. LLM-driven memory review if enough sections
+    sections = Memory.read_memory_sections()
+
+    if length(sections) >= 3 do
+      review_memory_with_llm(sections)
+    else
+      Logger.debug("[Harness] Memory review skipped: only #{length(sections)} sections")
+    end
+  rescue
+    e ->
+      Logger.warning("[Harness] Memory review failed: #{Exception.message(e)}")
+  end
+
+  defp cleanup_old_daily_logs(retention_days) do
+    memory_dir = Path.join([System.get_env("HOME", "~"), ".nex", "agent", "workspace", "memory"])
+    cutoff = Date.utc_today() |> Date.add(-retention_days)
+
+    if File.exists?(memory_dir) do
+      memory_dir
+      |> File.ls!()
+      |> Enum.filter(&Regex.match?(~r/^\d{4}-\d{2}-\d{2}$/, &1))
+      |> Enum.filter(fn date_str ->
+        case Date.from_iso8601(date_str) do
+          {:ok, date} -> Date.compare(date, cutoff) == :lt
+          _ -> false
+        end
+      end)
+      |> Enum.each(fn date_str ->
+        dir = Path.join(memory_dir, date_str)
+        File.rm_rf!(dir)
+        Logger.info("[Harness] Cleaned up old daily log: #{date_str}")
+      end)
+    end
+  end
+
+  defp review_memory_with_llm(sections) do
+    config = Nex.Agent.Config.load()
+
+    sections_text =
+      Enum.map_join(sections, "\n\n", fn s ->
+        "## #{s.header}\n#{s.content}"
+      end)
+
+    messages = [
+      %{
+        "role" => "system",
+        "content" => """
+        You are a memory quality reviewer. Analyze the agent's long-term memory sections.
+        Call the review_memory tool with pruning suggestions for outdated, redundant, or low-value sections.
+        Be conservative — only suggest removing sections that are clearly outdated or duplicated.
+        """
+      },
+      %{
+        "role" => "user",
+        "content" => "## Current MEMORY.md\n\n#{sections_text}"
+      }
+    ]
+
+    tools = [
+      %{
+        "name" => "review_memory",
+        "description" => "Submit memory pruning suggestions",
+        "input_schema" => %{
+          "type" => "object",
+          "properties" => %{
+            "prune_actions" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "section" => %{"type" => "string", "description" => "Section header to prune"},
+                  "action" => %{"type" => "string", "enum" => ["remove"], "description" => "Action to take"},
+                  "reason" => %{"type" => "string", "description" => "Why this section should be pruned"}
+                },
+                "required" => ["section", "action", "reason"]
+              }
+            }
+          },
+          "required" => ["prune_actions"]
+        }
+      }
+    ]
+
+    review_opts = [
+      provider: String.to_atom(config.provider),
+      model: config.model,
+      api_key: Nex.Agent.Config.get_current_api_key(config),
+      base_url: Nex.Agent.Config.get_current_base_url(config),
+      tools: tools,
+      tool_choice: tool_choice_for(String.to_atom(config.provider), "review_memory")
+    ]
+
+    case Nex.Agent.Runner.call_llm_for_consolidation(messages, review_opts) do
+      {:ok, %{"prune_actions" => actions}} when is_list(actions) ->
+        Enum.each(actions, fn action ->
+          section = action["section"]
+          act = action["action"]
+          reason = action["reason"] || ""
+
+          Logger.info("[Harness] Memory prune: #{act} '#{section}' — #{reason}")
+
+          Reflection.apply_suggestion(%{
+            type: :memory_prune,
+            name: section,
+            action: act
+          })
+        end)
+
+      {:ok, _} ->
+        Logger.debug("[Harness] Memory review returned no prune actions")
+
+      {:error, reason} ->
+        Logger.warning("[Harness] Memory review LLM call failed: #{inspect(reason)}")
+    end
+  end
+
+  defp tool_choice_for(:anthropic, name),
+    do: %{"type" => "tool", "name" => name}
+
+  defp tool_choice_for(_provider, name),
+    do: %{"type" => "function", "function" => %{"name" => name}}
 
   defp maybe_load_config(opts) do
     if Keyword.has_key?(opts, :api_key) do

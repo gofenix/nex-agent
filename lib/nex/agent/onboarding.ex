@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Onboarding do
   @moduledoc """
-  自动初始化系统 - 首次运行时创建目录和默认技能
+  Automatically initializes the system by creating directories and default skills on first run.
   """
 
   @default_base_dir Path.join(System.get_env("HOME", "~"), ".nex/agent")
@@ -27,7 +27,7 @@ defmodule Nex.Agent.Onboarding do
   end
 
   @doc """
-  确保系统已初始化。首次运行时自动创建目录和默认技能。
+  Ensure the system is initialized. On first run, create directories and default skills automatically.
   """
   @spec ensure_initialized() :: :ok
   def ensure_initialized do
@@ -42,7 +42,7 @@ defmodule Nex.Agent.Onboarding do
   end
 
   @doc """
-  检查是否已初始化
+  Check whether initialization has already happened.
   """
   @spec initialized?() :: boolean()
   def initialized? do
@@ -50,7 +50,7 @@ defmodule Nex.Agent.Onboarding do
   end
 
   @doc """
-  强制重新初始化（用于升级或修复）
+  Force reinitialization, typically for upgrades or repairs.
   """
   @spec reinitialize() :: :ok
   def reinitialize do
@@ -59,7 +59,7 @@ defmodule Nex.Agent.Onboarding do
   end
 
   @doc """
-  返回默认技能列表
+  Return the list of default skills.
   """
   @spec default_skills() :: list({String.t(), atom()})
   def default_skills, do: @default_skills
@@ -282,31 +282,31 @@ defmodule Nex.Agent.Onboarding do
 
   defp get_skill_content("explain-code", :markdown) do
     %{
-      description: "解释代码逻辑，带流程图",
+      description: "Explain code logic with a flow diagram",
       body: """
-      分析代码时请：
+      When analyzing code:
 
-      1. 先用一句话概括核心功能
-      2. 画出数据流图 (ASCII art)
-      3. 列出关键函数及其职责
-      4. 指出潜在改进点
+      1. Summarize the core function in one sentence
+      2. Draw a data-flow diagram using ASCII art
+      3. List the key functions and their responsibilities
+      4. Point out potential improvements
 
-      示例输出格式：
+      Example output format:
 
       ```
-      ## 概述
-      [一句话描述]
+      ## Overview
+      [One-sentence summary]
 
-      ## 数据流
-      [ASCII 流程图]
+      ## Data Flow
+      [ASCII diagram]
 
-      ## 关键函数
-      - func1: 职责说明
-      - func2: 职责说明
+      ## Key Functions
+      - func1: responsibility
+      - func2: responsibility
 
-      ## 改进建议
-      - [建议1]
-      - [建议2]
+      ## Improvement Suggestions
+      - [suggestion 1]
+      - [suggestion 2]
       ```
       """
     }
@@ -314,7 +314,7 @@ defmodule Nex.Agent.Onboarding do
 
   defp get_skill_content("git-commit", :script) do
     %{
-      description: "根据 staged changes 生成 commit message",
+      description: "Generate a commit message from staged changes",
       script: """
       #!/bin/bash
       # Generate commit message from staged changes
@@ -342,31 +342,31 @@ defmodule Nex.Agent.Onboarding do
 
   defp get_skill_content("project-analyze", :markdown) do
     %{
-      description: "分析项目结构和架构",
+      description: "Analyze project structure and architecture",
       body: """
-      分析项目时：
+      When analyzing a project:
 
-      1. 列出目录结构 (tree -L 2)
-      2. 识别技术栈 (语言、框架、数据库)
-      3. 找出入口文件
-      4. 绘制模块依赖图
+      1. List the directory structure (`tree -L 2`)
+      2. Identify the tech stack (language, framework, database)
+      3. Find the entry files
+      4. Draw the module dependency graph
 
-      输出格式：
+      Output format:
 
       ```
-      ## 技术栈
-      - 语言: ...
-      - 框架: ...
-      - 数据库: ...
+      ## Tech Stack
+      - Language: ...
+      - Framework: ...
+      - Database: ...
 
-      ## 目录结构
+      ## Directory Structure
       [tree output]
 
-      ## 入口点
+      ## Entry Points
       - ...
 
-      ## 模块关系
-      [依赖图]
+      ## Module Relationships
+      [dependency graph]
       ```
       """
     }
@@ -374,64 +374,64 @@ defmodule Nex.Agent.Onboarding do
 
   defp get_skill_content("test-runner", :markdown) do
     %{
-      description: "运行测试并分析失败原因",
+      description: "Run tests and analyze failures",
       body: """
-      运行测试：
+      Run tests:
 
-      1. 执行 mix test
-      2. 收集失败的测试
-      3. 分析失败原因
-      4. 给出修复建议
+      1. Execute `mix test`
+      2. Collect failing tests
+      3. Analyze why they failed
+      4. Provide fix suggestions
 
-      命令：
+      Command:
       ```bash
       mix test --trace
       ```
 
-      分析失败的测试时：
-      - 检查断言失败的具体位置
-      - 对比期望值和实际值
-      - 检查测试数据是否正确
-      - 检查依赖是否正确 mock
+      When analyzing failed tests:
+      - Check the exact assertion failure location
+      - Compare expected and actual values
+      - Verify that test data is correct
+      - Verify that dependencies are mocked correctly
       """
     }
   end
 
   defp get_skill_content("refactor-suggest", :markdown) do
     %{
-      description: "提供重构建议",
+      description: "Provide refactoring suggestions",
       body: """
-      重构分析：
+      Refactoring analysis:
 
-      1. 识别代码异味 (code smells)
-         - 过长的函数
-         - 重复的代码
-         - 过深的嵌套
-         - 过多的参数
+      1. Identify code smells
+         - Overly long functions
+         - Repeated code
+         - Excessive nesting
+         - Too many parameters
 
-      2. 建议重构模式
-         - 提取函数
-         - 提取模块
-         - 简化条件
-         - 消除重复
+      2. Suggest refactoring patterns
+         - Extract functions
+         - Extract modules
+         - Simplify conditions
+         - Eliminate duplication
 
-      3. 评估风险和收益
-         - 改动范围
-         - 测试覆盖
-         - 潜在副作用
+      3. Evaluate risks and benefits
+         - Scope of change
+         - Test coverage
+         - Potential side effects
 
-      输出格式：
+      Output format:
       ```
-      ## 发现的问题
-      1. [问题描述] - 位置: [文件:行号]
+      ## Issues Found
+      1. [Issue description] - Location: [file:line]
 
-      ## 重构建议
-      - [建议1]
-      - [建议2]
+      ## Refactoring Suggestions
+      - [suggestion 1]
+      - [suggestion 2]
 
-      ## 风险评估
-      - 风险: 低/中/高
-      - 建议: [是否立即重构]
+      ## Risk Assessment
+      - Risk: low / medium / high
+      - Recommendation: [whether to refactor now]
       ```
       """
     }
@@ -439,7 +439,7 @@ defmodule Nex.Agent.Onboarding do
 
   defp get_skill_content("todo", :elixir) do
     %{
-      description: "任务管理 - 添加/列出/完成任务",
+      description: "Task management - add, list, and complete tasks",
       code: ~S'''
       defmodule Nex.Agent.Skills.Todo do
         @moduledoc """
