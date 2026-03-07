@@ -119,7 +119,7 @@ defmodule Nex.Agent.Skills.Loader do
 
     name =
       full_metadata["name"] ||
-        Path.basename(path, "/SKILL.md") ||
+        path |> Path.dirname() |> Path.basename() ||
         Path.basename(path, ".md")
 
     type = full_metadata["type"] || "markdown"

@@ -301,14 +301,87 @@ defmodule Nex.Agent.Runner do
         success
 
       {:error, reason} = error ->
-        if retries_left > 0 and transient_error?(reason) do
-          Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
-          Process.sleep(2_000)
-          call_llm_with_retry(messages, opts, retries_left - 1)
-        else
-          error
+        cond do
+          retries_left > 0 and transient_error?(reason) ->
+            Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
+            Process.sleep(2_000)
+            call_llm_with_retry(messages, opts, retries_left - 1)
+
+          not Keyword.get(opts, :__recovered, false) ->
+            case attempt_recovery(reason, messages, opts) do
+              {:retry, new_messages, new_opts} ->
+                new_opts = Keyword.put(new_opts, :__recovered, true)
+                call_llm_with_retry(new_messages, new_opts, 0)
+
+              :give_up ->
+                error
+            end
+
+          true ->
+            error
         end
     end
+  end
+
+  # Analyze LLM error and attempt automatic recovery.
+  defp attempt_recovery(reason, messages, opts) do
+    error_msg = extract_error_message(reason)
+    status = extract_error_status(reason)
+
+    cond do
+      # 400: tool definition problem → retry without skill tools
+      status == 400 and tool_definition_error?(error_msg) ->
+        Logger.warning("[Runner] Tool definition error, retrying without skill tools: #{error_msg}")
+        {:retry, messages, Keyword.put(opts, :skip_skills, true)}
+
+      # 400: context too long → trim older messages
+      status == 400 and context_length_error?(error_msg) ->
+        trimmed = trim_messages(messages)
+
+        if length(trimmed) < length(messages) do
+          Logger.warning("[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}")
+          {:retry, trimmed, opts}
+        else
+          :give_up
+        end
+
+      # 400: other known patterns can be added here
+      true ->
+        :give_up
+    end
+  end
+
+  defp extract_error_message(%{error: %{"error" => %{"message" => msg}}}), do: msg
+  defp extract_error_message(%{error: %{message: msg}}), do: msg
+  defp extract_error_message(msg) when is_binary(msg), do: msg
+  defp extract_error_message(other), do: inspect(other)
+
+  defp extract_error_status(%{status: status}), do: status
+  defp extract_error_status(_), do: nil
+
+  defp tool_definition_error?(msg) do
+    String.contains?(msg, "function name") or
+      String.contains?(msg, "tool") or
+      String.contains?(msg, "function") or
+      String.contains?(msg, "parameter")
+  end
+
+  defp context_length_error?(msg) do
+    String.contains?(msg, "context_length") or
+      String.contains?(msg, "too long") or
+      String.contains?(msg, "maximum context") or
+      String.contains?(msg, "token")
+  end
+
+  # Trim messages by removing older turns, keeping system + first user + recent messages.
+  defp trim_messages(messages) when length(messages) <= 4, do: messages
+
+  defp trim_messages(messages) do
+    # Keep first 2 messages (system prompt + first user) and last half
+    keep_recent = max(div(length(messages), 2), 4)
+    first = Enum.take(messages, 2)
+    recent = Enum.take(messages, -keep_recent)
+    Enum.uniq(first ++ recent)
   end
 
   defp transient_error?(%{__struct__: struct}) do
@@ -323,10 +396,12 @@ defmodule Nex.Agent.Runner do
   defp transient_error?(_), do: false
 
   defp call_llm(messages, opts) do
+    skip_skills = Keyword.get(opts, :skip_skills, false)
+
     tools =
       case Keyword.get(opts, :tools_filter) do
-        :subagent -> registry_definitions(:subagent)
-        _ -> registry_definitions(:all)
+        :subagent -> registry_definitions(:subagent, skip_skills)
+        _ -> registry_definitions(:all, skip_skills)
       end
 
     opts = Keyword.put(opts, :tools, tools)
@@ -338,35 +413,53 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp registry_definitions(filter) do
+  # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
+  @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
+
+  defp registry_definitions(filter, skip_skills) do
     if Process.whereis(ToolRegistry) do
       registry_defs = ToolRegistry.definitions(filter)
 
-      # Also include dynamic skill tools
       skill_tools =
-        Skills.for_llm()
-        |> Enum.map(fn skill ->
-          name = Map.get(skill, "name") || Map.get(skill, :name)
-          desc = Map.get(skill, "description") || Map.get(skill, :description)
+        if skip_skills do
+          []
+        else
+          Skills.for_llm()
+          |> Enum.map(fn skill ->
+            name = Map.get(skill, "name") || Map.get(skill, :name)
+            desc = Map.get(skill, "description") || Map.get(skill, :description)
 
-          %{
-            "name" => name,
-            "description" => desc,
-            "input_schema" => %{
-              "type" => "object",
-              "properties" => %{
-                "input" => %{"type" => "string", "description" => "Input to skill"}
-              },
-              "required" => ["input"]
+            %{
+              "name" => name,
+              "description" => desc,
+              "input_schema" => %{
+                "type" => "object",
+                "properties" => %{
+                  "input" => %{"type" => "string", "description" => "Input to skill"}
+                },
+                "required" => ["input"]
+              }
             }
-          }
-        end)
+          end)
+        end
 
-      registry_defs ++ skill_tools
+      (registry_defs ++ skill_tools)
+      |> Enum.filter(fn tool ->
+        name = tool["name"]
+        if valid_tool_name?(name) do
+          true
+        else
+          Logger.warning("[Runner] Dropping tool with invalid name: #{inspect(name)}")
+          false
+        end
+      end)
     else
       []
     end
   end
+
+  defp valid_tool_name?(name) when is_binary(name), do: Regex.match?(@valid_tool_name, name)
+  defp valid_tool_name?(_), do: false
 
   defp call_llm_real(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)

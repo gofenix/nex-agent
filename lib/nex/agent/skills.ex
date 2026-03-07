@@ -203,8 +203,9 @@ defmodule Nex.Agent.Skills do
     list()
     |> Enum.filter(& &1.user_invocable)
     |> Enum.map(fn skill ->
+      sanitized = skill.name |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
       %{
-        "name" => "skill_#{skill.name}",
+        "name" => "skill_#{sanitized}",
         "description" => skill.description,
         "input_schema" => %{
           "type" => "object",
