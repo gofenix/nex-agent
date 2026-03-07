@@ -19,7 +19,7 @@ defmodule Nex.Agent.Tool.BrowserMCP do
   def name, do: "browser"
 
   @impl true
-  def description, do: "Control browser via MCP - navigate, click, type, screenshot"
+  def description, do: "Control browser via MCP - navigate, click, type, screenshot, etc."
 
   @impl true
   def category, do: :skill
@@ -27,32 +27,39 @@ defmodule Nex.Agent.Tool.BrowserMCP do
   @impl true
   def definition do
     %{
-      name: name(),
-      description: description(),
-      parameters: %{
-        type: "object",
-        required: ["action"],
-        properties: %{
-          action: %{
-            type: "string",
-            enum: ["navigate", "click", "type", "screenshot", "evaluate", "get_content"],
-            description: "Browser action to perform"
-          },
-          url: %{
-            type: "string",
-            description: "URL for navigate action"
-          },
-          selector: %{
-            type: "string",
-            description: "CSS selector for click/type actions"
-          },
-          text: %{
-            type: "string",
-            description: "Text to type"
-          },
-          script: %{
-            type: "string",
-            description: "JavaScript code for evaluate action"
+      type: "function",
+      function: %{
+        name: name(),
+        description: description(),
+        parameters: %{
+          type: "object",
+          required: ["action"],
+          properties: %{
+            action: %{
+              type: "string",
+              enum: ["navigate", "click", "type", "screenshot", "snapshot", "go_back", "go_forward", "wait"],
+              description: "Browser action to perform"
+            },
+            url: %{
+              type: "string",
+              description: "URL for navigate action"
+            },
+            selector: %{
+              type: "string",
+              description: "CSS selector for click/type actions"
+            },
+            text: %{
+              type: "string",
+              description: "Text to type"
+            },
+            element: %{
+              type: "string",
+              description: "Element reference from snapshot"
+            },
+            milliseconds: %{
+              type: "integer",
+              description: "Wait time in milliseconds"
+            }
           }
         }
       }
@@ -67,6 +74,7 @@ defmodule Nex.Agent.Tool.BrowserMCP do
     
     with {:ok, conn} <- ensure_connection(),
          {:ok, result} <- do_action(conn, action, args) do
+      MCP.stop(conn)
       {:ok, result}
     else
       {:error, reason} ->
@@ -97,39 +105,53 @@ defmodule Nex.Agent.Tool.BrowserMCP do
 
   defp do_action(conn, "click", args) do
     selector = args["selector"] || ""
-    if selector == "" do
-      {:error, "selector is required for click action"}
-    else
+    element = args["element"] || ""
+    
+    if selector != "" do
       MCP.call_tool(conn, "browser_click", %{"selector" => selector})
+    else
+      MCP.call_tool(conn, "browser_click", %{"element" => element})
     end
   end
 
   defp do_action(conn, "type", args) do
     selector = args["selector"] || ""
+    element = args["element"] || ""
     text = args["text"] || ""
     
-    if selector == "" or text == "" do
-      {:error, "both selector and text are required for type action"}
+    params = %{
+      "text" => text,
+      "submit" => false
+    }
+    
+    params = if selector != "" do
+      Map.put(params, "selector", selector)
     else
-      MCP.call_tool(conn, "browser_type", %{"selector" => selector, "text" => text})
+      Map.put(params, "element", element)
     end
+    
+    MCP.call_tool(conn, "browser_type", params)
   end
 
   defp do_action(conn, "screenshot", _args) do
     MCP.call_tool(conn, "browser_screenshot", %{})  
   end
 
-  defp do_action(conn, "evaluate", args) do
-    script = args["script"] || ""
-    if script == "" do
-      {:error, "script is required for evaluate action"}
-    else
-      MCP.call_tool(conn, "browser_evaluate", %{"script" => script})
-    end
+  defp do_action(conn, "snapshot", _args) do
+    MCP.call_tool(conn, "browser_snapshot", %{})  
   end
 
-  defp do_action(conn, "get_content", _args) do
-    MCP.call_tool(conn, "browser_get_content", %{})  
+  defp do_action(conn, "go_back", _args) do
+    MCP.call_tool(conn, "browser_go_back", %{})  
+  end
+
+  defp do_action(conn, "go_forward", _args) do
+    MCP.call_tool(conn, "browser_go_forward", %{})  
+  end
+
+  defp do_action(conn, "wait", args) do
+    ms = args["milliseconds"] || 1000
+    MCP.call_tool(conn, "browser_wait", %{"milliseconds" => ms})  
   end
 
   defp do_action(_conn, action, _args) do
