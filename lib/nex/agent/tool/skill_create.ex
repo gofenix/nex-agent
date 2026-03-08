@@ -18,8 +18,8 @@ defmodule Nex.Agent.Tool.SkillCreate do
           content: %{type: "string", description: "Skill content (markdown instructions or script code)"},
           type: %{
             type: "string",
-            enum: ["markdown", "script"],
-            description: "Skill type: 'markdown' for instructions, 'script' for executable bash scripts"
+            enum: ["markdown", "script", "elixir"],
+            description: "Skill type: 'markdown' for instructions, 'script' for bash scripts, 'elixir' for Elixir modules"
           }
         },
         required: ["name", "description", "content"]
@@ -29,11 +29,12 @@ defmodule Nex.Agent.Tool.SkillCreate do
 
   def execute(%{"name" => name, "description" => description, "content" => content} = args, _ctx) do
     skill_type = case args["type"] do
-      "script" -> :script
-      _ -> :markdown
+      "script" -> "script"
+      "elixir" -> "elixir"
+      _ -> "markdown"
     end
 
-    content_key = if skill_type == :script, do: :code, else: :content
+    content_key = if skill_type in ["script", "elixir"], do: :code, else: :content
 
     attrs =
       %{name: name, description: description, type: skill_type}

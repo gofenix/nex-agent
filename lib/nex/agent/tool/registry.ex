@@ -216,7 +216,16 @@ defmodule Nex.Agent.Tool.Registry do
 
         case extract_module_name(filepath) do
           {:ok, module} when module not in @default_tools ->
-            Code.ensure_loaded(module)
+            # Try loading compiled beam first; if missing, compile the source file
+            case Code.ensure_loaded(module) do
+              {:module, _} -> :ok
+              {:error, _} ->
+                try do
+                  Code.compile_file(filepath)
+                rescue
+                  e -> Logger.warning("[Registry] Failed to compile #{filepath}: #{Exception.message(e)}")
+                end
+            end
 
             if function_exported?(module, :name, 0) do
               Logger.info("[Registry] Discovered evolved tool: #{inspect(module)}")

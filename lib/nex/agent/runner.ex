@@ -619,6 +619,9 @@ defmodule Nex.Agent.Runner do
         {:ok, %{error: error}} -> "Error: #{error}"
         {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
         {:ok, result} -> to_string(result)
+        {:error, "Unknown tool: " <> _} when is_binary(tool_name) ->
+          # Tool not in Registry — try Skills system (handles skill_xxx pattern)
+          execute_tool_fallback(tool_name, args, ctx)
         {:error, reason} -> "Error: #{reason}"
       end
     else

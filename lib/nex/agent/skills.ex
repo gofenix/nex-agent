@@ -204,16 +204,32 @@ defmodule Nex.Agent.Skills do
     |> Enum.filter(& &1.user_invocable)
     |> Enum.map(fn skill ->
       sanitized = skill.name |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
+
+      input_schema =
+        case skill.parameters do
+          params when is_map(params) and map_size(params) > 0 ->
+            # Use the skill's own parameter schema
+            %{
+              "type" => "object",
+              "properties" => params,
+              "required" => Map.keys(params)
+            }
+
+          _ ->
+            # Default: single input string
+            %{
+              "type" => "object",
+              "properties" => %{
+                "input" => %{"type" => "string", "description" => "Input to skill"}
+              },
+              "required" => ["input"]
+            }
+        end
+
       %{
         "name" => "skill_#{sanitized}",
         "description" => skill.description,
-        "input_schema" => %{
-          "type" => "object",
-          "properties" => %{
-            "input" => %{"type" => "string", "description" => "Input to skill"}
-          },
-          "required" => ["input"]
-        }
+        "input_schema" => input_schema
       }
     end)
   end
@@ -246,24 +262,50 @@ defmodule Nex.Agent.Skills do
 
     try do
       code = skill.code
+      code_hash = :crypto.hash(:md5, code) |> Base.encode16(case: :lower)
 
-      # Check if module is already loaded and code matches
-      if Code.ensure_loaded?(module_name) do
-        # Module exists, call execute directly
-        apply(module_name, :execute, [arguments, %{}])
-      else
-        # Use Evolution to load the code
-        case Evolution.upgrade_module(module_name, code, validate: true, backup: false) do
+      # Check if module is loaded AND code hasn't changed
+      needs_compile =
+        if Code.ensure_loaded?(module_name) do
+          # Compare code hash to detect updates
+          cached_hash =
+            if function_exported?(module_name, :__code_hash__, 0),
+              do: module_name.__code_hash__(),
+              else: nil
+          cached_hash != code_hash
+        else
+          true
+        end
+
+      if needs_compile do
+        # Inject a __code_hash__/0 function so we can detect future changes
+        tagged_code = inject_code_hash(code, code_hash)
+
+        case Evolution.upgrade_module(module_name, tagged_code, validate: true, backup: false) do
           {:ok, _version} ->
             apply(module_name, :execute, [arguments, %{}])
 
           {:error, reason} ->
             {:error, "Failed to compile skill: #{reason}"}
         end
+      else
+        apply(module_name, :execute, [arguments, %{}])
       end
     rescue
       e ->
         {:error, "Skill execution failed: #{Exception.message(e)}"}
+    end
+  end
+
+  # Inject a __code_hash__/0 function before the final `end` of the module
+  defp inject_code_hash(code, hash) do
+    hash_fn = ~s|\n  def __code_hash__, do: "#{hash}"\n|
+
+    case String.trim_trailing(code) |> String.reverse() |> String.split("dne", parts: 2) do
+      [suffix, rest] ->
+        String.reverse(rest) <> hash_fn <> "end" <> String.reverse(suffix)
+      _ ->
+        code <> hash_fn
     end
   end
 
