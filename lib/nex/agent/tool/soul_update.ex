@@ -2,7 +2,7 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "soul_update"
-  def description, do: "Update your SOUL.md personality/behavior file."
+  def description, do: "Update your SOUL.md personality/behavior file. SOUL.md is located at ~/.nex/agent/workspace/SOUL.md (the workspace root, NOT in the memory/ folder)."
   def category, do: :evolution
 
   def definition do
