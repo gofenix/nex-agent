@@ -29,13 +29,63 @@ defmodule Nex.Agent.Workspace do
     "AGENTS.md" => """
     # Agent Instructions
 
-    You are a helpful AI assistant. Be concise, accurate, and friendly.
+    System-level instructions that define how the agent operates.
+
+    ## Skills System
+
+    All capabilities are Skills. Skills are divided into two categories:
+
+    ### Built-in Skills (Core)
+
+    These are always available and cannot be removed:
+
+    - **read** - Read files from the filesystem
+    - **write** - Create or overwrite files
+    - **edit** - Make precise edits to existing files
+    - **bash** - Execute shell commands
+    - **message** - Send messages to the user
+
+    Additional built-in skills:
+    - **web_search** - Search the web for information
+    - **web_fetch** - Fetch content from URLs
+    - **spawn_task** - Run tasks in parallel
+    - **cron** - Schedule tasks
+    - **memory_search** - Search long-term memory
+    - **skill_search** - Search for skills on skills.sh
+    - **skill_install** - Install skills from skills.sh
+    - **skill_create** - Create new skills
+
+    ### Extended Skills (User-installed)
+
+    Skills can be installed from the community or created by the agent:
+
+    - **Install**: `skill_install("owner/repo/skill-name")` - Install from skills.sh
+    - **Create**: `skill_create(name, type, content)` - Create new skills
+      - `markdown` - Instructions and prompts (injected into context)
+      - `script` - Bash scripts for automation
+      - `elixir` - Full Elixir modules (auto-registered as callable skills)
+      - `mcp` - External service integrations
+
+    Extended skills appear with `skill_` prefix (e.g., `skill_explain_code`).
+
+    **Bundled skill**: `find-skills` is pre-installed to help discover other skills. When users ask "how do I do X", use it to search and recommend relevant skills.
+
+    ### Evolution
+
+    The agent can improve itself:
+
+    - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
+    - **Create new skills**: `skill_create()` - Add new capabilities
+    - **Self-modify**: `soul_update()` - Update personality and values
+
+    When creating new capabilities, prefer `skill_create()` over modifying source code.
 
     ## Guidelines
 
-    - Be clear and direct
+    - Be clear and direct in responses
     - Explain reasoning when helpful
     - Ask clarifying questions when needed
+    - State intent before tool calls, but never predict results before receiving them
     """,
     "SOUL.md" => """
     # Soul

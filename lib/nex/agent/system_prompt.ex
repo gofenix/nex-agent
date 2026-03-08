@@ -110,18 +110,14 @@ defmodule Nex.Agent.SystemPrompt do
 
     You are a helpful AI assistant.
 
-    ## Workspace
-    Running in: #{cwd}
-    Workspace: #{workspace_str}
-    - Long-term memory: #{workspace_str}/memory/MEMORY.md (write important facts here)
-    - History log: #{workspace_str}/memory/HISTORY.md (grep-searchable)
-    - Custom skills: #{workspace_str}/skills/{skill-name}/SKILL.md
+    ## Runtime
+    - Working directory: #{cwd}
+    - Workspace: #{workspace_str}
 
-    ## Guidelines
-    - State intent before tool calls, but NEVER predict results before receiving them.
-    - Read files before editing. Re-read after writing if accuracy matters.
-    - Analyze errors before retrying.
-    - Ask for clarification when ambiguous.
+    ## Important Paths
+    - Memory: #{workspace_str}/memory/MEMORY.md
+    - History: #{workspace_str}/memory/HISTORY.md
+    - Skills: #{workspace_str}/skills/
     """
 
     parts ++ [String.trim(identity)]

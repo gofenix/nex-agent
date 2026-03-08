@@ -103,6 +103,7 @@ defmodule Nex.Agent.Onboarding do
     w = workspace_dir()
 
     templates = [
+      {Path.join(w, "AGENTS.md"), agents_template()},
       {Path.join(w, "SOUL.md"), soul_template()},
       {Path.join(w, "USER.md"), user_template()},
       {Path.join(w, "memory/MEMORY.md"), memory_template()},
@@ -114,6 +115,227 @@ defmodule Nex.Agent.Onboarding do
         File.write!(path, content)
       end
     end)
+
+    init_bundled_skills(w)
+  end
+
+  defp init_bundled_skills(workspace) do
+    skills_dir = Path.join(workspace, "skills")
+    File.mkdir_p!(skills_dir)
+
+    bundled_skills = [
+      {"find-skills", find_skills_template()}
+    ]
+
+    Enum.each(bundled_skills, fn {skill_name, content} ->
+      skill_dir = Path.join(skills_dir, skill_name)
+      skill_file = Path.join(skill_dir, "SKILL.md")
+
+      unless File.exists?(skill_file) do
+        File.mkdir_p!(skill_dir)
+        File.write!(skill_file, content)
+        Logger.info("[Onboarding] Installed bundled skill: #{skill_name}")
+      end
+    end)
+  end
+
+  defp find_skills_template do
+    """
+    ---
+    name: find-skills
+    description: Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities.
+    always: false
+    user-invocable: true
+    ---
+
+    # Find Skills
+
+    This skill helps you discover and install skills from the open agent skills ecosystem (skills.sh).
+
+    ## When to Use This Skill
+
+    Use this skill when the user:
+
+    - Asks "how do I do X" where X might be a common task with an existing skill
+    - Says "find a skill for X" or "is there a skill for X"
+    - Asks "can you do X" where X is a specialized capability
+    - Expresses interest in extending agent capabilities
+    - Wants to search for tools, templates, or workflows
+    - Mentions they wish they had help with a specific domain (design, testing, deployment, etc.)
+
+    ## How to Help Users Find Skills
+
+    ### Step 1: Understand What They Need
+
+    When a user asks for help, identify:
+    1. The domain (e.g., React, testing, design, deployment)
+    2. The specific task (e.g., writing tests, creating animations, reviewing PRs)
+    3. Whether this is a common enough task that a skill likely exists
+
+    ### Step 2: Search for Skills
+
+    Use the built-in `skill_search` tool to search skills.sh:
+
+    ```
+    skill_search(query: "react performance")
+    ```
+
+    You can also suggest using the Skills CLI:
+
+    ```bash
+    npx skills find [query]
+    ```
+
+    ### Step 3: Present Options
+
+    When you find relevant skills, present them with:
+    1. The skill name and description
+    2. What it does and why it's useful
+    3. The install command: `skill_install("owner/repo/skill-name")`
+    4. A link to learn more: https://skills.sh/owner/repo/skill-name
+
+    Example:
+
+    ```
+    I found 3 relevant skills:
+
+    1. vercel-react-best-practices (184K installs)
+       - React and Next.js performance optimization guidelines
+       - Install: skill_install("vercel-labs/agent-skills/vercel-react-best-practices")
+
+    2. react-testing (45K installs)
+       - Best practices for testing React components
+       - Install: skill_install("anthropics/skills/react-testing")
+
+    Which would you like to install?
+    ```
+
+    ### Step 4: Install
+
+    If the user wants to proceed, use `skill_install`:
+
+    ```
+    skill_install("owner/repo/skill-name")
+    ```
+
+    After installation, verify it works by explaining what new capabilities are now available.
+
+    ## Common Skill Categories
+
+    When searching, consider these common categories:
+
+    | Category        | Example Queries                          |
+    | --------------- | ---------------------------------------- |
+    | Web Development | react, nextjs, typescript, css, tailwind |
+    | Testing         | testing, jest, playwright, e2e           |
+    | DevOps          | deploy, docker, kubernetes, ci-cd        |
+    | Documentation   | docs, readme, changelog, api-docs        |
+    | Code Quality    | review, lint, refactor, best-practices   |
+    | Design          | ui, ux, design-system, accessibility     |
+    | Productivity    | workflow, automation, git                |
+
+    ## Tips for Effective Searches
+
+    1. **Use specific keywords**: "react testing" is better than just "testing"
+    2. **Try alternative terms**: If "deploy" doesn't work, try "deployment" or "ci-cd"
+    3. **Check popular sources**: 
+       - `vercel-labs/agent-skills` - Vercel's official skills
+       - `anthropics/skills` - Anthropic's official skills
+       - `microsoft/github-copilot-for-azure` - Azure skills
+
+    ## When No Skills Are Found
+
+    If no relevant skills exist:
+
+    1. Acknowledge that no existing skill was found
+    2. Offer to help with the task directly using your general capabilities
+    3. Suggest the user could create their own skill with `skill_create`
+
+    Example:
+
+    ```
+    I searched for skills related to "xyz" but didn't find any matches.
+    I can still help you with this task directly! Would you like me to proceed?
+
+    If this is something you do often, you could create your own skill:
+    skill_create(name: "my-xyz-skill", type: "markdown", ...)
+    ```
+
+    ## Examples
+
+    **Example 1: User asks "How do I make my React app faster?"**
+
+    1. Identify: Domain = React, Task = performance optimization
+    2. Search: `skill_search(query: "react performance optimization")`
+    3. Present: Show vercel-react-best-practices and other options
+    4. Install: If user agrees, run `skill_install(...)`
+
+    **Example 2: User asks "Is there a skill for creating changelogs?"**
+
+    1. Identify: Domain = documentation, Task = changelog
+    2. Search: `skill_search(query: "changelog")`
+    3. Present: Show changelog-related skills
+    4. Install: If user agrees, run `skill_install(...)`
+    """
+  end
+
+  defp agents_template do
+    """
+    # Agent Instructions
+
+    System-level instructions that define how the agent operates.
+
+    ## Skills System
+
+    All capabilities are Skills. Skills are divided into two categories:
+
+    ### Built-in Skills (Core)
+
+    These are always available and cannot be removed:
+
+    - **read** - Read files from the filesystem
+    - **write** - Create or overwrite files
+    - **edit** - Make precise edits to existing files
+    - **bash** - Execute shell commands
+    - **message** - Send messages to the user
+
+    Additional built-in skills:
+    - **web_search** - Search the web for information
+    - **web_fetch** - Fetch content from URLs
+    - **spawn_task** - Run tasks in parallel
+    - **cron** - Schedule tasks
+    - **memory_search** - Search long-term memory
+
+    ### Extended Skills (User-installed)
+
+    Skills can be installed from the community or created by the agent:
+
+    - **Install**: `skill_install("owner/repo/skill-name")` - Install from skills.sh
+    - **Create**: `skill_create(name, type, content)` - Create new skills
+      - `markdown` - Instructions and prompts (injected into context)
+      - `script` - Bash scripts for automation
+      - `elixir` - Full Elixir modules (auto-registered as callable skills)
+      - `mcp` - External service integrations
+
+    Extended skills appear with `skill_` prefix (e.g., `skill_explain_code`).
+
+    ### Evolution
+
+    The agent can improve itself:
+
+    - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
+    - **Create new skills**: `skill_create()` - Add new capabilities
+    - **Self-modify**: `soul_update()` - Update personality and values
+
+    When creating new capabilities, prefer `skill_create()` over modifying source code.
+
+    ## Guidelines
+
+    - Be clear and direct in responses
+    - Explain reasoning when helpful
+    - Ask clarifying questions when needed
+    - State intent before tool calls, but never predict results before receiving them
+    """
   end
 
   defp soul_template do
@@ -211,5 +433,4 @@ defmodule Nex.Agent.Onboarding do
     ---
     """
   end
-
 end
