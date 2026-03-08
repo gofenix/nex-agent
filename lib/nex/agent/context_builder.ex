@@ -97,7 +97,7 @@ defmodule Nex.Agent.ContextBuilder do
     if content != "", do: parts ++ [content], else: parts
   end
 
-  @max_memory_prompt_bytes 3000
+  @max_memory_prompt_bytes 8000
 
   defp add_memory(parts, workspace) do
     memory_file = Path.join(workspace, "memory/MEMORY.md")
@@ -239,12 +239,12 @@ defmodule Nex.Agent.ContextBuilder do
           snippets =
             relevant
             |> Enum.map(fn r ->
-              snippet = String.slice(r[:text] || "", 0..150)
+              snippet = String.slice(r[:text] || "", 0..500)
               source = r[:source] || "unknown"
               "- [#{source}] #{snippet}"
             end)
             |> Enum.join("\n")
-            |> String.slice(0..499)
+            |> String.slice(0..1999)
 
           "## Relevant Memories\n\n#{snippets}"
         end
