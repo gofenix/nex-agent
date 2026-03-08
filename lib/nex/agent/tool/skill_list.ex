@@ -7,7 +7,7 @@ defmodule Nex.Agent.Tool.SkillList do
 
   @api_url "https://skills.sh/api/search"
   @default_list_query ".."
-  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/skills")
+  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
 
   def name, do: "skill_list"
 

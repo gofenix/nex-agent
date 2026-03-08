@@ -28,7 +28,7 @@ defmodule Nex.Agent.Skills do
 
   @name __MODULE__
 
-  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/skills")
+  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
 
   # Client API
 

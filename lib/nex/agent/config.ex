@@ -604,21 +604,19 @@ defmodule Nex.Agent.Config do
     %{
       "anthropic" => %{"api_key" => nil, "base_url" => nil},
       "openai" => %{"api_key" => nil, "base_url" => nil},
+      "openrouter" => %{"api_key" => nil, "base_url" => "https://openrouter.ai/api/v1"},
       "ollama" => %{"api_key" => nil, "base_url" => "http://localhost:11434"}
     }
   end
 
   defp default_defaults do
     %{
-      "max_tokens" => 8192,
-      "temperature" => 0.1,
       "max_iterations" => 40
     }
   end
 
   defp default_gateway do
     %{
-      "host" => "0.0.0.0",
       "port" => 18790
     }
   end

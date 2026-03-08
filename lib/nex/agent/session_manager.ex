@@ -8,7 +8,7 @@ defmodule Nex.Agent.SessionManager do
 
   alias Nex.Agent.Session
 
-  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/sessions")
+  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, name: Keyword.get(opts, :name, __MODULE__))

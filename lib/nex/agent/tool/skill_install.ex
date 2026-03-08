@@ -10,7 +10,7 @@ defmodule Nex.Agent.Tool.SkillInstall do
   def description, do: "Install a skill from GitHub (e.g., 'owner/repo'). Downloads to ~/.nex/agent/skills/"
   def category, do: :evolution
 
-  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/skills")
+  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
   @github_raw "https://raw.githubusercontent.com"
 
   def definition do

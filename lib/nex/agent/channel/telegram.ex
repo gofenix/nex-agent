@@ -148,7 +148,18 @@ defmodule Nex.Agent.Channel.Telegram do
   @impl true
   def handle_info({:bus_message, :telegram_outbound, payload}, state) when is_map(payload) do
     Logger.debug("Telegram outbound message: #{inspect(payload)}")
-    _ = do_send(payload, state)
+
+    case do_send(payload, state) do
+      {:ok, body} ->
+        Logger.info("Telegram send ok chat_id=#{payload[:chat_id]} resp=#{inspect(body)}")
+
+      {:error, reason} ->
+        Logger.error("Telegram send failed chat_id=#{payload[:chat_id]} reason=#{inspect(reason)}")
+
+      other ->
+        Logger.warning("Telegram send unexpected result: #{inspect(other)}")
+    end
+
     {:noreply, state}
   end
 

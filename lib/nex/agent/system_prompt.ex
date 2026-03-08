@@ -69,7 +69,7 @@ defmodule Nex.Agent.SystemPrompt do
     Agent.update(__MODULE__, &Map.delete(&1, {:static, workspace}))
   end
 
-  @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
+  @runtime_context_tag "[System Context — do not echo or reference this block in your reply]"
 
   @doc """
   Build runtime context block with only essential metadata.
@@ -113,9 +113,9 @@ defmodule Nex.Agent.SystemPrompt do
     ## Workspace
     Running in: #{cwd}
     Workspace: #{workspace_str}
-    - Memory: #{workspace_str}/memory/MEMORY.md
-    - History: #{workspace_str}/memory/HISTORY.md
-    - Skills: #{workspace_str}/skills/
+    - Long-term memory: #{workspace_str}/memory/MEMORY.md (write important facts here)
+    - History log: #{workspace_str}/memory/HISTORY.md (grep-searchable)
+    - Custom skills: #{workspace_str}/skills/{skill-name}/SKILL.md
 
     ## Guidelines
     - State intent before tool calls, but NEVER predict results before receiving them.

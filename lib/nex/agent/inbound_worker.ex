@@ -84,7 +84,7 @@ defmodule Nex.Agent.InboundWorker do
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless result == :message_sent or from_cron do
+    unless result == :message_sent or from_cron or suppress_outbound?(result) do
       publish_outbound(payload, result)
     end
 
@@ -415,6 +415,33 @@ defmodule Nex.Agent.InboundWorker do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # Suppress LLM outputs that are clearly not real replies to the user.
+  # Uses structural checks rather than keyword blocklists.
+  defp suppress_outbound?(content) when is_binary(content) do
+    trimmed = String.trim(content)
+
+    cond do
+      # Empty or whitespace-only
+      trimmed == "" ->
+        true
+
+      # Pure punctuation / symbols (no letters or digits)
+      Regex.match?(~r/\A[\p{P}\p{S}\s]*\z/u, trimmed) ->
+        true
+
+      # Wrapped in parentheses/brackets with no substance outside — e.g. "（xxx）"
+      # Typical of LLM "stage directions" like "（静默等待）" or "(no response needed)"
+      Regex.match?(~r/\A[(\[（【][^)\]）】]*[)\]）】]\z/u, trimmed) ->
+        Logger.warning("[InboundWorker] Suppressed stage-direction output: #{inspect(trimmed)}")
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp suppress_outbound?(_), do: false
 
   defp payload_chat_id(payload) do
     (Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || "")

@@ -22,7 +22,6 @@ defmodule Nex.Agent.Heartbeat do
   @maintenance_cooldown_seconds 86_400
   @session_max_age_days 30
   @log_archive_age_days 60
-  @evolution_max_versions 10
   @max_history 50
 
   defstruct [
@@ -213,7 +212,7 @@ defmodule Nex.Agent.Heartbeat do
   end
 
   defp run_session_gc do
-    sessions_dir = Path.join(System.get_env("HOME", "~"), ".nex/agent/sessions")
+    sessions_dir = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
 
     if File.exists?(sessions_dir) do
       cutoff = Date.utc_today() |> Date.add(-@session_max_age_days)
@@ -293,40 +292,7 @@ defmodule Nex.Agent.Heartbeat do
       :error
   end
 
-  defp run_evolution_cleanup do
-    evo_dir = Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
-
-    if File.exists?(evo_dir) do
-      File.ls!(evo_dir)
-      |> Enum.each(fn module_dir_name ->
-        module_path = Path.join(evo_dir, module_dir_name)
-
-        if File.dir?(module_path) do
-          versions =
-            File.ls!(module_path)
-            |> Enum.sort(:desc)
-
-          to_delete = Enum.drop(versions, @evolution_max_versions)
-
-          Enum.each(to_delete, fn v ->
-            File.rm_rf!(Path.join(module_path, v))
-          end)
-
-          if to_delete != [] do
-            Logger.info("[Heartbeat] Cleaned #{length(to_delete)} old versions for #{module_dir_name}")
-          end
-        end
-      end)
-
-      :ok
-    else
-      :ok
-    end
-  rescue
-    e ->
-      Logger.warning("[Heartbeat] Evolution cleanup error: #{Exception.message(e)}")
-      :error
-  end
+  defp run_evolution_cleanup, do: :ok
 
   # ── HEARTBEAT.md Tasks ──
 

@@ -24,7 +24,7 @@ defmodule Nex.Agent.Session do
           last_consolidated: non_neg_integer()
         }
 
-  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/sessions")
+  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
 
   @doc """
   Create a new session with key (e.g. "telegram:123456").

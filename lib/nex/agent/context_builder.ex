@@ -7,7 +7,7 @@ defmodule Nex.Agent.ContextBuilder do
   alias Nex.Agent.Skills
 
   @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
-  @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
+  @runtime_context_tag "# Runtime Context"
 
   @type message :: %{required(String.t()) => any()}
 
@@ -40,7 +40,7 @@ defmodule Nex.Agent.ContextBuilder do
     cwd = File.cwd!() |> Path.basename()
 
     home = System.get_env("HOME", "~")
-    skills_path = Path.join(home, ".nex/agent/skills")
+    skills_path = Path.join(home, ".nex/agent/workspace/skills")
 
     identity = """
     # Nex Agent
@@ -52,9 +52,9 @@ defmodule Nex.Agent.ContextBuilder do
 
     ## Workspace
     Workspace: #{workspace_path}
-    - Memory: #{workspace_path}/memory/MEMORY.md
-    - History: #{workspace_path}/memory/HISTORY.md
-    - Skills: #{skills_path}/
+    - Long-term memory: #{workspace_path}/memory/MEMORY.md (write important facts here)
+    - History log: #{workspace_path}/memory/HISTORY.md (grep-searchable)
+    - Custom skills: #{skills_path}/{skill-name}/SKILL.md
 
     ## Guidelines
     - State intent before tool calls, but NEVER predict results before receiving them.
@@ -202,17 +202,23 @@ defmodule Nex.Agent.ContextBuilder do
     memory_ctx =
       if skip_memory_search, do: "", else: build_memory_context(current_message)
 
-    merged_user_content =
-      if memory_ctx != "" do
-        runtime_ctx <> "\n\n" <> memory_ctx <> "\n\n" <> current_message
-      else
-        runtime_ctx <> "\n\n" <> current_message
-      end
+    # Append runtime context + memory to system prompt, not user message
+    system_prompt = build_system_prompt(opts)
+
+    system_suffix =
+      [runtime_ctx, memory_ctx]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+
+    full_system =
+      if system_suffix != "",
+        do: system_prompt <> "\n\n---\n\n" <> system_suffix,
+        else: system_prompt
 
     [
-      %{"role" => "system", "content" => build_system_prompt(opts)},
+      %{"role" => "system", "content" => full_system},
       Enum.map(history, &clean_history_entry/1),
-      build_user_content(merged_user_content, media)
+      build_user_content(current_message, media)
     ]
     |> List.flatten()
   end

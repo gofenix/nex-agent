@@ -46,7 +46,7 @@ defmodule Nex.Agent.Skills.Loader do
   """
   @spec load_all() :: list(map())
   def load_all do
-    global = Path.join(System.get_env("HOME", "~"), ".nex/agent/skills")
+    global = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
     project = ".nex/skills"
 
     []

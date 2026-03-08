@@ -108,7 +108,11 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("Initializing Nex Agent...")
     Nex.Agent.Onboarding.ensure_initialized()
     Mix.shell().info("Workspace: #{Nex.Agent.Workspace.workspace_path()}")
-    Mix.shell().info("Config:   #{Nex.Agent.Config.config_path()}")
+    Mix.shell().info("Config:    #{Nex.Agent.Config.config_path()}")
+    Mix.shell().info("")
+    Mix.shell().info("Next steps:")
+    Mix.shell().info("  mix nex.agent config set api_key openai sk-xxx")
+    Mix.shell().info("  mix nex.agent gateway")
   end
 
   defp run_status do
