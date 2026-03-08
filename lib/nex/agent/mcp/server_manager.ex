@@ -78,6 +78,14 @@ defmodule Nex.Agent.MCP.ServerManager do
   end
 
   @doc """
+  Find a running server by name. Returns `{:ok, server_id}` or `:error`.
+  """
+  @spec get_by_name(String.t()) :: {:ok, String.t()} | :error
+  def get_by_name(name) do
+    GenServer.call(@name, {:get_by_name, name})
+  end
+
+  @doc """
   Discover and auto-start available MCP servers.
   """
   @spec discover_and_start() :: {:ok, [String.t()]} | {:error, String.t()}
@@ -174,6 +182,16 @@ defmodule Nex.Agent.MCP.ServerManager do
       end)
 
     {:reply, servers, state}
+  end
+
+  @impl true
+  def handle_call({:get_by_name, name}, _from, state) do
+    result =
+      Enum.find_value(state.servers, :error, fn {id, server} ->
+        if server.name == name, do: {:ok, id}
+      end)
+
+    {:reply, result, state}
   end
 
   @impl true

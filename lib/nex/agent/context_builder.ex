@@ -97,6 +97,8 @@ defmodule Nex.Agent.ContextBuilder do
     if content != "", do: parts ++ [content], else: parts
   end
 
+  @max_memory_prompt_bytes 3000
+
   defp add_memory(parts, workspace) do
     memory_file = Path.join(workspace, "memory/MEMORY.md")
 
@@ -105,7 +107,14 @@ defmodule Nex.Agent.ContextBuilder do
         trimmed = String.trim(content)
 
         if trimmed != "" do
-          parts ++ ["# Memory\n\n## Long-term Memory\n\n" <> trimmed]
+          truncated =
+            if byte_size(trimmed) > @max_memory_prompt_bytes do
+              String.slice(trimmed, 0, @max_memory_prompt_bytes) <> "\n... (truncated)"
+            else
+              trimmed
+            end
+
+          parts ++ ["# Memory\n\n## Long-term Memory\n\n" <> truncated]
         else
           parts
         end
@@ -188,7 +197,10 @@ defmodule Nex.Agent.ContextBuilder do
         ) :: [message()]
   def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil, opts \\ []) do
     runtime_ctx = build_runtime_context(channel, chat_id)
-    memory_ctx = build_memory_context(current_message)
+    skip_memory_search = Keyword.get(opts, :skip_skills, false)
+
+    memory_ctx =
+      if skip_memory_search, do: "", else: build_memory_context(current_message)
 
     merged_user_content =
       if memory_ctx != "" do

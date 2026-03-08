@@ -33,7 +33,8 @@ defmodule Nex.Agent.MCP do
     :request_id,
     :pending_requests,
     :tools,
-    :initialized
+    :initialized,
+    :buffer
   ]
 
   # Client API
@@ -103,27 +104,34 @@ defmodule Nex.Agent.MCP do
     args = Keyword.get(opts, :args, [])
     env = Keyword.get(opts, :env, %{})
 
-    # Convert env map to list of {key, value} tuples
-    env_list = Enum.map(env, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
+    case System.find_executable(command) do
+      nil ->
+        {:stop, {:executable_not_found, command}}
 
-    port =
-      Port.open({:spawn_executable, to_charlist(command)}, [
-        :binary,
-        :eof,
-        :stderr_to_stdout,
-        args: Enum.map(args, &to_charlist/1),
-        env: env_list
-      ])
+      executable_path ->
+        # Convert env map to list of {key, value} tuples
+        env_list = Enum.map(env, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
 
-    state = %__MODULE__{
-      port: port,
-      request_id: 0,
-      pending_requests: %{},
-      tools: [],
-      initialized: false
-    }
+        port =
+          Port.open({:spawn_executable, to_charlist(executable_path)}, [
+            :binary,
+            :eof,
+            :stderr_to_stdout,
+            args: Enum.map(args, &to_charlist/1),
+            env: env_list
+          ])
 
-    {:ok, state}
+        state = %__MODULE__{
+          port: port,
+          request_id: 0,
+          pending_requests: %{},
+          tools: [],
+          initialized: false,
+          buffer: ""
+        }
+
+        {:ok, state}
+    end
   end
 
   @impl true
@@ -182,15 +190,28 @@ defmodule Nex.Agent.MCP do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    # Parse JSON-RPC response
-    case Jason.decode(data) do
-      {:ok, response} ->
-        handle_response(response, state)
+    # Accumulate data in buffer, then process complete lines
+    buffer = state.buffer <> data
+    {lines, remaining} = split_lines(buffer)
 
-      {:error, reason} ->
-        Logger.warning("Failed to parse MCP response: #{inspect(reason)} - Data: #{data}")
-        {:noreply, state}
-    end
+    state = %{state | buffer: remaining}
+
+    Enum.reduce(lines, {:noreply, state}, fn line, {_, acc_state} ->
+      line = String.trim(line)
+
+      if line == "" do
+        {:noreply, acc_state}
+      else
+        case Jason.decode(line) do
+          {:ok, response} ->
+            handle_response(response, acc_state)
+
+          {:error, reason} ->
+            Logger.warning("Failed to parse MCP response: #{inspect(reason)} - Data: #{line}")
+            {:noreply, acc_state}
+        end
+      end
+    end)
   end
 
   @impl true
@@ -232,13 +253,20 @@ defmodule Nex.Agent.MCP do
         {:noreply, state}
 
       {from, pending} ->
-        # Check if this is initialize response
+        new_state = %{state | pending_requests: pending}
+
+        # Check if this is initialize response — send notifications/initialized
         new_state =
-          if id == 1 do
+          if not state.initialized and is_map(result) and Map.has_key?(result, "capabilities") do
+            send_notification(state, %{
+              jsonrpc: "2.0",
+              method: "notifications/initialized"
+            })
+
             tools = result["tools"] || []
-            %{state | initialized: true, tools: tools, pending_requests: pending}
+            %{new_state | initialized: true, tools: tools}
           else
-            %{state | pending_requests: pending}
+            new_state
           end
 
         GenServer.reply(from, {:ok, result})
@@ -260,5 +288,19 @@ defmodule Nex.Agent.MCP do
   defp handle_response(_response, state) do
     # Ignore notifications (no id)
     {:noreply, state}
+  end
+
+  defp split_lines(buffer) do
+    case String.split(buffer, "\n", parts: :infinity) do
+      [] -> {[], ""}
+      parts ->
+        {complete, [remaining]} = Enum.split(parts, -1)
+        {complete, remaining}
+    end
+  end
+
+  defp send_notification(state, notification) do
+    json = Jason.encode!(notification) <> "\n"
+    Port.command(state.port, json)
   end
 end

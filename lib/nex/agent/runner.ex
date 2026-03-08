@@ -14,7 +14,7 @@ defmodule Nex.Agent.Runner do
   @default_max_iterations 10
   @max_iterations_hard_limit 50
   @memory_window 500
-  @max_tool_result_length 2000
+  @max_tool_result_length 500
   @tool_hint_preview_length 220
 
   @doc """
@@ -490,6 +490,14 @@ defmodule Nex.Agent.Runner do
           tools: tools
         )
 
+      :openrouter ->
+        Nex.Agent.LLM.OpenRouter.chat(messages,
+          model: model,
+          api_key: api_key,
+          base_url: base_url,
+          tools: tools
+        )
+
       _ ->
         {:error, "Unsupported provider: #{provider}"}
     end
@@ -645,26 +653,46 @@ defmodule Nex.Agent.Runner do
 
       case llm_chat.(messages, call_opts) do
         {:ok, response} ->
-          tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
+          extract_tool_call(response)
 
-          if tool_calls && length(tool_calls) > 0 do
-            tc = List.first(tool_calls)
-            func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
+        # tool_choice incompatible with thinking — retry without it
+        {:error, %{status: 400} = err} when tool_choice != nil ->
+          err_msg = err |> inspect() |> String.downcase()
 
-            args =
-              Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") ||
-                Map.get(func, :arguments) || %{}
+          if String.contains?(err_msg, "tool_choice") do
+            Logger.warning("[Runner] tool_choice incompatible, retrying without it")
+            retry_opts = Keyword.delete(call_opts, :tool_choice)
 
-            args = parse_args(args)
-
-            {:ok, args}
+            case llm_chat.(messages, retry_opts) do
+              {:ok, response} -> extract_tool_call(response)
+              error -> error
+            end
           else
-            {:error, "No tool call in response"}
+            {:error, err}
           end
 
         error ->
           error
       end
+    end
+  end
+
+  defp extract_tool_call(response) do
+    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
+
+    if tool_calls && length(tool_calls) > 0 do
+      tc = List.first(tool_calls)
+      func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
+
+      args =
+        Map.get(tc, :arguments) || Map.get(tc, "arguments") || Map.get(func, "arguments") ||
+          Map.get(func, :arguments) || %{}
+
+      args = parse_args(args)
+
+      {:ok, args}
+    else
+      {:error, "No tool call in response"}
     end
   end
 end

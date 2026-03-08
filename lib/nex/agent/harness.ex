@@ -33,7 +33,8 @@ defmodule Nex.Agent.Harness do
 
   alias Nex.Agent.{Bus, Reflection, Memory}
 
-  @default_reflection_interval 15 * 60 * 1000
+  @default_reflection_interval :disabled
+  @max_reflection_interval 4 * 60 * 60 * 1000
   @default_min_results 20
   @max_results_window 200
   @memory_review_interval 24 * 60 * 60 * 1000
@@ -47,7 +48,8 @@ defmodule Nex.Agent.Harness do
     last_reflection_at: nil,
     last_memory_review_at: nil,
     reflection_count: 0,
-    auto_apply: false
+    auto_apply: false,
+    current_reflection_interval: @default_reflection_interval
   ]
 
   @type t :: %__MODULE__{
@@ -58,7 +60,8 @@ defmodule Nex.Agent.Harness do
           last_reflection_at: DateTime.t() | nil,
           last_memory_review_at: DateTime.t() | nil,
           reflection_count: non_neg_integer(),
-          auto_apply: boolean()
+          auto_apply: boolean(),
+          current_reflection_interval: pos_integer()
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -179,20 +182,33 @@ defmodule Nex.Agent.Harness do
   @impl true
   def handle_info(:auto_reflect, state) do
     min_results = Keyword.get(state.opts, :min_results_for_reflection, @default_min_results)
-    interval = Keyword.get(state.opts, :reflection_interval, @default_reflection_interval)
+    base_interval = Keyword.get(state.opts, :reflection_interval, @default_reflection_interval)
 
     state =
       if length(state.results) >= min_results do
         case run_reflection(state) do
-          {:ok, _result, new_state} -> new_state
-          {:error, _reason, new_state} -> new_state
+          {:ok, result, new_state} ->
+            # Backoff: if no suggestions, double interval; otherwise reset
+            has_suggestions = length(Map.get(result, :suggestions, [])) > 0
+
+            if has_suggestions do
+              %{new_state | current_reflection_interval: base_interval}
+            else
+              new_interval = min(state.current_reflection_interval * 2, @max_reflection_interval)
+              Logger.info("[Harness] No suggestions, backoff interval to #{div(new_interval, 60_000)}min")
+              %{new_state | current_reflection_interval: new_interval}
+            end
+
+          {:error, _reason, new_state} ->
+            new_interval = min(state.current_reflection_interval * 2, @max_reflection_interval)
+            %{new_state | current_reflection_interval: new_interval}
         end
       else
         Logger.debug("[Harness] Skipping auto-reflection: #{length(state.results)}/#{min_results} results")
         state
       end
 
-    {:noreply, schedule_reflection(state, interval)}
+    {:noreply, schedule_reflection(state, state.current_reflection_interval)}
   end
 
   @impl true
@@ -244,6 +260,8 @@ defmodule Nex.Agent.Harness do
       end
     end
   end
+
+  defp schedule_reflection(state, :disabled), do: state
 
   defp schedule_reflection(state, interval) when is_integer(interval) and interval > 0 do
     if state.reflection_timer, do: Process.cancel_timer(state.reflection_timer)
