@@ -11,9 +11,21 @@ defmodule Nex.Agent.Tool.SkillList do
 
   def name, do: "skill_list"
 
-  def description,
-    do:
-      "List available skills or read a specific skill's full content. Use scope=local to list installed skills, detail=<name> to read full content of a skill."
+  def description do
+    """
+    **FIRST STEP**: List or inspect available skills. ALWAYS call this BEFORE skill_search.
+    
+    **Decision Flow**:
+    1. Call skill_list(scope=local) to check installed skills
+    2. If found → use it directly or read detail
+    3. If not found → then use skill_search
+    
+    **Parameters**:
+    - scope=local: List installed skills (CHECK THIS FIRST!)
+    - scope=registry: Browse popular skills on skills.sh
+    - detail=<name>: Read full SKILL.md to learn how to use a skill
+    """
+  end
 
   def category, do: :evolution
 

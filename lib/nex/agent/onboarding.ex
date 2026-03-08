@@ -124,7 +124,8 @@ defmodule Nex.Agent.Onboarding do
     File.mkdir_p!(skills_dir)
 
     bundled_skills = [
-      {"find-skills", find_skills_template()}
+      {"find-skills", find_skills_template()},
+      {"browser-mcp", browser_mcp_template()}
     ]
 
     Enum.each(bundled_skills, fn {skill_name, content} ->
@@ -276,6 +277,91 @@ defmodule Nex.Agent.Onboarding do
     2. Search: `skill_search(query: "changelog")`
     3. Present: Show changelog-related skills
     4. Install: If user agrees, run `skill_install(...)`
+    """
+  end
+
+  defp browser_mcp_template do
+    """
+    ---
+    name: browser-mcp
+    description: Browser automation via MCP (Model Context Protocol). Control browser to navigate, click, type, screenshot, and more. Manages MCP connection automatically.
+    type: elixir
+    user-invocable: true
+    parameters:
+      action:
+        type: string
+        enum: ["navigate", "click", "type", "screenshot", "snapshot", "go_back", "go_forward", "wait"]
+        description: Browser action to perform
+      url:
+        type: string
+        description: URL for navigate action
+      selector:
+        type: string
+        description: CSS selector for click/type actions
+      text:
+        type: string
+        description: Text to type
+      element:
+        type: string
+        description: Element reference from snapshot
+      milliseconds:
+        type: integer
+        description: Wait time in milliseconds
+    allowed_tools:
+      - message
+    ---
+
+    # Browser MCP
+
+    This skill provides browser automation capabilities via the MCP (Model Context Protocol).
+
+    ## Prerequisites
+
+    - Node.js installed
+    - npx available in PATH
+
+    ## Usage
+
+    When you use this skill, it will automatically start the MCP browser server and execute browser actions.
+
+    ### Available Actions
+
+    | Action | Description | Parameters |
+    |--------|-------------|------------|
+    | navigate | Navigate to a URL | url (required) |
+    | click | Click an element | selector or element (required) |
+    | type | Type text into an input | selector or element (required), text (required) |
+    | screenshot | Take a screenshot | - |
+    | snapshot | Get page DOM snapshot | - |
+    | go_back | Go back in history | - |
+    | go_forward | Go forward in history | - |
+    | wait | Wait for specified time | milliseconds (optional, default 1000) |
+
+    ### Examples
+
+    ```elixir
+    # Navigate to a website
+    %{"action" => "navigate", "url" => "https://twitter.com"}
+
+    # Click an element
+    %{"action" => "click", "selector" => ".submit-button"}
+
+    # Type text
+    %{"action" => "type", "selector" => "input[name='search']", "text" => "hello"}
+
+    # Take screenshot
+    %{"action" => "screenshot"}
+
+    # Get page snapshot
+    %{"action" => "snapshot"}
+    ```
+
+    ## Notes
+
+    - The MCP server is started automatically on first use
+    - The browser connection persists across multiple actions
+    - Use `snapshot` to get clickable element references
+    - Screenshots are returned as base64 images
     """
   end
 

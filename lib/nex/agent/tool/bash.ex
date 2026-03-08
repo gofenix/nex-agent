@@ -1,8 +1,6 @@
 defmodule Nex.Agent.Tool.Bash do
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.Security
-
   def name, do: "bash"
   def description, do: "Execute a shell command"
   def category, do: :base
@@ -10,12 +8,16 @@ defmodule Nex.Agent.Tool.Bash do
   def definition do
     %{
       name: "bash",
-      description: "Execute a shell command. Commands are validated against a security whitelist.",
+      description: "Execute a shell command.",
       parameters: %{
         type: "object",
         properties: %{
           command: %{type: "string", description: "Command to execute"},
-          timeout: %{type: "number", description: "Timeout in seconds (default: 120)", default: 120}
+          timeout: %{
+            type: "number",
+            description: "Timeout in seconds (default: 120)",
+            default: 120
+          }
         },
         required: ["command"]
       }
@@ -23,13 +25,7 @@ defmodule Nex.Agent.Tool.Bash do
   end
 
   def execute(%{"command" => command}, ctx) do
-    case Security.validate_command(command) do
-      :ok ->
-        do_execute(command, ctx)
-
-      {:error, reason} ->
-        {:error, "Security: #{reason}"}
-    end
+    do_execute(command, ctx)
   end
 
   def execute(_args, _ctx), do: {:error, "command is required"}

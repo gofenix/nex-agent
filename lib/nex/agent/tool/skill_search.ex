@@ -8,13 +8,25 @@ defmodule Nex.Agent.Tool.SkillSearch do
   @api_url "https://skills.sh/api/search"
 
   def name, do: "skill_search"
-  def description, do: "Search for skills on skills.sh registry by keyword or topic"
+  def description do
+    """
+    Search skills.sh registry. **ONLY use after checking installed skills with skill_list(scope=local)**.
+    
+    **Decision Flow**:
+    1. First: skill_list(scope=local) ← START HERE
+    2. If not found: skill_search(query="keyword")
+    3. Then: skill_install(source="owner/repo")
+    4. Finally: skill_list(detail="name") to learn usage
+    
+    **Returns**: skill name, source, installs (NOT usage instructions)
+    """
+  end
   def category, do: :evolution
 
   def definition do
     %{
       name: "skill_search",
-      description: "Search for skills on skills.sh registry by keyword or topic",
+      description: description(),
       parameters: %{
         type: "object",
         properties: %{
