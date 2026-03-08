@@ -138,7 +138,7 @@ defmodule Nex.Agent.Runner do
       |> Enum.sort()
 
     tool_history = Keyword.get(opts, :_tool_history, [])
-    tool_history = [current_signatures | tool_history]
+    tool_history = [current_signatures | tool_history] |> Enum.take(@max_loop_repeats)
 
     # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
     if length(tool_history) >= @max_loop_repeats and
@@ -168,13 +168,19 @@ defmodule Nex.Agent.Runner do
 
       effective_max =
         if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit and
-             not Keyword.has_key?(opts, :tools_filter) do
+             not Keyword.has_key?(opts, :tools_filter) and
+             not Keyword.get(opts, :_expanded, false) do
           new_max = min(max_iterations * 2, @max_iterations_hard_limit)
           Logger.info("[Runner] Auto-expanding max_iterations #{max_iterations} -> #{new_max}")
           new_max
         else
           max_iterations
         end
+
+      opts =
+        if effective_max > max_iterations,
+          do: Keyword.put(opts, :_expanded, true),
+          else: opts
 
       case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
         {:ok, final_content, final_session} when message_sent and (final_content == "" or is_nil(final_content)) ->
