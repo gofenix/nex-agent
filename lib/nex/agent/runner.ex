@@ -421,6 +421,7 @@ defmodule Nex.Agent.Runner do
     tools =
       case Keyword.get(opts, :tools_filter) do
         :subagent -> registry_definitions(:subagent, skip_skills)
+        :cron -> registry_definitions(:cron, skip_skills)
         _ -> registry_definitions(:all, skip_skills)
       end
 

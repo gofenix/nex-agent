@@ -180,10 +180,6 @@ defmodule Nex.Agent.Session do
   end
 
   # Remove unmatched tool_call entries from the last assistant message
-  defp strip_pending_tool_calls(messages, pending) when pending == %MapSet{} do
-    messages
-  end
-
   defp strip_pending_tool_calls(messages, pending) do
     if MapSet.size(pending) == 0 do
       messages

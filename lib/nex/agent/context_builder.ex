@@ -289,7 +289,30 @@ defmodule Nex.Agent.ContextBuilder do
   defp build_user_content(text, nil), do: %{"role" => "user", "content" => text}
 
   defp build_user_content(text, media) when is_list(media) and media != [] do
-    %{"role" => "user", "content" => text}
+    content_parts =
+      Enum.map(media, fn m ->
+        case Map.get(m, "type") || Map.get(m, :type) do
+          "image" ->
+            url = Map.get(m, "url") || Map.get(m, :url, "")
+            mime = Map.get(m, "mime_type") || Map.get(m, :mime_type, "image/jpeg")
+
+            %{
+              "type" => "image",
+              "source" => %{
+                "type" => "url",
+                "url" => url,
+                "media_type" => mime
+              }
+            }
+
+          _ ->
+            nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    text_part = %{"type" => "text", "text" => text}
+    %{"role" => "user", "content" => content_parts ++ [text_part]}
   end
 
   @doc """

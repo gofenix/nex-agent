@@ -76,9 +76,13 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
-    state = put_in(state.agents[key], updated_agent)
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+
+    # Don't overwrite user agent with cron's ephemeral agent
+    state =
+      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
     unless result == :message_sent or from_cron do
       publish_outbound(payload, result)
@@ -89,9 +93,12 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
-    state = put_in(state.agents[key], updated_agent)
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+
+    state =
+      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+
+    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
     unless from_cron do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
