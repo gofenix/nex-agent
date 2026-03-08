@@ -1,0 +1,73 @@
+# Elixir build artifacts
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+
+# BEAM and Erlang files
+*.ez
+*.beam
+erl_crash.dump
+
+# Editor and IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.elixir_ls/
+.nvimlog
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific - Nex Agent workspace and config
+/.nex/
+~/.nex/
+
+# Temporary files and logs
+/tmp/
+/log/
+*.log
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.secret.exs
+/config/secrets.exs
+
+# Test artifacts
+/test-results/
+/coverage/
+
+# Mix artifacts
+/priv/static/assets/
+/priv/static/cache_manifest.json
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Package files
+*.tar
+*.tar.gz
+*.zip
+
+# Node (if using any JS assets)
+/node_modules/
+npm-debug.log
+yarn-error.log
+
+# Local development
+*.local
+.dev/
