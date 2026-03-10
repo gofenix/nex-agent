@@ -138,6 +138,24 @@ defmodule Nex.Agent.Security do
   # Commands allowed in test environment (includes extra testing utilities)
   @allowed_commands_test @allowed_commands_prod ++ ["seq", "exit", "test", "sleep"]
 
+  # Core shell deny patterns aligned with nanobot's ExecTool, plus a small
+  # number of target-aware delete guards to protect obviously destructive paths.
+  @dangerous_patterns [
+    # Target-aware deletion guards: allow workspace cleanup, block catastrophic targets.
+    {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/, "Deleting system directories not allowed"},
+    {~r/\brm\s+(-[^\s]*\s+)*\/\s*$/, "Deleting from root not allowed"},
+    {~r/\brm\s+(-[^\s]*\s+)*~\/?\s*$/, "Deleting entire home directory not allowed"},
+    # nanobot parity: destructive shell commands
+    {~r/\bdel\s+\/[fq]\b/, "Forced file deletion not allowed"},
+    {~r/\brmdir\s+\/s\b/, "Recursive directory deletion not allowed"},
+    {~r/(?:^|[;&|]\s*)format\b/, "Disk formatting not allowed"},
+    {~r/\b(mkfs|diskpart)\b/, "Disk operations not allowed"},
+    {~r/\bdd\s+if=/, "Raw disk copy not allowed"},
+    {~r/>\s*\/dev\/sd/, "Writing to block devices not allowed"},
+    {~r/\b(shutdown|reboot|poweroff)\b/, "System power control not allowed"},
+    {~r/:\(\)\s*\{.*\};\s*:/, "Fork bomb not allowed"}
+  ]
+
   @doc """
   Get the list of allowed root directories for file access.
   """
@@ -208,57 +226,15 @@ defmodule Nex.Agent.Security do
   end
 
   def validate_command(command) do
-    # Extract the base command
-    base_cmd = command |> String.trim() |> String.split() |> hd()
+    normalized_command = command |> String.trim() |> String.downcase()
+    sanitized_command = strip_quoted_segments(normalized_command)
 
-    # Check for dangerous patterns
-    dangerous_patterns = [
-      # Destructive file operations
-      {~r/rm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/, "Deleting system directories not allowed"},
-      {~r/rm\s+(-[^\s]*\s+)*\/\s/, "Deleting from root not allowed"},
-      {~r/rm\s+(-[^\s]*\s+)*~\/\s*$/, "Deleting entire home directory not allowed"},
-      # Disk/device operations
-      {~r/\bdd\s+.*if=\/dev\//, "Raw device read with dd not allowed"},
-      {~r/\bmkfs\b/, "Filesystem creation not allowed"},
-      {~r/\bfdisk\b/, "Disk partitioning not allowed"},
-      {~r/\bparted\b/, "Disk partitioning not allowed"},
-      # System control
-      {~r/\bshutdown\b/, "System shutdown not allowed"},
-      {~r/\breboot\b/, "System reboot not allowed"},
-      {~r/\bpoweroff\b/, "System poweroff not allowed"},
-      {~r/\binit\s+[06]\b/, "System init change not allowed"},
-      {~r/\bsystemctl\s+(halt|poweroff|reboot|shutdown)/, "System control not allowed"},
-      # Fork bombs and resource exhaustion
-      {~r/:\(\)\s*\{\s*:\|:&\s*\}\s*;:/, "Fork bomb not allowed"},
-      {~r/\bwhile\s+true.*do.*done/, "Infinite loop not allowed"},
-      {~r/\byes\s*\|/, "Infinite output pipe not allowed"},
-      # Dangerous permissions
-      {~r/chmod\s+(-[^\s]*\s+)*[0-7]*7[0-7]*\s+\//, "Dangerous permission change on system dirs not allowed"},
-      {~r/chown\s+.*\s+\//, "Changing ownership of system dirs not allowed"},
-      # Remote code execution
-      {~r/^\.\.\//, "Relative path traversal not allowed"},
-      {~r/;\s*sh\s*-i/, "Interactive shell spawn not allowed"},
-      {~r/\|.*sh$/, "Shell pipe to interactive shell not allowed"},
-      {~r/curl.*\|\s*(ba)?sh/, "curl | sh pattern not allowed"},
-      {~r/wget.*\|\s*(ba)?sh/, "wget | sh pattern not allowed"},
-      {~r/\beval\s+"?\$\(curl/, "Remote code eval not allowed"},
-      # Device writes
-      {~r/>\s*\/dev\//, "Writing to /dev not allowed"},
-      # Credential/key exfiltration
-      {~r/cat\s+.*\.(pem|key|p12|pfx|jks)\b/, "Reading key files not allowed"},
-      {~r/cat\s+.*\/\.ssh\//, "Reading SSH keys not allowed"},
-      {~r/cat\s+.*\/\.env\b/, "Reading .env files not allowed"},
-      # Network exfiltration
-      {~r/curl\s+.*-d\s+@/, "Sending file contents via curl not allowed"},
-      {~r/nc\s+-[^\s]*l/, "Netcat listener not allowed"},
-      # Other
-      {~r/2>&1.*rm/, "Redirect stderr to rm not allowed"},
-      {~r/\b(crontab|at)\s+-/, "Modifying scheduled tasks not allowed"}
-    ]
+    # Extract the base command
+    base_cmd = normalized_command |> String.split() |> hd()
 
     # Check dangerous patterns first
-    case Enum.find_value(dangerous_patterns, fn {pattern, reason} ->
-           if Regex.match?(pattern, command), do: reason
+    case Enum.find_value(@dangerous_patterns, fn {pattern, reason} ->
+           if Regex.match?(pattern, sanitized_command), do: reason
          end) do
       nil ->
         # No dangerous pattern found, check whitelist
@@ -273,5 +249,11 @@ defmodule Nex.Agent.Security do
       reason ->
         {:error, reason}
     end
+  end
+
+  defp strip_quoted_segments(command) do
+    command
+    |> String.replace(~r/'[^']*'/, "''")
+    |> String.replace(~r/"[^"]*"/, "\"\"")
   end
 end

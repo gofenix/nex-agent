@@ -1,6 +1,8 @@
 defmodule Nex.Agent.Tool.Bash do
   @behaviour Nex.Agent.Tool.Behaviour
 
+  alias Nex.Agent.Security
+
   def name, do: "bash"
   def description, do: "Execute a shell command"
   def category, do: :base
@@ -34,37 +36,43 @@ defmodule Nex.Agent.Tool.Bash do
     cwd = Map.get(ctx, :cwd, File.cwd!())
     timeout = (Map.get(ctx, "timeout") || Map.get(ctx, :timeout, 120)) * 1000
 
-    task =
-      Task.async(fn ->
-        System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
-      end)
+    case Security.validate_command(command) do
+      :ok ->
+        task =
+          Task.async(fn ->
+            System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
+          end)
 
-    result =
-      try do
-        Task.await(task, timeout)
-      rescue
-        _ ->
-          Task.shutdown(task, :brutal_kill)
-          {:error, :timeout}
-      end
-
-    case result do
-      {:error, :timeout} ->
-        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
-
-      {output, exit_code} ->
-        truncated =
-          if byte_size(output) > 50_000 do
-            String.slice(output, 0, 50_000) <> "\n\n[Output truncated]"
-          else
-            output
+        result =
+          try do
+            Task.await(task, timeout)
+          rescue
+            _ ->
+              Task.shutdown(task, :brutal_kill)
+              {:error, :timeout}
           end
 
-        if exit_code == 0 do
-          {:ok, truncated}
-        else
-          {:ok, "Exit code #{exit_code}\n#{truncated}"}
+        case result do
+          {:error, :timeout} ->
+            {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
+
+          {output, exit_code} ->
+            truncated =
+              if byte_size(output) > 50_000 do
+                String.slice(output, 0, 50_000) <> "\n\n[Output truncated]"
+              else
+                output
+              end
+
+            if exit_code == 0 do
+              {:ok, truncated}
+            else
+              {:ok, "Exit code #{exit_code}\n#{truncated}"}
+            end
         end
+
+      {:error, reason} ->
+        {:error, "Security: #{reason}"}
     end
   end
 end
