@@ -84,7 +84,10 @@ defmodule Nex.Agent.RunnerPersistenceTest do
          }}
 
       messages, _opts ->
-        assert Enum.any?(messages, fn m -> m["role"] == "tool" and m["tool_call_id"] == "call_list_dir" end)
+        assert Enum.any?(messages, fn m ->
+                 m["role"] == "tool" and m["tool_call_id"] == "call_list_dir"
+               end)
+
         {:ok, %{content: "listed", finish_reason: "stop", tool_calls: []}}
     end
 
@@ -142,7 +145,14 @@ defmodule Nex.Agent.RunnerPersistenceTest do
 
   defp ensure_started(name, start_fn) do
     unless Process.whereis(name) do
-      start_fn.()
+      case start_fn.() do
+        {:ok, pid} ->
+          Process.unlink(pid)
+          {:ok, pid}
+
+        other ->
+          other
+      end
     end
   end
 end

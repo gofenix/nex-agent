@@ -84,7 +84,7 @@ defmodule Nex.Agent.Runner do
     else
       # Time the LLM call
       llm_start = System.monotonic_time(:millisecond)
-      
+
       llm_result =
         try do
           call_llm_with_retry(messages, opts, _retries = 1)
@@ -97,7 +97,7 @@ defmodule Nex.Agent.Runner do
             Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
             {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
         end
-      
+
       llm_duration = System.monotonic_time(:millisecond) - llm_start
       Logger.info("[Runner] LLM call took #{llm_duration}ms")
 
@@ -115,11 +115,26 @@ defmodule Nex.Agent.Runner do
             # Nanobot parity: keep the user turn, but never persist the assistant error response.
             Logger.error("[Runner] LLM returned error finish_reason")
             iter_total = System.monotonic_time(:millisecond) - iter_start
-            Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ===")
+
+            Logger.info(
+              "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ==="
+            )
+
             {:error, "LLM returned an error", session}
           else
-            result = handle_response(session, messages, content, tool_calls, reasoning_content,
-              iteration, max_iterations, on_progress, opts)
+            result =
+              handle_response(
+                session,
+                messages,
+                content,
+                tool_calls,
+                reasoning_content,
+                iteration,
+                max_iterations,
+                on_progress,
+                opts
+              )
+
             iter_total = System.monotonic_time(:millisecond) - iter_start
             Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms ===")
             result
@@ -128,7 +143,11 @@ defmodule Nex.Agent.Runner do
         {:error, reason} ->
           Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
           iter_total = System.monotonic_time(:millisecond) - iter_start
-          Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ===")
+
+          Logger.info(
+            "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
+          )
+
           {:error, reason, session}
       end
     end
@@ -136,8 +155,17 @@ defmodule Nex.Agent.Runner do
 
   @max_loop_repeats 3
 
-  defp handle_response(session, messages, content, tool_calls, reasoning_content,
-         iteration, max_iterations, on_progress, opts)
+  defp handle_response(
+         session,
+         messages,
+         content,
+         tool_calls,
+         reasoning_content,
+         iteration,
+         max_iterations,
+         on_progress,
+         opts
+       )
        when is_list(tool_calls) and tool_calls != [] do
     Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
 
@@ -158,15 +186,26 @@ defmodule Nex.Agent.Runner do
     # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
     if length(tool_history) >= @max_loop_repeats and
          tool_history |> Enum.take(@max_loop_repeats) |> Enum.uniq() |> length() == 1 do
-      Logger.warning("[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking")
-      {:ok, content || "I detected a repeated action loop and stopped. Please try a different approach.", session}
+      Logger.warning(
+        "[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking"
+      )
+
+      {:ok,
+       content ||
+         "I detected a repeated action loop and stopped. Please try a different approach.",
+       session}
     else
       opts = Keyword.put(opts, :_tool_history, tool_history)
 
       maybe_send_progress(on_progress, content, tool_call_dicts)
 
       messages =
-        ContextBuilder.add_assistant_message(messages, content, tool_call_dicts, reasoning_content)
+        ContextBuilder.add_assistant_message(
+          messages,
+          content,
+          tool_call_dicts,
+          reasoning_content
+        )
 
       session =
         Session.add_message(session, "assistant", content,
@@ -198,7 +237,8 @@ defmodule Nex.Agent.Runner do
           else: opts
 
       case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
-        {:ok, final_content, final_session} when message_sent and (final_content == "" or is_nil(final_content)) ->
+        {:ok, final_content, final_session}
+        when message_sent and (final_content == "" or is_nil(final_content)) ->
           {:ok, :message_sent, final_session}
 
         other ->
@@ -207,8 +247,17 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp handle_response(session, _messages, content, _tool_calls, reasoning_content,
-         _iteration, _max_iterations, _on_progress, _opts) do
+  defp handle_response(
+         session,
+         _messages,
+         content,
+         _tool_calls,
+         reasoning_content,
+         _iteration,
+         _max_iterations,
+         _on_progress,
+         _opts
+       ) do
     Logger.info("[Runner] LLM finished: #{String.slice(content || "", 0, 100)}")
 
     session =
@@ -236,8 +285,7 @@ defmodule Nex.Agent.Runner do
         "type" => "function",
         "function" => %{
           "name" => name,
-          "arguments" =>
-            if(is_binary(arguments), do: arguments, else: Jason.encode!(arguments))
+          "arguments" => if(is_binary(arguments), do: arguments, else: Jason.encode!(arguments))
         }
       }
     end)
@@ -382,7 +430,10 @@ defmodule Nex.Agent.Runner do
     cond do
       # 400: tool definition problem → retry without skill tools
       status == 400 and tool_definition_error?(error_msg) ->
-        Logger.warning("[Runner] Tool definition error, retrying without skill tools: #{error_msg}")
+        Logger.warning(
+          "[Runner] Tool definition error, retrying without skill tools: #{error_msg}"
+        )
+
         {:retry, messages, Keyword.put(opts, :skip_skills, true)}
 
       # 400: context too long → trim older messages
@@ -390,7 +441,10 @@ defmodule Nex.Agent.Runner do
         trimmed = trim_messages(messages)
 
         if length(trimmed) < length(messages) do
-          Logger.warning("[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}")
+          Logger.warning(
+            "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
+          )
+
           {:retry, trimmed, opts}
         else
           :give_up
@@ -500,6 +554,7 @@ defmodule Nex.Agent.Runner do
       (registry_defs ++ skill_tools)
       |> Enum.filter(fn tool ->
         name = tool["name"]
+
         if valid_tool_name?(name) do
           true
         else
@@ -517,47 +572,19 @@ defmodule Nex.Agent.Runner do
 
   defp call_llm_real(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)
-    model = Keyword.get(opts, :model)
-    api_key = Keyword.get(opts, :api_key)
-    base_url = Keyword.get(opts, :base_url)
-    tools = Keyword.get(opts, :tools, [])
-    # FIX: Extract temperature and max_tokens from opts
-    temperature = Keyword.get(opts, :temperature, 1.0)
-    max_tokens = Keyword.get(opts, :max_tokens, 4096)
 
-    case provider do
-      :anthropic ->
-        Nex.Agent.LLM.Anthropic.chat(messages,
-          model: model,
-          api_key: api_key,
-          tools: tools,
-          temperature: temperature,
-          max_tokens: max_tokens
-        )
-
-      :openai ->
-        Nex.Agent.LLM.OpenAI.chat(messages,
-          model: model,
-          api_key: api_key,
-          base_url: base_url,
-          tools: tools,
-          temperature: temperature,
-          max_tokens: max_tokens
-        )
-
-      :openrouter ->
-        Nex.Agent.LLM.OpenRouter.chat(messages,
-          model: model,
-          api_key: api_key,
-          base_url: base_url,
-          tools: tools,
-          temperature: temperature,
-          max_tokens: max_tokens
-        )
-
-      _ ->
-        {:error, "Unsupported provider: #{provider}"}
-    end
+    [
+      provider: provider,
+      model: Keyword.get(opts, :model),
+      api_key: Keyword.get(opts, :api_key),
+      base_url: Keyword.get(opts, :base_url),
+      tools: Keyword.get(opts, :tools, []),
+      temperature: Keyword.get(opts, :temperature, 1.0),
+      max_tokens: Keyword.get(opts, :max_tokens, 4096),
+      tool_choice: Keyword.get(opts, :tool_choice)
+    ]
+    |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
+    |> then(&Nex.Agent.LLM.ReqLLM.chat(messages, &1))
   end
 
   defp execute_tools(session, messages, tool_calls, opts) do
@@ -604,14 +631,18 @@ defmodule Nex.Agent.Runner do
 
         {{:exit, reason}, {tool_call_id, tool_name, args}} ->
           Logger.error("[Runner] Tool task exited: #{tool_name} #{inspect(reason)}")
-          {tool_call_id, tool_name, "Error: tool timed out or crashed (#{inspect(reason)})", parse_args(args)}
+
+          {tool_call_id, tool_name, "Error: tool timed out or crashed (#{inspect(reason)})",
+           parse_args(args)}
       end)
 
     {new_messages, session} =
       Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result, _args},
                                                    {msgs, sess} ->
         msgs = ContextBuilder.add_tool_result(msgs, tool_call_id, tool_name, result)
-        sess = Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
+
+        sess =
+          Session.add_message(sess, "tool", result, tool_call_id: tool_call_id, name: tool_name)
 
         {msgs, sess}
       end)
@@ -643,15 +674,27 @@ defmodule Nex.Agent.Runner do
   defp execute_tool(tool_name, args, ctx) do
     if Process.whereis(ToolRegistry) do
       case ToolRegistry.execute(tool_name, args, ctx) do
-        {:ok, result} when is_binary(result) -> result
-        {:ok, %{content: content}} when is_binary(content) -> content
-        {:ok, %{error: error}} -> "Error: #{error}"
-        {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
-        {:ok, result} -> to_string(result)
+        {:ok, result} when is_binary(result) ->
+          result
+
+        {:ok, %{content: content}} when is_binary(content) ->
+          content
+
+        {:ok, %{error: error}} ->
+          "Error: #{error}"
+
+        {:ok, result} when is_map(result) ->
+          Jason.encode!(result, pretty: true)
+
+        {:ok, result} ->
+          to_string(result)
+
         {:error, "Unknown tool: " <> _} when is_binary(tool_name) ->
           # Tool not in Registry — try Skills system (handles skill_xxx pattern)
           execute_tool_fallback(tool_name, args, ctx)
-        {:error, reason} -> "Error: #{reason}"
+
+        {:error, reason} ->
+          "Error: #{reason}"
       end
     else
       execute_tool_fallback(tool_name, args, ctx)
@@ -693,52 +736,40 @@ defmodule Nex.Agent.Runner do
   """
   def call_llm_for_consolidation(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)
-    model = Keyword.get(opts, :model)
-    api_key = Keyword.get(opts, :api_key)
-    base_url = Keyword.get(opts, :base_url)
-    tools = Keyword.get(opts, :tools, [])
+    tool_choice = Keyword.get(opts, :tool_choice)
 
-    llm_chat =
-      case provider do
-        :anthropic -> &Nex.Agent.LLM.Anthropic.chat/2
-        :openai -> &Nex.Agent.LLM.OpenAI.chat/2
-        :openrouter -> &Nex.Agent.LLM.OpenRouter.chat/2
-        :ollama -> &Nex.Agent.LLM.Ollama.chat/2
-        _ -> nil
-      end
+    call_opts =
+      [
+        provider: provider,
+        model: Keyword.get(opts, :model),
+        api_key: Keyword.get(opts, :api_key),
+        base_url: Keyword.get(opts, :base_url),
+        tools: Keyword.get(opts, :tools, []),
+        tool_choice: tool_choice
+      ]
+      |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
 
-    if is_nil(llm_chat) do
-      {:error, "Unsupported provider for consolidation: #{provider}"}
-    else
-      tool_choice = Keyword.get(opts, :tool_choice)
+    case Nex.Agent.LLM.ReqLLM.chat(messages, call_opts) do
+      {:ok, response} ->
+        extract_tool_call(response)
 
-      call_opts =
-        [model: model, api_key: api_key, base_url: base_url, tools: tools] ++
-          if tool_choice, do: [tool_choice: tool_choice], else: []
+      {:error, %{status: 400} = err} when tool_choice != nil ->
+        err_msg = err |> inspect() |> String.downcase()
 
-      case llm_chat.(messages, call_opts) do
-        {:ok, response} ->
-          extract_tool_call(response)
+        if String.contains?(err_msg, "tool_choice") do
+          Logger.warning("[Runner] tool_choice incompatible, retrying without it")
+          retry_opts = Keyword.delete(call_opts, :tool_choice)
 
-        # tool_choice incompatible with thinking — retry without it
-        {:error, %{status: 400} = err} when tool_choice != nil ->
-          err_msg = err |> inspect() |> String.downcase()
-
-          if String.contains?(err_msg, "tool_choice") do
-            Logger.warning("[Runner] tool_choice incompatible, retrying without it")
-            retry_opts = Keyword.delete(call_opts, :tool_choice)
-
-            case llm_chat.(messages, retry_opts) do
-              {:ok, response} -> extract_tool_call(response)
-              error -> error
-            end
-          else
-            {:error, err}
+          case Nex.Agent.LLM.ReqLLM.chat(messages, retry_opts) do
+            {:ok, response} -> extract_tool_call(response)
+            error -> error
           end
+        else
+          {:error, err}
+        end
 
-        error ->
-          error
-      end
+      error ->
+        error
     end
   end
 
@@ -760,4 +791,7 @@ defmodule Nex.Agent.Runner do
       {:error, "No tool call in response"}
     end
   end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 end

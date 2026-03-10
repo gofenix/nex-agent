@@ -219,7 +219,9 @@ defmodule Nex.Agent.InboundWorker do
           Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
             try do
               result =
-                state.agent_prompt_fun.(agent, content,
+                state.agent_prompt_fun.(
+                  agent,
+                  content,
                   [channel: channel, chat_id: chat_id, on_progress: on_progress] ++ cron_opts
                 )
 
@@ -229,7 +231,10 @@ defmodule Nex.Agent.InboundWorker do
                 send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
             catch
               kind, reason ->
-                send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload})
+                send(
+                  parent,
+                  {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
+                )
             end
           end)
 
@@ -258,6 +263,9 @@ defmodule Nex.Agent.InboundWorker do
         :thinking ->
           publish_outbound(payload, content, _progress: true)
 
+        :stream_text ->
+          publish_outbound(payload, content, _progress: true)
+
         _ ->
           :ok
       end
@@ -278,7 +286,9 @@ defmodule Nex.Agent.InboundWorker do
   defp stop_session(state, key) do
     count =
       case Map.get(state.active_tasks, key) do
-        nil -> 0
+        nil ->
+          0
+
         pid ->
           Process.exit(pid, :kill)
           1

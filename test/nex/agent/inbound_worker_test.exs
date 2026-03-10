@@ -117,7 +117,14 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   defp ensure_started(name, start_fn) do
     unless Process.whereis(name) do
-      start_fn.()
+      case start_fn.() do
+        {:ok, pid} ->
+          Process.unlink(pid)
+          {:ok, pid}
+
+        other ->
+          other
+      end
     end
   end
 

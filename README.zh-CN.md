@@ -165,6 +165,9 @@ mix nex.agent config set model llama3.1
 - `openrouter`
 - `ollama`
 
+底层 provider 接入已经统一收敛到 `req_llm`，不再需要为每个 provider
+分别维护一套手写客户端实现。
+
 配置文件位于:
 
 ```text

@@ -165,6 +165,9 @@ Default providers:
 - `openrouter`
 - `ollama`
 
+Provider access is unified through `req_llm`, so NexAgent no longer needs a
+separate handwritten client module for each provider.
+
 Config file location:
 
 ```text
