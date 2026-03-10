@@ -74,13 +74,17 @@ defmodule Nex.Agent.Runner do
   end
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
-    Logger.debug("[Runner] Loop iteration=#{iteration + 1}/#{max_iterations}")
+    iter_start = System.monotonic_time(:millisecond)
+    Logger.info("[Runner] === Iteration #{iteration + 1}/#{max_iterations} started ===")
     on_progress = Keyword.get(opts, :on_progress)
 
     if iteration >= max_iterations do
       Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
       {:error, :max_iterations_exceeded, session}
     else
+      # Time the LLM call
+      llm_start = System.monotonic_time(:millisecond)
+      
       llm_result =
         try do
           call_llm_with_retry(messages, opts, _retries = 1)
@@ -93,6 +97,9 @@ defmodule Nex.Agent.Runner do
             Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
             {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
         end
+      
+      llm_duration = System.monotonic_time(:millisecond) - llm_start
+      Logger.info("[Runner] LLM call took #{llm_duration}ms")
 
       case llm_result do
         {:ok, response} ->
@@ -106,14 +113,21 @@ defmodule Nex.Agent.Runner do
 
           if finish_reason == "error" do
             Logger.error("[Runner] LLM returned error finish_reason")
+            iter_total = System.monotonic_time(:millisecond) - iter_start
+            Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ===")
             {:error, "LLM returned an error", session}
           else
-            handle_response(session, messages, content, tool_calls, reasoning_content,
+            result = handle_response(session, messages, content, tool_calls, reasoning_content,
               iteration, max_iterations, on_progress, opts)
+            iter_total = System.monotonic_time(:millisecond) - iter_start
+            Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms ===")
+            result
           end
 
         {:error, reason} ->
           Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
+          iter_total = System.monotonic_time(:millisecond) - iter_start
+          Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ===")
           {:error, reason, session}
       end
     end
@@ -506,13 +520,18 @@ defmodule Nex.Agent.Runner do
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
     tools = Keyword.get(opts, :tools, [])
+    # FIX: Extract temperature and max_tokens from opts
+    temperature = Keyword.get(opts, :temperature, 1.0)
+    max_tokens = Keyword.get(opts, :max_tokens, 4096)
 
     case provider do
       :anthropic ->
         Nex.Agent.LLM.Anthropic.chat(messages,
           model: model,
           api_key: api_key,
-          tools: tools
+          tools: tools,
+          temperature: temperature,
+          max_tokens: max_tokens
         )
 
       :openai ->
@@ -520,7 +539,9 @@ defmodule Nex.Agent.Runner do
           model: model,
           api_key: api_key,
           base_url: base_url,
-          tools: tools
+          tools: tools,
+          temperature: temperature,
+          max_tokens: max_tokens
         )
 
       :openrouter ->
@@ -528,7 +549,9 @@ defmodule Nex.Agent.Runner do
           model: model,
           api_key: api_key,
           base_url: base_url,
-          tools: tools
+          tools: tools,
+          temperature: temperature,
+          max_tokens: max_tokens
         )
 
       _ ->
