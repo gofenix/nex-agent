@@ -1,47 +1,27 @@
 defmodule Nex.Agent.Skills do
   @moduledoc """
-  Unified Skills system - supports elixir, script, mcp, and markdown skills.
+  Markdown-only skills system.
 
   ## Usage
 
-      # Load all skills
       :ok = Nex.Agent.Skills.load()
-
-      # List available skills
       skills = Nex.Agent.Skills.list()
-
-      # Execute a skill
       {:ok, result} = Nex.Agent.Skills.execute("explain-code", "some arguments")
 
-      # Create a new skill
       {:ok, skill} = Nex.Agent.Skills.create(%{
         name: "todo_add",
         description: "Add a todo item",
-        type: "elixir",
-        code: "# Elixir code here",
-        parameters: %{"task" => %{"type" => "string"}}
+        content: "When asked to add a todo item, ..."
       })
   """
 
   use Agent
-  alias Nex.Agent.Evolution
 
   @name __MODULE__
-
-  @skills_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
-
-  # Client API
-
-  @doc """
-  Start the Skills agent.
-  """
   def start_link(opts \\ []) do
     Agent.start_link(fn -> %{} end, opts ++ [name: @name])
   end
 
-  @doc """
-  Load skills from directories.
-  """
   @spec load() :: :ok
   def load do
     unless Process.whereis(@name), do: start_link()
@@ -55,98 +35,49 @@ defmodule Nex.Agent.Skills do
     :ok
   end
 
-  @doc """
-  Reload skills from disk.
-  """
   @spec reload() :: :ok
   def reload, do: load()
 
-  @doc """
-  List all loaded skills.
-  """
   @spec list() :: list(map())
   def list do
     unless Process.whereis(@name), do: start_link()
     Agent.get(@name, &Map.values/1)
   end
 
-  @doc """
-  Get a skill by name.
-  """
   @spec get(String.t()) :: map() | nil
   def get(name) do
     unless Process.whereis(@name), do: start_link()
     Agent.get(@name, &Map.get(&1, name))
   end
 
-  @doc """
-  Create a new skill.
-
-  ## Parameters
-
-  * `name` - Skill name (snake_case)
-  * `description` - Skill description
-  * `type` - Skill type: "elixir", "script", "mcp", or "markdown"
-  * `code` - The actual code/script/content
-  * `parameters` - JSON Schema for parameters
-  * `allowed_tools` - List of allowed tools (optional)
-
-  ## Examples
-
-      Nex.Agent.Skills.create(%{
-        name: "todo_add",
-        description: "Add a todo item",
-        type: "elixir",
-        code: "defmodule ... end",
-        parameters: %{"task" => %{"type" => "string"}}
-      })
-  """
   @spec create(map()) :: {:ok, map()} | {:error, String.t()}
   def create(attrs) do
     name = attrs["name"] || attrs[:name]
-    type = attrs["type"] || attrs[:type] || "markdown"
     description = attrs["description"] || attrs[:description] || ""
-    code = attrs["code"] || attrs[:content] || ""
-    parameters = attrs["parameters"] || %{}
+    content = attrs["content"] || attrs[:content] || attrs["code"] || attrs[:code] || ""
+    parameters = attrs["parameters"] || attrs[:parameters] || %{}
     allowed_tools = attrs["allowed_tools"] || attrs[:allowed_tools] || []
+    type = attrs["type"] || attrs[:type]
 
-    if is_nil(name) do
-      {:error, "Skill name is required"}
-    else
-      # Create skill directory
-      skill_dir = Path.join(@skills_dir, name)
-      File.mkdir_p!(skill_dir)
+    cond do
+      is_nil(name) ->
+        {:error, "Skill name is required"}
 
-      # Save skill based on type
-      case type do
-        "elixir" ->
-          save_elixir_skill(skill_dir, name, description, code, parameters, allowed_tools)
+      type in ["elixir", "script", "mcp"] ->
+        {:error, "Unsupported skill type. Skills are Markdown-only; implement code-based capabilities as tools."}
 
-        "script" ->
-          save_script_skill(skill_dir, name, description, code, parameters, allowed_tools)
-
-        "mcp" ->
-          save_mcp_skill(skill_dir, name, description, code, parameters, allowed_tools)
-
-        "markdown" ->
-          save_markdown_skill(skill_dir, name, description, code, parameters, allowed_tools)
-
-        _ ->
-          {:error, "Unknown skill type: #{type}"}
-      end
+      true ->
+        save_markdown_skill(name, description, content, parameters, allowed_tools)
     end
   end
 
-  @doc """
-  Delete a skill by name.
-  """
   @spec delete(String.t()) :: :ok | {:error, String.t()}
   def delete(name) do
-    skill_dir = Path.join(@skills_dir, name)
+    skill_dir = Path.join(skills_dir(), name)
 
     if File.exists?(skill_dir) do
       File.rm_rf!(skill_dir)
-      # Remove from registry
+
       if Process.whereis(@name) do
         Agent.update(@name, &Map.delete(&1, name))
       end
@@ -157,22 +88,8 @@ defmodule Nex.Agent.Skills do
     end
   end
 
-  @doc """
-  Execute a skill.
-
-  ## Options
-
-  * `:context` - `:inline` (default) or `:fork`
-  * `:tools` - List of allowed tools (overrides skill's allowed_tools)
-
-  ## Examples
-
-      Nex.Agent.Skills.execute("explain-code", "how does this work?")
-      Nex.Agent.Skills.execute("deploy", "production", context: :fork)
-  """
   @spec execute(String.t(), map() | String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def execute(name, arguments, opts \\ []) do
-    # Normalize arguments to map
     args =
       if is_binary(arguments) do
         %{"arguments" => arguments}
@@ -180,22 +97,19 @@ defmodule Nex.Agent.Skills do
         arguments
       end
 
-    skill = get(name)
+    case get(name) do
+      nil ->
+        {:error, "Skill not found: #{name}"}
 
-    if skill do
-      if skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model do
-        {:error, "Skill #{name} is disabled for model invocation"}
-      else
-        execute_skill(skill, args, opts)
-      end
-    else
-      {:error, "Skill not found: #{name}"}
+      skill ->
+        if skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model do
+          {:error, "Skill #{name} is disabled for model invocation"}
+        else
+          execute_markdown_skill(skill, args, opts)
+        end
     end
   end
 
-  @doc """
-  Format skills for LLM function calling.
-  """
   @spec for_llm() :: list(map())
   def for_llm do
     unless Process.whereis(@name), do: start_link()
@@ -208,7 +122,6 @@ defmodule Nex.Agent.Skills do
       input_schema =
         case skill.parameters do
           params when is_map(params) and map_size(params) > 0 ->
-            # Use the skill's own parameter schema
             %{
               "type" => "object",
               "properties" => params,
@@ -216,7 +129,6 @@ defmodule Nex.Agent.Skills do
             }
 
           _ ->
-            # Default: single input string
             %{
               "type" => "object",
               "properties" => %{
@@ -234,122 +146,11 @@ defmodule Nex.Agent.Skills do
     end)
   end
 
-  # Private functions
-
-  defp execute_skill(skill, arguments, opts) do
-    case skill.type || "markdown" do
-      "elixir" ->
-        execute_elixir_skill(skill, arguments, opts)
-
-      "script" ->
-        execute_script_skill(skill, arguments, opts)
-
-      "mcp" ->
-        execute_mcp_skill(skill, arguments, opts)
-
-      "markdown" ->
-        execute_markdown_skill(skill, arguments, opts)
-
-      _ ->
-        {:error, "Unknown skill type: #{skill.type}"}
-    end
-  end
-
-  defp execute_elixir_skill(skill, arguments, _opts) do
-    # Use unique module name based on skill name hash to avoid conflicts
-    name_hash = :crypto.hash(:md5, skill.name) |> Base.encode16() |> String.slice(0, 8)
-    module_name = Module.concat(Nex.Agent.Skills.Runtime, "Skill_#{name_hash}")
-
-    try do
-      code = skill.code
-      code_hash = :crypto.hash(:md5, code) |> Base.encode16(case: :lower)
-
-      # Check if module is loaded AND code hasn't changed
-      needs_compile =
-        if Code.ensure_loaded?(module_name) do
-          # Compare code hash to detect updates
-          cached_hash =
-            if function_exported?(module_name, :__code_hash__, 0),
-              do: module_name.__code_hash__(),
-              else: nil
-          cached_hash != code_hash
-        else
-          true
-        end
-
-      if needs_compile do
-        # Inject a __code_hash__/0 function so we can detect future changes
-        tagged_code = inject_code_hash(code, code_hash)
-
-        case Evolution.upgrade_module(module_name, tagged_code, validate: true, backup: false) do
-          {:ok, _version} ->
-            apply(module_name, :execute, [arguments, %{}])
-
-          {:error, reason} ->
-            {:error, "Failed to compile skill: #{reason}"}
-        end
-      else
-        apply(module_name, :execute, [arguments, %{}])
-      end
-    rescue
-      e ->
-        {:error, "Skill execution failed: #{Exception.message(e)}"}
-    end
-  end
-
-  # Inject a __code_hash__/0 function before the final `end` of the module
-  defp inject_code_hash(code, hash) do
-    hash_fn = ~s|\n  def __code_hash__, do: "#{hash}"\n|
-
-    case String.trim_trailing(code) |> String.reverse() |> String.split("dne", parts: 2) do
-      [suffix, rest] ->
-        String.reverse(rest) <> hash_fn <> "end" <> String.reverse(suffix)
-      _ ->
-        code <> hash_fn
-    end
-  end
-
-  defp execute_script_skill(skill, arguments, _opts) do
-    # Write script to temp file and execute
-    script_path = Path.join([@skills_dir, skill.name, "script.sh"])
-
-    if File.exists?(script_path) do
-      # Convert arguments map to command line args
-      args_str = Jason.encode!(arguments)
-
-      case System.cmd("bash", [script_path, args_str], stderr_to_stdout: true) do
-        {output, 0} ->
-          {:ok, %{result: output}}
-
-        {output, code} ->
-          {:error, %{result: output, exit_code: code}}
-      end
-    else
-      {:error, "Script not found: #{script_path}"}
-    end
-  end
-
-  defp execute_mcp_skill(skill, _arguments, _opts) do
-    # For MCP skills, the code field contains MCP config JSON
-    case Jason.decode(skill.code) do
-      {:ok, mcp_config} ->
-        # Start MCP server and call tool
-        {:ok, _conn} = Nex.Agent.MCP.start_link(mcp_config)
-        # TODO: Implement MCP tool calling
-        {:ok, %{result: "MCP skill executed (not fully implemented)"}}
-
-      {:error, reason} ->
-        {:error, "Invalid MCP config: #{reason}"}
-    end
-  end
-
   defp execute_markdown_skill(skill, arguments, opts) do
-    context = Keyword.get(opts, :context, :inline)
+    content = substitute_arguments(skill.content, arguments)
 
-    case context do
+    case Keyword.get(opts, :context, :inline) do
       :fork ->
-        content = substitute_arguments(skill.content, arguments)
-
         {:ok,
          %{
            content: content,
@@ -358,7 +159,6 @@ defmodule Nex.Agent.Skills do
          }}
 
       :inline ->
-        content = substitute_arguments(skill.content, arguments)
         {:ok, %{result: content}}
     end
   end
@@ -377,112 +177,65 @@ defmodule Nex.Agent.Skills do
     |> String.replace("$0", arguments)
   end
 
-  # Save functions
-
-  defp save_elixir_skill(skill_dir, name, description, code, parameters, allowed_tools) do
-    # Save the Elixir code
-    code_file = Path.join(skill_dir, "skill.ex")
-    File.write!(code_file, code)
-
-    # Save metadata
-    save_skill_metadata(skill_dir, name, description, "elixir", parameters, allowed_tools)
-
-    # Try to compile and auto-register as Tool if it implements Tool.Behaviour
-    maybe_register_as_tool(name, code)
-
-    # Reload skills
-    load()
-
-    {:ok, get(name)}
-  end
-
-  defp save_script_skill(skill_dir, name, description, code, parameters, allowed_tools) do
-    # Save the script
-    script_file = Path.join(skill_dir, "script.sh")
-    File.write!(script_file, code)
-    File.chmod(script_file, 0o755)
-
-    # Save metadata
-    save_skill_metadata(skill_dir, name, description, "script", parameters, allowed_tools)
-
-    # Reload skills
-    load()
-
-    {:ok, get(name)}
-  end
-
-  defp save_mcp_skill(skill_dir, name, description, code, parameters, allowed_tools) do
-    # Save MCP config
-    config_file = Path.join(skill_dir, "mcp.json")
-    File.write!(config_file, code)
-
-    # Save metadata
-    save_skill_metadata(skill_dir, name, description, "mcp", parameters, allowed_tools)
-
-    # Reload skills
-    load()
-
-    {:ok, get(name)}
-  end
-
-  defp save_markdown_skill(skill_dir, name, description, content, _parameters, _allowed_tools) do
-    # Save SKILL.md
+  defp save_markdown_skill(name, description, content, parameters, allowed_tools) do
+    skill_dir = Path.join(skills_dir(), name)
     skill_file = Path.join(skill_dir, "SKILL.md")
 
-    frontmatter = """
-    ---
-    name: #{name}
-    description: #{description}
-    type: markdown
-    user-invocable: true
-    ---
+    File.mkdir_p!(skill_dir)
 
-    #{content}
-    """
+    frontmatter_lines =
+      [
+        "---",
+        "name: #{yaml_scalar(name)}",
+        "description: #{yaml_scalar(description)}",
+        "user-invocable: true"
+      ]
+      |> maybe_put_frontmatter("parameters", parameters)
+      |> maybe_put_frontmatter("allowed-tools", allowed_tools)
+      |> Kernel.++(["---", "", content])
 
-    File.write!(skill_file, frontmatter)
+    File.write!(skill_file, Enum.join(frontmatter_lines, "\n"))
 
-    # Reload skills
     load()
-
     {:ok, get(name)}
   end
 
-  defp save_skill_metadata(skill_dir, name, description, type, parameters, allowed_tools) do
-    metadata = %{
-      "name" => name,
-      "description" => description,
-      "type" => type,
-      "parameters" => parameters,
-      "allowed_tools" => allowed_tools,
-      "user_invocable" => true
-    }
+  defp maybe_put_frontmatter(lines, _key, value) when value in [%{}, [], nil], do: lines
 
-    meta_file = Path.join(skill_dir, "skill.json")
-    File.write!(meta_file, Jason.encode!(metadata))
+  defp maybe_put_frontmatter(lines, key, value) do
+    lines ++ ["#{key}:"] ++ to_yaml_lines(value)
   end
 
-  defp maybe_register_as_tool(name, code) do
-    name_hash = :crypto.hash(:md5, name) |> Base.encode16() |> String.slice(0, 8)
-    module_name = Module.concat(Nex.Agent.Skills.Runtime, "Skill_#{name_hash}")
+  defp to_yaml_lines(map) when is_map(map) do
+    map
+    |> Enum.sort_by(fn {key, _} -> to_string(key) end)
+    |> Enum.flat_map(fn {key, value} ->
+      key = to_string(key)
 
-    try do
-      case Evolution.upgrade_module(module_name, code, validate: true) do
-        {:ok, _} ->
-          Code.ensure_loaded(module_name)
-
-          if function_exported?(module_name, :definition, 0) and
-               function_exported?(module_name, :execute, 2) do
-            if Process.whereis(Nex.Agent.Tool.Registry) do
-              Nex.Agent.Tool.Registry.register(module_name)
-            end
-          end
+      case value do
+        inner when is_map(inner) ->
+          ["  #{key}:"] ++ Enum.map(to_yaml_lines(inner), &"  #{&1}")
 
         _ ->
-          :ok
+          ["  #{key}: #{yaml_scalar(value)}"]
       end
-    rescue
-      _ -> :ok
-    end
+    end)
   end
+
+  defp to_yaml_lines(list) when is_list(list) do
+    Enum.map(list, fn item -> "  - #{yaml_scalar(item)}" end)
+  end
+
+  defp yaml_scalar(value) when is_binary(value), do: escape_yaml_string(value)
+  defp yaml_scalar(value) when is_integer(value) or is_float(value), do: to_string(value)
+  defp yaml_scalar(true), do: "true"
+  defp yaml_scalar(false), do: "false"
+  defp yaml_scalar(nil), do: "null"
+  defp yaml_scalar(value), do: inspect(value)
+
+  defp skills_dir do
+    Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
+  end
+
+  defp escape_yaml_string(value), do: inspect(value, binaries: :as_strings, printable_limit: :infinity)
 end

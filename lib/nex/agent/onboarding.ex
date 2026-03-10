@@ -122,10 +122,10 @@ defmodule Nex.Agent.Onboarding do
   defp init_bundled_skills(workspace) do
     skills_dir = Path.join(workspace, "skills")
     File.mkdir_p!(skills_dir)
+    cleanup_legacy_bundled_skills(skills_dir)
 
     bundled_skills = [
-      {"find-skills", find_skills_template()},
-      {"browser-mcp", browser_mcp_template()}
+      {"code-review", code_review_template()}
     ]
 
     Enum.each(bundled_skills, fn {skill_name, content} ->
@@ -140,228 +140,46 @@ defmodule Nex.Agent.Onboarding do
     end)
   end
 
-  defp find_skills_template do
+  defp cleanup_legacy_bundled_skills(skills_dir) do
+    ["find-skills", "browser-mcp"]
+    |> Enum.each(fn skill_name ->
+      legacy_dir = Path.join(skills_dir, skill_name)
+
+      if File.exists?(legacy_dir) do
+        File.rm_rf!(legacy_dir)
+        Logger.info("[Onboarding] Removed legacy bundled skill: #{skill_name}")
+      end
+    end)
+  end
+
+  defp code_review_template do
     """
     ---
-    name: find-skills
-    description: Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities.
+    name: code-review
+    description: Review code changes with a focus on bugs, regressions, and missing tests.
     always: false
     user-invocable: true
     ---
 
-    # Find Skills
+    # Code Review
 
-    This skill helps you discover and install skills from the open agent skills ecosystem (skills.sh).
+    Use this skill when the user asks for a review of code, a diff, or a change set.
 
-    ## When to Use This Skill
+    ## Review Priorities
 
-    Use this skill when the user:
+    Focus on:
 
-    - Asks "how do I do X" where X might be a common task with an existing skill
-    - Says "find a skill for X" or "is there a skill for X"
-    - Asks "can you do X" where X is a specialized capability
-    - Expresses interest in extending agent capabilities
-    - Wants to search for tools, templates, or workflows
-    - Mentions they wish they had help with a specific domain (design, testing, deployment, etc.)
+    - behavioral regressions
+    - correctness bugs
+    - missing validation or error handling
+    - test gaps
+    - migration or compatibility risks
 
-    ## How to Help Users Find Skills
+    ## Output Format
 
-    ### Step 1: Understand What They Need
+    Present findings first, ordered by severity. Include file paths and line numbers when available. Keep summaries brief.
 
-    When a user asks for help, identify:
-    1. The domain (e.g., React, testing, design, deployment)
-    2. The specific task (e.g., writing tests, creating animations, reviewing PRs)
-    3. Whether this is a common enough task that a skill likely exists
-
-    ### Step 2: Search for Skills
-
-    Use the built-in `skill_search` tool to search skills.sh:
-
-    ```
-    skill_search(query: "react performance")
-    ```
-
-    You can also suggest using the Skills CLI:
-
-    ```bash
-    npx skills find [query]
-    ```
-
-    ### Step 3: Present Options
-
-    When you find relevant skills, present them with:
-    1. The skill name and description
-    2. What it does and why it's useful
-    3. The install command: `skill_install("owner/repo/skill-name")`
-    4. A link to learn more: https://skills.sh/owner/repo/skill-name
-
-    Example:
-
-    ```
-    I found 3 relevant skills:
-
-    1. vercel-react-best-practices (184K installs)
-       - React and Next.js performance optimization guidelines
-       - Install: skill_install("vercel-labs/agent-skills/vercel-react-best-practices")
-
-    2. react-testing (45K installs)
-       - Best practices for testing React components
-       - Install: skill_install("anthropics/skills/react-testing")
-
-    Which would you like to install?
-    ```
-
-    ### Step 4: Install
-
-    If the user wants to proceed, use `skill_install`:
-
-    ```
-    skill_install("owner/repo/skill-name")
-    ```
-
-    After installation, verify it works by explaining what new capabilities are now available.
-
-    ## Common Skill Categories
-
-    When searching, consider these common categories:
-
-    | Category        | Example Queries                          |
-    | --------------- | ---------------------------------------- |
-    | Web Development | react, nextjs, typescript, css, tailwind |
-    | Testing         | testing, jest, playwright, e2e           |
-    | DevOps          | deploy, docker, kubernetes, ci-cd        |
-    | Documentation   | docs, readme, changelog, api-docs        |
-    | Code Quality    | review, lint, refactor, best-practices   |
-    | Design          | ui, ux, design-system, accessibility     |
-    | Productivity    | workflow, automation, git                |
-
-    ## Tips for Effective Searches
-
-    1. **Use specific keywords**: "react testing" is better than just "testing"
-    2. **Try alternative terms**: If "deploy" doesn't work, try "deployment" or "ci-cd"
-    3. **Check popular sources**: 
-       - `vercel-labs/agent-skills` - Vercel's official skills
-       - `anthropics/skills` - Anthropic's official skills
-       - `microsoft/github-copilot-for-azure` - Azure skills
-
-    ## When No Skills Are Found
-
-    If no relevant skills exist:
-
-    1. Acknowledge that no existing skill was found
-    2. Offer to help with the task directly using your general capabilities
-    3. Suggest the user could create their own skill with `skill_create`
-
-    Example:
-
-    ```
-    I searched for skills related to "xyz" but didn't find any matches.
-    I can still help you with this task directly! Would you like me to proceed?
-
-    If this is something you do often, you could create your own skill:
-    skill_create(name: "my-xyz-skill", type: "markdown", ...)
-    ```
-
-    ## Examples
-
-    **Example 1: User asks "How do I make my React app faster?"**
-
-    1. Identify: Domain = React, Task = performance optimization
-    2. Search: `skill_search(query: "react performance optimization")`
-    3. Present: Show vercel-react-best-practices and other options
-    4. Install: If user agrees, run `skill_install(...)`
-
-    **Example 2: User asks "Is there a skill for creating changelogs?"**
-
-    1. Identify: Domain = documentation, Task = changelog
-    2. Search: `skill_search(query: "changelog")`
-    3. Present: Show changelog-related skills
-    4. Install: If user agrees, run `skill_install(...)`
-    """
-  end
-
-  defp browser_mcp_template do
-    """
-    ---
-    name: browser-mcp
-    description: Browser automation via MCP (Model Context Protocol). Control browser to navigate, click, type, screenshot, and more. Manages MCP connection automatically.
-    type: elixir
-    user-invocable: true
-    parameters:
-      action:
-        type: string
-        enum: ["navigate", "click", "type", "screenshot", "snapshot", "go_back", "go_forward", "wait"]
-        description: Browser action to perform
-      url:
-        type: string
-        description: URL for navigate action
-      selector:
-        type: string
-        description: CSS selector for click/type actions
-      text:
-        type: string
-        description: Text to type
-      element:
-        type: string
-        description: Element reference from snapshot
-      milliseconds:
-        type: integer
-        description: Wait time in milliseconds
-    allowed_tools:
-      - message
-    ---
-
-    # Browser MCP
-
-    This skill provides browser automation capabilities via the MCP (Model Context Protocol).
-
-    ## Prerequisites
-
-    - Node.js installed
-    - npx available in PATH
-
-    ## Usage
-
-    When you use this skill, it will automatically start the MCP browser server and execute browser actions.
-
-    ### Available Actions
-
-    | Action | Description | Parameters |
-    |--------|-------------|------------|
-    | navigate | Navigate to a URL | url (required) |
-    | click | Click an element | selector or element (required) |
-    | type | Type text into an input | selector or element (required), text (required) |
-    | screenshot | Take a screenshot | - |
-    | snapshot | Get page DOM snapshot | - |
-    | go_back | Go back in history | - |
-    | go_forward | Go forward in history | - |
-    | wait | Wait for specified time | milliseconds (optional, default 1000) |
-
-    ### Examples
-
-    ```elixir
-    # Navigate to a website
-    %{"action" => "navigate", "url" => "https://twitter.com"}
-
-    # Click an element
-    %{"action" => "click", "selector" => ".submit-button"}
-
-    # Type text
-    %{"action" => "type", "selector" => "input[name='search']", "text" => "hello"}
-
-    # Take screenshot
-    %{"action" => "screenshot"}
-
-    # Get page snapshot
-    %{"action" => "snapshot"}
-    ```
-
-    ## Notes
-
-    - The MCP server is started automatically on first use
-    - The browser connection persists across multiple actions
-    - Use `snapshot` to get clickable element references
-    - Screenshots are returned as base64 images
+    If no issues are found, say that explicitly and note any residual testing gaps.
     """
   end
 
@@ -371,11 +189,11 @@ defmodule Nex.Agent.Onboarding do
 
     System-level instructions that define how the agent operates.
 
-    ## Skills System
+    ## Tools and Skills
 
-    All capabilities are Skills. Skills are divided into two categories:
+    Built-in tools provide deterministic capabilities. Markdown skills provide reusable workflows.
 
-    ### Built-in Skills (Core)
+    ### Built-in Tools
 
     These are always available and cannot be removed:
 
@@ -385,34 +203,33 @@ defmodule Nex.Agent.Onboarding do
     - **bash** - Execute shell commands
     - **message** - Send messages to the user
 
-    Additional built-in skills:
+    Additional built-in tools:
     - **web_search** - Search the web for information
     - **web_fetch** - Fetch content from URLs
     - **spawn_task** - Run tasks in parallel
     - **cron** - Schedule tasks
+    - **memory_search** - Search long-term memory
+    - **skill_list** - Inspect local Markdown skills
+    - **skill_create** - Create local Markdown skills
 
-    ### Extended Skills (User-installed)
+    ### Markdown Skills
 
-    Skills can be installed from the community or created by the agent:
+    Skills live under `workspace/skills/<name>/SKILL.md`.
 
-    - **Install**: `skill_install("owner/repo/skill-name")` - Install from skills.sh
-    - **Create**: `skill_create(name, type, content)` - Create new skills
-      - `markdown` - Instructions and prompts (injected into context)
-      - `script` - Bash scripts for automation
-      - `elixir` - Full Elixir modules (auto-registered as callable skills)
-      - `mcp` - External service integrations
+    - **Create**: `skill_create(name, description, content)` - Add a reusable workflow
+    - **Use**: skills appear with the `skill_` prefix (e.g. `skill_explain_code`)
 
-    Extended skills appear with `skill_` prefix (e.g., `skill_explain_code`).
+    Code-based capabilities belong in tools, not skills.
 
     ### Evolution
 
     The agent can improve itself:
 
     - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
-    - **Create new skills**: `skill_create()` - Add new capabilities
+    - **Create new Markdown skills**: `skill_create()` - Add reusable workflows
     - **Self-modify**: `soul_update()` - Update personality and values
 
-    When creating new capabilities, prefer `skill_create()` over modifying source code.
+    Use `skill_create()` for instructions. Use tools and `evolve()` for code-based capabilities.
 
     ## Guidelines
 

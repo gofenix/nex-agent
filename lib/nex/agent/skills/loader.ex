@@ -1,34 +1,8 @@
 defmodule Nex.Agent.Skills.Loader do
   @moduledoc """
-  Skills loader - parses SKILL.md files following Claude Code format.
-
-  ## SKILL.md Format
-
-      ---
-      name: explain-code
-      description: Explains code with visual diagrams
-      disable-model-invocation: false
-      allowed-tools: Read, Grep
-      requires:
-        bins: [browser-use, npx]
-        env: [BROWSER_USE_API_KEY]
-      always: true
-      ---
-
-      When explaining code, always include:
-      1. Start with an analogy
-      2. Draw a diagram
+  Skills loader - parses Markdown SKILL.md files.
   """
 
-  require Logger
-
-  @doc """
-  Load skills from a directory.
-
-  ## Examples
-
-      skills = Nex.Agent.Skills.Loader.load_from_dir("~/.claude/skills")
-  """
   @spec load_from_dir(String.t(), keyword()) :: list(map())
   def load_from_dir(dir, opts \\ []) do
     path = Path.expand(dir)
@@ -53,90 +27,44 @@ defmodule Nex.Agent.Skills.Loader do
     end
   end
 
-  @doc """
-  Load all skills from standard locations:
-  - ~/.nex/agent/workspace/skills (global)
-  - .nex/skills (project)
-  - Built-in skills (nanobot/skills)
-  """
   @spec load_all(keyword()) :: list(map())
   def load_all(opts \\ []) do
     global = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
     project = ".nex/skills"
 
-    # Built-in skills from nanobot format
-    builtin = builtin_skills_dir()
-
     filter_unavailable = Keyword.get(opts, :filter_unavailable, true)
     loader_opts = [filter_unavailable: filter_unavailable]
 
     []
-    |> Kernel.++(load_from_dir(builtin, loader_opts))
     |> Kernel.++(load_from_dir(global, loader_opts))
     |> Kernel.++(load_from_dir(project, loader_opts))
     |> Enum.uniq_by(& &1[:name])
   end
 
-  @doc """
-  List all skills without filtering (includes unavailable).
-  """
   @spec list_all() :: list(map())
   def list_all, do: load_all(filter_unavailable: false)
 
-  @doc """
-  Check if skill requirements are met.
-  """
   @spec check_requirements(map()) :: boolean()
   def check_requirements(skill) do
     requires = skill[:requires] || %{}
-
-    # Check binary requirements
     bins = requires[:bins] || []
-    bins_ok = Enum.all?(bins, &find_executable/1)
-
-    # Check environment variable requirements
     envs = requires[:env] || []
-    envs_ok = Enum.all?(envs, &System.get_env/1)
 
-    bins_ok and envs_ok
+    Enum.all?(bins, &find_executable/1) and Enum.all?(envs, &System.get_env/1)
   end
 
-  @doc """
-  Get missing requirements for a skill.
-  """
   @spec missing_requirements(map()) :: String.t()
   def missing_requirements(skill) do
     requires = skill[:requires] || %{}
-
-    missing = []
-
     bins = requires[:bins] || []
-
-    missing =
-      (missing ++ Enum.reject(bins, &find_executable/1))
-      |> Enum.map(&"CLI: #{&1}")
-
     envs = requires[:env] || []
 
-    missing =
-      (missing ++ Enum.reject(envs, &System.get_env/1))
-      |> Enum.map(&"ENV: #{&1}")
-
-    Enum.join(missing, ", ")
+    (Enum.map(Enum.reject(bins, &find_executable/1), &"CLI: #{&1}") ++
+       Enum.map(Enum.reject(envs, &System.get_env/1), &"ENV: #{&1}"))
+    |> Enum.join(", ")
   end
 
-  # Private functions
-
-  defp builtin_skills_dir do
-    # Try to find built-in skills relative to this file
-    # In production: priv/skills or similar
-    # For now, return empty path (no builtins by default)
-    ""
-  end
-
-  defp has_skill_md?(name) do
-    String.ends_with?(name, ".md")
-  end
+  defp has_skill_md?(name), do: String.ends_with?(name, ".md")
 
   defp has_skill_dir?(base_path, name) do
     File.dir?(Path.join(base_path, name))
@@ -146,95 +74,55 @@ defmodule Nex.Agent.Skills.Loader do
     skill_path = Path.join([base_path, name, "SKILL.md"])
 
     cond do
-      File.dir?(Path.join(base_path, name)) && File.exists?(skill_path) ->
-        [parse_skill_file(skill_path, name)]
+      File.dir?(Path.join(base_path, name)) and File.exists?(skill_path) ->
+        [parse_skill_file(skill_path)]
 
       File.exists?(skill_path) ->
-        [parse_skill_file(skill_path, name)]
+        [parse_skill_file(skill_path)]
 
       String.ends_with?(name, ".md") ->
-        direct_path = Path.join(base_path, name)
-        [parse_skill_file(direct_path, Path.basename(name, ".md"))]
+        [parse_skill_file(Path.join(base_path, name))]
 
       true ->
         []
     end
   end
 
-  defp parse_skill_file(path, _name) do
+  defp parse_skill_file(path) do
     content = File.read!(path)
 
-    # Split by --- frontmatter delimiter
-    case Regex.run(~r/^---\n(.*?)\n---\n(.*)$/s, content) do
-      [_, frontmatter, body] ->
-        parse_skill(frontmatter, body, path)
-
-      nil ->
-        # No frontmatter, treat entire content as body
-        parse_skill("", content, path)
+    case Regex.run(~r/^---\n(.*?)\n---\n?(.*)$/s, content) do
+      [_, frontmatter, body] -> parse_skill(frontmatter, body, path)
+      nil -> parse_skill("", content, path)
     end
   end
 
   defp parse_skill(frontmatter, body, path) do
     metadata = parse_frontmatter(frontmatter)
-
-    # Check for skill.json in the same directory
-    skill_dir = Path.dirname(path)
-
-    full_metadata =
-      if File.exists?(Path.join(skill_dir, "skill.json")) do
-        case File.read!(Path.join(skill_dir, "skill.json")) |> Jason.decode() do
-          {:ok, json_meta} -> Map.merge(metadata, json_meta)
-          _ -> metadata
-        end
-      else
-        metadata
-      end
+    requires = parse_requires(metadata["requires"])
 
     name =
-      full_metadata["name"] ||
+      metadata["name"] ||
         path |> Path.dirname() |> Path.basename() ||
         Path.basename(path, ".md")
 
-    type = full_metadata["type"] || "markdown"
-
-    # Load code based on type
-    code =
-      case type do
-        "elixir" ->
-          skill_ex = Path.join(skill_dir, "skill.ex")
-          if File.exists?(skill_ex), do: File.read!(skill_ex), else: ""
-
-        "script" ->
-          script_file = Path.join(skill_dir, "script.sh")
-          if File.exists?(script_file), do: File.read!(script_file), else: ""
-
-        "mcp" ->
-          mcp_file = Path.join(skill_dir, "mcp.json")
-          if File.exists?(mcp_file), do: File.read!(mcp_file), else: ""
-
-        _ ->
-          String.trim(body)
-      end
-
-    # Parse requires section (supports both YAML and simple format)
-    requires = parse_requires(full_metadata["requires"])
+    content = String.trim(body)
 
     %{
       name: name,
-      description: full_metadata["description"] || extract_first_paragraph(body),
-      content: code,
-      type: type,
-      code: code,
-      parameters: full_metadata["parameters"] || %{},
-      disable_model_invocation: full_metadata["disable-model-invocation"] == "true",
-      allowed_tools: parse_allowed_tools(full_metadata["allowed-tools"]),
-      user_invocable: full_metadata["user-invocable"] != "false",
-      always: full_metadata["always"] == "true",
+      description: metadata["description"] || extract_first_paragraph(body),
+      content: content,
+      type: "markdown",
+      code: content,
+      parameters: normalize_parameters(metadata["parameters"]),
+      disable_model_invocation: truthy?(metadata["disable-model-invocation"]),
+      allowed_tools: normalize_allowed_tools(metadata["allowed-tools"]),
+      user_invocable: metadata["user-invocable"] not in [false, "false"],
+      always: truthy?(metadata["always"]),
       requires: requires,
-      context: full_metadata["context"],
-      agent: full_metadata["agent"],
-      argument_hint: full_metadata["argument-hint"],
+      context: metadata["context"],
+      agent: metadata["agent"],
+      argument_hint: metadata["argument-hint"],
       path: path
     }
   end
@@ -243,8 +131,6 @@ defmodule Nex.Agent.Skills.Loader do
   defp parse_requires(""), do: %{}
 
   defp parse_requires(requires) when is_binary(requires) do
-    # Simple format: "binary1, binary2" or "ENV_VAR1, ENV_VAR2"
-    # Need to detect if it's bins or env - assume bins for backward compat
     bins =
       requires
       |> String.split(",")
@@ -257,8 +143,8 @@ defmodule Nex.Agent.Skills.Loader do
 
   defp parse_requires(requires) when is_map(requires) do
     %{
-      bins: parse_list(requires["bins"]),
-      env: parse_list(requires["env"])
+      bins: parse_list(requires["bins"] || requires[:bins]),
+      env: parse_list(requires["env"] || requires[:env])
     }
   end
 
@@ -270,60 +156,159 @@ defmodule Nex.Agent.Skills.Loader do
   defp parse_list(str) when is_binary(str), do: String.split(str, ",") |> Enum.map(&String.trim/1)
   defp parse_list(_), do: []
 
-  defp parse_frontmatter("") do
-    %{}
-  end
+  defp parse_frontmatter(""), do: %{}
 
   defp parse_frontmatter(content) do
-    content
-    |> String.split("\n")
-    |> Enum.reject(&String.starts_with?(&1, "#"))
-    |> Enum.map(fn line ->
-      case String.split(line, ":", parts: 2) do
-        [key, value] -> {String.trim(key), String.trim(value)}
-        _ -> nil
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.into(%{})
+    parse_yaml_block(String.split(content, "\n"), 0)
   end
 
-  defp parse_allowed_tools(nil), do: []
-  defp parse_allowed_tools(""), do: []
+  defp normalize_allowed_tools(nil), do: []
+  defp normalize_allowed_tools(""), do: []
+  defp normalize_allowed_tools(list) when is_list(list), do: list
 
-  defp parse_allowed_tools(string) do
+  defp normalize_allowed_tools(string) when is_binary(string) do
     string
     |> String.split(",")
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
   end
 
-  defp extract_first_paragraph("") do
-    ""
+  defp normalize_allowed_tools(_), do: []
+
+  defp normalize_parameters(params) when is_map(params), do: stringify_keys(params)
+  defp normalize_parameters(_), do: %{}
+
+  defp stringify_keys(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      value =
+        if is_map(value) do
+          stringify_keys(value)
+        else
+          value
+        end
+
+      {to_string(key), value}
+    end)
   end
+
+  defp truthy?(value) when value in [true, "true"], do: true
+  defp truthy?(_), do: false
+
+  defp extract_first_paragraph(""), do: ""
 
   defp extract_first_paragraph(body) do
     body
     |> String.split("\n\n")
     |> List.first()
     |> case do
-      nil ->
-        ""
-
-      para ->
-        para
-        |> String.trim()
-        |> String.slice(0..200)
+      nil -> ""
+      para -> para |> String.trim() |> String.slice(0..200)
     end
   end
 
-  # Check if executable exists in PATH
+  defp parse_yaml_block(lines, indent) do
+    {result, _rest} = do_parse_yaml_block(lines, indent, %{})
+    result
+  end
+
+  defp do_parse_yaml_block([], _indent, acc), do: {acc, []}
+
+  defp do_parse_yaml_block([line | rest], indent, acc) do
+    trimmed = String.trim(line)
+    current_indent = indentation(line)
+
+    cond do
+      trimmed == "" or String.starts_with?(trimmed, "#") ->
+        do_parse_yaml_block(rest, indent, acc)
+
+      current_indent < indent ->
+        {acc, [line | rest]}
+
+      String.starts_with?(trimmed, "- ") ->
+        {acc, [line | rest]}
+
+      true ->
+        case String.split(trimmed, ":", parts: 2) do
+          [key, ""] ->
+            next_line = List.first(rest)
+
+            {value, remaining} =
+              cond do
+                is_nil(next_line) or indentation(next_line) <= current_indent ->
+                  {"", rest}
+
+                String.starts_with?(String.trim(next_line), "- ") ->
+                  parse_yaml_list(rest, current_indent + 2)
+
+                true ->
+                  do_parse_yaml_block(rest, current_indent + 2, %{})
+              end
+
+            do_parse_yaml_block(remaining, indent, Map.put(acc, key, value))
+
+          [key, value] ->
+            do_parse_yaml_block(rest, indent, Map.put(acc, key, parse_scalar(String.trim(value))))
+        end
+    end
+  end
+
+  defp parse_yaml_list(lines, indent), do: do_parse_yaml_list(lines, indent, [])
+
+  defp do_parse_yaml_list([], _indent, acc), do: {Enum.reverse(acc), []}
+
+  defp do_parse_yaml_list([line | rest], indent, acc) do
+    trimmed = String.trim(line)
+    current_indent = indentation(line)
+
+    cond do
+      trimmed == "" ->
+        do_parse_yaml_list(rest, indent, acc)
+
+      current_indent < indent or not String.starts_with?(trimmed, "- ") ->
+        {Enum.reverse(acc), [line | rest]}
+
+      true ->
+        item =
+          trimmed
+          |> String.replace_prefix("- ", "")
+          |> String.trim()
+          |> parse_scalar()
+
+        do_parse_yaml_list(rest, indent, [item | acc])
+    end
+  end
+
+  defp indentation(line) do
+    line
+    |> String.length()
+    |> Kernel.-(String.trim_leading(line) |> String.length())
+  end
+
+  defp parse_scalar("true"), do: true
+  defp parse_scalar("false"), do: false
+  defp parse_scalar("null"), do: nil
+
+  defp parse_scalar(value) do
+    cond do
+      String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
+        case Jason.decode(value) do
+          {:ok, decoded} -> decoded
+          _ -> value
+        end
+
+      true ->
+        case Integer.parse(value) do
+          {int, ""} -> int
+          _ -> value
+        end
+    end
+  end
+
   defp find_executable(bin) do
-    # On Windows, also check .exe, .cmd, .bat
     case :os.type() do
       {:win32, _} ->
-        Enum.any?([bin, "#{bin}.exe", "#{bin}.cmd", "#{bin}.bat"], fn b ->
-          System.find_executable(b) != nil
+        Enum.any?([bin, "#{bin}.exe", "#{bin}.cmd", "#{bin}.bat"], fn candidate ->
+          System.find_executable(candidate) != nil
         end)
 
       _ ->

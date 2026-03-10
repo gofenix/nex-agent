@@ -20,8 +20,6 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
     Nex.Agent.Tool.SkillList,
-    Nex.Agent.Tool.SkillSearch,
-    Nex.Agent.Tool.SkillInstall,
     Nex.Agent.Tool.Evolve,
     Nex.Agent.Tool.Reflect,
     Nex.Agent.Tool.Cron

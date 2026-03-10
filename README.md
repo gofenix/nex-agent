@@ -272,8 +272,6 @@ Default built-in tools:
 - `cron`
 - `spawn_task`
 - `skill_list`
-- `skill_search`
-- `skill_install`
 - `skill_create`
 - `soul_update`
 - `reflect`
@@ -283,26 +281,17 @@ Together, these cover files, shell commands, web access, outbound messaging, mem
 
 ### Skills
 
-Beyond tools, NexAgent has its own skills system.
+Beyond tools, NexAgent has a Markdown-based skills system.
 
-Supported skill types:
-
-- `markdown`
-- `script`
-- `elixir`
-- `mcp`
-
-Skills are not just “more prompt text.” They are reusable ability modules that help the agent:
+Skills are reusable workflow modules that help the agent:
 
 - package workflows
-- gain new capabilities
-- install community skills
-- create reusable new skills for itself
+- standardize recurring tasks
+- create reusable instructions for itself
 
-Two bundled skills are installed by default:
+Skills live in `workspace/skills/<name>/SKILL.md` and are exposed to the model as `skill_<name>` tools.
 
-- `find-skills`
-- `browser-mcp`
+Code-based capabilities belong in the tool system, where Elixir modules implement deterministic behavior through `Tool.Behaviour`.
 
 ## Memory and Sessions
 
@@ -353,7 +342,7 @@ Through `MEMORY.md`, `HISTORY.md`, and daily logs, the agent can keep accumulati
 
 ### Skills and tools
 
-Through `skill_create`, `skill_install`, and dynamic tool registration, the agent can keep expanding what it can do.
+Through `skill_create` and the tool system, the agent can keep expanding what it can do.
 
 ### Code evolution
 

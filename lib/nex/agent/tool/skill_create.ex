@@ -15,12 +15,7 @@ defmodule Nex.Agent.Tool.SkillCreate do
         properties: %{
           name: %{type: "string", description: "Skill name (snake_case)"},
           description: %{type: "string", description: "What this skill does"},
-          content: %{type: "string", description: "Skill content (markdown instructions or script code)"},
-          type: %{
-            type: "string",
-            enum: ["markdown", "script", "elixir"],
-            description: "Skill type: 'markdown' for instructions, 'script' for bash scripts, 'elixir' for Elixir modules"
-          }
+          content: %{type: "string", description: "Markdown skill content"}
         },
         required: ["name", "description", "content"]
       }
@@ -28,21 +23,13 @@ defmodule Nex.Agent.Tool.SkillCreate do
   end
 
   def execute(%{"name" => name, "description" => description, "content" => content} = args, _ctx) do
-    skill_type = case args["type"] do
-      "script" -> "script"
-      "elixir" -> "elixir"
-      _ -> "markdown"
-    end
-
-    content_key = if skill_type in ["script", "elixir"], do: :code, else: :content
-
-    attrs =
-      %{name: name, description: description, type: skill_type}
-      |> Map.put(content_key, content)
-
-    case Skills.create(attrs) do
-      {:ok, _} -> {:ok, "Skill '#{name}' created (type: #{skill_type})."}
-      {:error, reason} -> {:error, "Error creating skill: #{inspect(reason)}"}
+    if Map.has_key?(args, "type") do
+      {:error, "skill_create only supports Markdown skills. Implement code-based capabilities as tools."}
+    else
+      case Skills.create(%{name: name, description: description, content: content}) do
+        {:ok, _} -> {:ok, "Skill '#{name}' created."}
+        {:error, reason} -> {:error, "Error creating skill: #{inspect(reason)}"}
+      end
     end
   end
 

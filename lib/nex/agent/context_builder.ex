@@ -121,11 +121,7 @@ defmodule Nex.Agent.ContextBuilder do
           parts
         end
 
-      parts ++
-        [
-          "# Skills\n\nThe following skills extend your capabilities. To use a skill, read its SKILL.md file using the read tool.\n\n" <>
-            summary
-        ]
+      parts ++ ["# Skills\n\nSkills are Markdown workflow instructions exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code).\n\n" <> summary]
     end
   end
 

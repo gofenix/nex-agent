@@ -18,7 +18,7 @@ defmodule Nex.Agent.Workspace do
     Your workspace is at: ~/.nex/agent/workspace
     - Long-term memory: ~/.nex/agent/workspace/memory/MEMORY.md
     - History log: ~/.nex/agent/workspace/memory/HISTORY.md
-    - Custom skills: ~/.nex/agent/skills/{skill-name}/
+    - Custom skills: ~/.nex/agent/workspace/skills/{skill-name}/SKILL.md
 
     ## Guidelines
     - State intent before tool calls, but NEVER predict results before receiving them.
@@ -31,11 +31,11 @@ defmodule Nex.Agent.Workspace do
 
     System-level instructions that define how the agent operates.
 
-    ## Skills System
+    ## Tools and Skills
 
-    All capabilities are Skills. Skills are divided into two categories:
+    Built-in tools provide deterministic capabilities. Markdown skills provide reusable workflows.
 
-    ### Built-in Skills (Core)
+    ### Built-in Tools
 
     These are always available and cannot be removed:
 
@@ -45,39 +45,34 @@ defmodule Nex.Agent.Workspace do
     - **bash** - Execute shell commands
     - **message** - Send messages to the user
 
-    Additional built-in skills:
+    Additional built-in tools:
     - **web_search** - Search the web for information
     - **web_fetch** - Fetch content from URLs
     - **spawn_task** - Run tasks in parallel
     - **cron** - Schedule tasks
-    - **skill_search** - Search for skills on skills.sh
-    - **skill_install** - Install skills from skills.sh
+    - **memory_search** - Search long-term memory
+    - **skill_list** - Inspect local Markdown skills
     - **skill_create** - Create new skills
 
-    ### Extended Skills (User-installed)
+    ### Markdown Skills
 
-    Skills can be installed from the community or created by the agent:
+    Skills live in `workspace/skills/<name>/SKILL.md`.
 
-    - **Install**: `skill_install("owner/repo/skill-name")` - Install from skills.sh
-    - **Create**: `skill_create(name, type, content)` - Create new skills
-      - `markdown` - Instructions and prompts (injected into context)
-      - `script` - Bash scripts for automation
-      - `elixir` - Full Elixir modules (auto-registered as callable skills)
-      - `mcp` - External service integrations
+    - **Create**: `skill_create(name, description, content)` - Create new Markdown skills
 
-    Extended skills appear with `skill_` prefix (e.g., `skill_explain_code`).
+    Skills appear with the `skill_` prefix (e.g., `skill_explain_code`).
 
-    **Bundled skill**: `find-skills` is pre-installed to help discover other skills. When users ask "how do I do X", use it to search and recommend relevant skills.
+    Code-based capabilities belong in tools, not skills.
 
     ### Evolution
 
     The agent can improve itself:
 
     - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
-    - **Create new skills**: `skill_create()` - Add new capabilities
+    - **Create new skills**: `skill_create()` - Add reusable workflows
     - **Self-modify**: `soul_update()` - Update personality and values
 
-    When creating new capabilities, prefer `skill_create()` over modifying source code.
+    Use `skill_create()` for reusable instructions. Use tools and `evolve()` for code-based capabilities.
 
     ## Guidelines
 
