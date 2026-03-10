@@ -8,7 +8,7 @@ defmodule Nex.Agent.Channel.TelegramTest do
     stop_if_running(Nex.Agent.Channel.Telegram)
     stop_if_running(Nex.Agent.Bus)
 
-    {:ok, _} = Bus.start_link()
+    ensure_started(Nex.Agent.Bus, fn -> Bus.start_link() end)
 
     on_exit(fn ->
       stop_if_running(Nex.Agent.Channel.Telegram)
@@ -119,6 +119,19 @@ defmodule Nex.Agent.Channel.TelegramTest do
         catch
           :exit, _ -> :ok
         end
+    end
+  end
+
+  defp ensure_started(name, start_fun) do
+    case Process.whereis(name) do
+      nil ->
+        case start_fun.() do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
+
+      _pid ->
+        :ok
     end
   end
 end

@@ -139,19 +139,14 @@ defmodule Nex.Agent.Session do
     end
   end
 
-  # Ensure every tool_use has a matching tool_result in the same turn.
-  # Drop orphaned assistant tool_calls and orphaned tool results.
+  # Keep history provider-safe: preserve matched tool pairs, strip orphaned tail fragments.
   defp sanitize_tool_pairs(messages) do
-    # Process sequentially: track pending tool_call_ids per assistant turn
     {result, pending} =
       Enum.reduce(messages, {[], MapSet.new()}, fn m, {acc, pending} ->
         cond do
           m["role"] == "assistant" && is_list(m["tool_calls"]) && m["tool_calls"] != [] ->
-            # New assistant turn with tool_calls.
-            # First, strip any still-pending tool_calls from previous assistant
-            # (they had no matching results). Then set new pending.
             acc = strip_pending_tool_calls(acc, pending)
-            tc_ids = m["tool_calls"] |> Enum.map(&(&1["id"])) |> MapSet.new()
+            tc_ids = m["tool_calls"] |> Enum.map(& &1["id"]) |> MapSet.new()
             {acc ++ [m], tc_ids}
 
           m["role"] == "tool" ->
@@ -160,13 +155,10 @@ defmodule Nex.Agent.Session do
             if tcid && MapSet.member?(pending, tcid) do
               {acc ++ [m], MapSet.delete(pending, tcid)}
             else
-              # Orphaned tool result (nil ID or no matching use) — drop it
               {acc, pending}
             end
 
           m["role"] == "user" || m["role"] == "assistant" ->
-            # New turn. If there are still pending tool_call_ids,
-            # strip them from the last assistant message.
             acc = strip_pending_tool_calls(acc, pending)
             {acc ++ [m], MapSet.new()}
 
@@ -175,18 +167,17 @@ defmodule Nex.Agent.Session do
         end
       end)
 
-    # Strip any remaining orphaned tool_calls at the end of history
     strip_pending_tool_calls(result, pending)
   end
 
-  # Remove unmatched tool_call entries from the last assistant message
   defp strip_pending_tool_calls(messages, pending) do
     if MapSet.size(pending) == 0 do
       messages
     else
-      Logger.warning("[Session] Stripping #{MapSet.size(pending)} orphaned tool_call(s): #{inspect(MapSet.to_list(pending))}")
+      Logger.warning(
+        "[Session] Stripping #{MapSet.size(pending)} orphaned tool_call(s): #{inspect(MapSet.to_list(pending))}"
+      )
 
-      # Find the last assistant message with tool_calls and strip orphaned ones
       {rev_before, rev_after} =
         messages
         |> Enum.reverse()

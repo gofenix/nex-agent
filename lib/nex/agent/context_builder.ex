@@ -197,14 +197,14 @@ defmodule Nex.Agent.ContextBuilder do
         ) :: [message()]
   def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil, opts \\ []) do
     runtime_ctx = build_runtime_context(channel, chat_id)
+    workspace = Keyword.get(opts, :workspace, default_workspace())
     skip_memory_search = Keyword.get(opts, :skip_skills, false)
-
-    memory_ctx =
-      if skip_memory_search, do: "", else: build_memory_context(current_message)
-
-    # Append runtime context + memory to system prompt, not user message
     system_prompt = build_system_prompt(opts)
 
+    memory_ctx =
+      if skip_memory_search, do: "", else: build_memory_context(current_message, workspace)
+
+    # Append runtime context + memory to system prompt, not user message
     system_suffix =
       [runtime_ctx, memory_ctx]
       |> Enum.reject(&(&1 == ""))
@@ -223,15 +223,31 @@ defmodule Nex.Agent.ContextBuilder do
     |> List.flatten()
   end
 
-  defp build_memory_context(prompt) do
+  defp build_memory_context(prompt, workspace) do
     case Process.whereis(Nex.Agent.Memory.Index) do
       nil ->
         ""
 
       _pid ->
+        {long_term_present?, long_term_truncated?} =
+          case File.read(Path.join(workspace, "memory/MEMORY.md")) do
+            {:ok, content} ->
+              trimmed = String.trim(content)
+              {trimmed != "", byte_size(trimmed) > @max_memory_prompt_bytes}
+
+            _ ->
+              {false, false}
+          end
+
         results = Nex.Agent.Memory.Index.search(prompt, limit: 3)
 
-        relevant = Enum.filter(results, &(&1[:score] > 1.0))
+        relevant =
+          results
+          |> Enum.filter(&(&1[:score] > 0))
+          |> Enum.reject(fn r ->
+            long_term_present? and not long_term_truncated? and
+              (r[:source] == :memory or r[:source] == "memory")
+          end)
 
         if relevant == [] do
           ""

@@ -112,6 +112,7 @@ defmodule Nex.Agent.Runner do
           tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
           if finish_reason == "error" do
+            # Nanobot parity: keep the user turn, but never persist the assistant error response.
             Logger.error("[Runner] LLM returned error finish_reason")
             iter_total = System.monotonic_time(:millisecond) - iter_start
             Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ===")
@@ -631,8 +632,13 @@ defmodule Nex.Agent.Runner do
     end
   end
 
+  defp parse_args([head | _rest]) when is_map(head), do: head
+  defp parse_args([]), do: %{}
   defp parse_args(args) when is_map(args), do: args
   defp parse_args(_), do: %{}
+
+  @doc false
+  def parse_tool_arguments(args), do: parse_args(args)
 
   defp execute_tool(tool_name, args, ctx) do
     if Process.whereis(ToolRegistry) do

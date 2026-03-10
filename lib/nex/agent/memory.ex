@@ -241,7 +241,40 @@ defmodule Nex.Agent.Memory do
   # BM25 scoring (simplified fallback when Index is unavailable)
 
   defp fallback_search(query, limit) do
-    read_all_entries()
+    daily_entries =
+      read_all_entries()
+      |> Enum.map(fn entry ->
+        %{
+          task: entry.task,
+          body: entry.body,
+          result: entry.result,
+          source: :daily
+        }
+      end)
+
+    memory_entries =
+      read_memory_sections()
+      |> Enum.map(fn section ->
+        %{
+          task: section.header,
+          body: section.content,
+          result: "",
+          source: :memory
+        }
+      end)
+
+    history_entries =
+      read_history()
+      |> Enum.map(fn entry ->
+        %{
+          task: "",
+          body: entry.content,
+          result: "",
+          source: :history
+        }
+      end)
+
+    (daily_entries ++ memory_entries ++ history_entries)
     |> Enum.map(&score_entry(&1, query))
     |> Enum.filter(&(&1.score > 0))
     |> Enum.sort_by(& &1.score, :desc)
@@ -270,7 +303,7 @@ defmodule Nex.Agent.Memory do
         end
       end)
 
-    %{entry: entry, score: score}
+    Map.merge(entry, %{score: score})
   end
 
   @doc """
@@ -295,6 +328,7 @@ defmodule Nex.Agent.Memory do
     init()
     memory_file = Path.join(@memory_dir, "MEMORY.md")
     File.write!(memory_file, content)
+    refresh_index()
     :ok
   end
 
@@ -302,40 +336,32 @@ defmodule Nex.Agent.Memory do
   Append to HISTORY.md (grep-searchable log)
   """
   @spec append_history(String.t()) :: :ok
+  def append_history(entry) do
+    init()
+    history_file = Path.join(@memory_dir, "HISTORY.md")
+    formatted = String.trim_trailing(entry) <> "\n\n"
+    File.write!(history_file, formatted, [:append])
+    refresh_index()
+  end
+
   @doc """
   Store arbitrary data in memory (used by SubAgent evolution, etc.)
   """
   @spec store(map()) :: :ok
   def store(data) when is_map(data) do
     init()
-    
-    today = Date.utc_today() |> Date.to_string()
-    date_dir = Path.join(@memory_dir, today)
-    File.mkdir_p!(date_dir)
-    
-    file_path = Path.join(date_dir, "log.md")
+
     timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    
-    entry = Map.merge(data, %{
-      "_stored_at" => timestamp,
-      "_type" => Map.get(data, :type, "generic")
-    })
-    
-    # Append to today's log with special marker
-    content = "## STORE: #{data[:type] || "data"}\n#{Jason.encode!(entry)}\n\n"
-    File.write!(file_path, content, [:append])
-    
+
+    entry =
+      Map.merge(data, %{
+        "_stored_at" => timestamp,
+        "_type" => Map.get(data, :type, "generic")
+      })
+
+    append("STORE #{Map.get(data, :type, "generic")}", "STORED", entry)
+    refresh_index()
     :ok
-  end
-  
-  def append_history(entry) do
-    init()
-    history_file = Path.join(@memory_dir, "HISTORY.md")
-
-    timestamp = DateTime.utc_now() |> DateTime.to_string() |> String.slice(0..15)
-    formatted = "[#{timestamp}] #{entry}\n\n"
-
-    File.write!(history_file, formatted, [:append])
   end
 
   @doc """
@@ -391,18 +417,36 @@ defmodule Nex.Agent.Memory do
     memory_file = Path.join(@memory_dir, "MEMORY.md")
 
     if File.exists?(memory_file) do
-      File.read!(memory_file)
-      |> String.split(~r/(?=^## )/m, trim: true)
-      |> Enum.filter(&String.starts_with?(&1, "## "))
-      |> Enum.map(fn section ->
-        [first_line | rest] = String.split(section, "\n", parts: 2)
-        <<"## ", header_rest::binary>> = first_line
-        header = String.trim(header_rest)
-        content = if rest == [], do: "", else: hd(rest) |> String.trim()
-        %{header: header, content: content}
-      end)
+      content = File.read!(memory_file) |> String.trim()
+
+      cond do
+        content == "" ->
+          []
+
+        String.starts_with?(content, "## ") ->
+          content
+          |> String.split(~r/(?=^## )/m, trim: true)
+          |> Enum.filter(&String.starts_with?(&1, "## "))
+          |> Enum.map(fn section ->
+            [first_line | rest] = String.split(section, "\n", parts: 2)
+            <<"## ", header_rest::binary>> = first_line
+            header = String.trim(header_rest)
+            body = if rest == [], do: "", else: hd(rest) |> String.trim()
+            %{header: header, content: body}
+          end)
+
+        true ->
+          [%{header: "General", content: content}]
+      end
     else
       []
+    end
+  end
+
+  defp refresh_index do
+    case Process.whereis(Nex.Agent.Memory.Index) do
+      nil -> :ok
+      _pid -> Nex.Agent.Memory.Index.rebuild()
     end
   end
 
@@ -540,7 +584,9 @@ defmodule Nex.Agent.Memory do
         tool_choice: tool_choice_for(provider, "save_memory")
       ]
 
-      case Nex.Agent.Runner.call_llm_for_consolidation(consolidation_messages, llm_opts) do
+      llm_call_fun = Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
+
+      case llm_call_fun.(consolidation_messages, llm_opts) do
         {:ok, result} when is_map(result) and map_size(result) > 0 ->
           handle_consolidation_result(result, session, messages, keep_count, current_memory)
 
@@ -557,23 +603,21 @@ defmodule Nex.Agent.Memory do
   defp handle_consolidation_result(result, session, messages, keep_count, current_memory) do
     require Logger
 
-    history_entry = Map.get(result, "history_entry")
-    memory_update = Map.get(result, "memory_update")
+    history_entry = normalize_consolidation_text(Map.get(result, "history_entry"))
+    memory_update = normalize_consolidation_text(Map.get(result, "memory_update"))
     user_preferences = Map.get(result, "user_preferences")
 
     cond do
-      not is_binary(history_entry) or String.trim(history_entry) == "" ->
-        Logger.debug("[Memory] Consolidation skipped: missing history_entry")
-        {:ok, session}
-
-      not is_binary(memory_update) ->
-        Logger.debug("[Memory] Consolidation skipped: missing memory_update")
+      is_nil(history_entry) and is_nil(memory_update) ->
+        Logger.debug("[Memory] Consolidation skipped: missing usable history_entry and memory_update")
         {:ok, session}
 
       true ->
-        append_history(history_entry)
+        if history_entry do
+          append_history(history_entry)
+        end
 
-        if memory_update != current_memory && memory_update != "" do
+        if memory_update && memory_update != current_memory && memory_update != "" do
           write_long_term(memory_update)
         end
 
@@ -597,6 +641,25 @@ defmodule Nex.Agent.Memory do
         Logger.info("[Memory] Consolidation done, last_consolidated=#{new_last_consolidated}")
         {:ok, updated_session}
     end
+  end
+
+  defp normalize_consolidation_text(nil), do: nil
+
+  defp normalize_consolidation_text(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp normalize_consolidation_text(value) when is_map(value) or is_list(value) do
+    value
+    |> Jason.encode!(pretty: false)
+    |> normalize_consolidation_text()
+  end
+
+  defp normalize_consolidation_text(value) do
+    value
+    |> to_string()
+    |> normalize_consolidation_text()
   end
 
   defp tool_choice_for(:anthropic, name),

@@ -100,6 +100,7 @@ defmodule Nex.Agent do
       ]
       |> maybe_put(:on_progress, on_progress)
       |> maybe_put(:tools_filter, tools_filter)
+      |> maybe_put(:llm_client, Keyword.get(opts, :llm_client))
       |> maybe_put(:history_limit, Keyword.get(opts, :history_limit))
       |> maybe_put(:skip_consolidation, Keyword.get(opts, :skip_consolidation))
       |> maybe_put(:skip_skills, Keyword.get(opts, :skip_skills))
