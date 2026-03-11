@@ -5,7 +5,6 @@ defmodule Nex.Agent.ContextBuilder do
 
   alias Nex.Agent.Skills
 
-  @identity_file "IDENTITY.md"
   @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
   @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
 
@@ -21,13 +20,14 @@ defmodule Nex.Agent.ContextBuilder do
 
     parts =
       []
-      |> add_identity(workspace)
+      |> add_identity()
       |> add_runtime_guidance(workspace)
       |> load_bootstrap_files(workspace)
       |> add_memory(workspace)
       |> then(fn parts ->
         if skip_skills, do: parts, else: add_skills(parts)
       end)
+      |> add_identity_guard()
 
     Enum.join(parts, "\n\n---\n\n")
   end
@@ -36,23 +36,8 @@ defmodule Nex.Agent.ContextBuilder do
     Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
   end
 
-  defp add_identity(parts, workspace) do
-    identity =
-      workspace
-      |> Path.join(@identity_file)
-      |> File.read()
-      |> case do
-        {:ok, content} ->
-          case String.trim(content) do
-            "" -> default_identity()
-            trimmed -> trimmed
-          end
-
-        {:error, _} ->
-          default_identity()
-      end
-
-    parts ++ [identity]
+  defp add_identity(parts) do
+    parts ++ [default_identity()]
   end
 
   defp add_runtime_guidance(parts, workspace) do
@@ -155,6 +140,13 @@ defmodule Nex.Agent.ContextBuilder do
             summary
         ]
     end
+  end
+
+  defp add_identity_guard(parts) do
+    parts ++
+      [
+        "# Identity\n\nYou are Nex Agent. References to other systems or agents (for example: nanobot, Claude, GPT, Copilot) are comparative context only, never your identity. Never claim to be any product/agent other than Nex Agent."
+      ]
   end
 
   @doc """

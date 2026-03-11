@@ -2,6 +2,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
   @moduledoc false
 
   @behaviour Nex.Agent.LLM.Behaviour
+  require Logger
 
   alias ReqLLM.Context
   alias ReqLLM.Message.ContentPart
@@ -154,15 +155,60 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp transform_tools(tools) do
-    Enum.map(tools, fn tool ->
+    tools
+    |> Enum.map(&normalize_tool_definition/1)
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn %{name: name, description: description, parameter_schema: parameter_schema} ->
       Tool.new!(
-        name: tool["name"],
-        description: tool["description"] || "",
-        parameter_schema: tool["input_schema"] || %{},
+        name: name,
+        description: description,
+        parameter_schema: parameter_schema,
         callback: fn _args -> {:ok, "Tool execution is handled by NexAgent"} end
       )
     end)
   end
+
+  defp normalize_tool_definition(tool) when is_map(tool) do
+    function = Map.get(tool, "function") || Map.get(tool, :function) || %{}
+
+    name =
+      Map.get(tool, "name") ||
+        Map.get(tool, :name) ||
+        Map.get(function, "name") ||
+        Map.get(function, :name)
+
+    description =
+      Map.get(tool, "description") ||
+        Map.get(tool, :description) ||
+        Map.get(function, "description") ||
+        Map.get(function, :description) || ""
+
+    parameter_schema =
+      Map.get(tool, "input_schema") ||
+        Map.get(tool, :input_schema) ||
+        Map.get(tool, "parameters") ||
+        Map.get(tool, :parameters) ||
+        Map.get(function, "input_schema") ||
+        Map.get(function, :input_schema) ||
+        Map.get(function, "parameters") ||
+        Map.get(function, :parameters) || %{}
+
+    if is_binary(name) and name != "" do
+      %{
+        name: name,
+        description: to_string(description),
+        parameter_schema: normalize_parameter_schema(parameter_schema)
+      }
+    else
+      Logger.warning("[ReqLLM] Dropping invalid tool definition (missing name): #{inspect(tool)}")
+      nil
+    end
+  end
+
+  defp normalize_tool_definition(_), do: nil
+
+  defp normalize_parameter_schema(schema) when is_map(schema), do: schema
+  defp normalize_parameter_schema(_), do: %{}
 
   defp resolve_provider(options) do
     case Keyword.get(options, :provider, :anthropic) do

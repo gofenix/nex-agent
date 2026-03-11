@@ -8,6 +8,8 @@ defmodule Nex.Agent.Onboarding do
   require Logger
 
   @default_base_dir Path.join(System.get_env("HOME", "~"), ".nex/agent")
+  @agents_managed_key "AGENTS_MANAGED_V1"
+  @tools_managed_key "TOOLS_MANAGED_V1"
 
   defp base_dir do
     Application.get_env(:nex_agent, :agent_base_dir, @default_base_dir)
@@ -125,13 +127,21 @@ defmodule Nex.Agent.Onboarding do
   defp init_workspace_templates do
     w = workspace_dir()
 
+    managed_templates = [
+      {Path.join(w, "AGENTS.md"), @agents_managed_key, agents_template()},
+      {Path.join(w, "TOOLS.md"), @tools_managed_key, tools_template()}
+    ]
+
     templates = [
-      {Path.join(w, "AGENTS.md"), agents_template()},
       {Path.join(w, "SOUL.md"), soul_template()},
       {Path.join(w, "USER.md"), user_template()},
       {Path.join(w, "memory/MEMORY.md"), memory_template()},
       {Path.join(w, "memory/HISTORY.md"), history_template()}
     ]
+
+    Enum.each(managed_templates, fn {path, key, content} ->
+      merge_managed_template(path, key, content)
+    end)
 
     Enum.each(templates, fn {path, content} ->
       unless File.exists?(path) do
@@ -140,6 +150,28 @@ defmodule Nex.Agent.Onboarding do
     end)
 
     init_bundled_skills(w)
+  end
+
+  defp merge_managed_template(path, key, content) do
+    begin_marker = "<!-- BEGIN NEX:#{key} -->"
+    end_marker = "<!-- END NEX:#{key} -->"
+    managed_block = [begin_marker, String.trim(content), end_marker] |> Enum.join("\n")
+
+    merged =
+      case File.read(path) do
+        {:ok, existing} ->
+          if String.contains?(existing, begin_marker) and String.contains?(existing, end_marker) do
+            pattern = ~r/#{Regex.escape(begin_marker)}[\s\S]*?#{Regex.escape(end_marker)}\n?/
+            Regex.replace(pattern, existing, managed_block)
+          else
+            String.trim_trailing(existing) <> "\n\n" <> managed_block <> "\n"
+          end
+
+        {:error, _} ->
+          managed_block <> "\n"
+      end
+
+    File.write!(path, merged)
   end
 
   defp init_bundled_skills(workspace) do
@@ -208,73 +240,105 @@ defmodule Nex.Agent.Onboarding do
 
   defp agents_template do
     """
-    # Agent Instructions
+    # AGENTS
 
-    System-level instructions that define how the agent operates.
+    System-level instructions loaded into the model context each run.
 
-    ## Tools and Skills
+    ## Identity
 
-    Built-in tools provide deterministic capabilities. Workspace tools add reusable Elixir capabilities. Markdown skills provide reusable workflows.
+    - You are **Nex Agent**.
+    - Never claim to be another agent/product.
+    - Mentions of other agents are comparative context only, never identity.
 
-    ### Built-in Tools
+    ## Workspace
 
-    These are always available and cannot be removed:
+    - Workspace root: `~/.nex/agent/workspace`
+    - Memory: `workspace/memory/MEMORY.md`
+    - History: `workspace/memory/HISTORY.md` (grep-friendly, each entry starts with `[YYYY-MM-DD HH:MM]`)
+    - Skills: `workspace/skills/<name>/SKILL.md`
+    - Workspace tools: `workspace/tools/<name>/`
+    - Sessions: `workspace/sessions/`
 
-    - **read** - Read files from the filesystem
-    - **write** - Create or overwrite files
-    - **edit** - Make precise edits to existing files
-    - **bash** - Execute shell commands
-    - **message** - Send messages to the user
+    ## Prompt Composition
 
-    Additional built-in tools:
-    - **web_search** - Search the web for information
-    - **web_fetch** - Fetch content from URLs
-    - **spawn_task** - Run tasks in parallel
-    - **cron** - Schedule tasks
-    - **memory_search** - Search long-term memory
-    - **skill_list** - Inspect local Markdown skills
-    - **skill_create** - Create local Markdown skills
-    - **tool_create** - Create workspace custom Elixir tools
-    - **tool_list** - Inspect built-in and custom tools
-    - **tool_delete** - Delete workspace custom tools
+    The runtime system prompt is assembled from:
 
-    ### Workspace Tools
+    1. Core identity and runtime guidance
+    2. Bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`)
+    3. Long-term memory context
+    4. Active skills
 
-    Custom Elixir tools live under `workspace/tools/<name>/`.
+    Keep this file concise, stable, and system-level.
 
-    - **Create**: `tool_create(name, description, content)` - Add a workspace custom tool
-    - **Inspect**: `tool_list(scope, detail)` - View built-in and custom tools
-    - **Delete**: `tool_delete(name)` - Remove a custom tool
+    ## Operating Rules
 
-    ### Markdown Skills
+    - State intent before tool calls.
+    - Never claim tool results before receiving actual outputs.
+    - Read before edit; do not assume file existence.
+    - After write/edit, re-read critical files when accuracy matters.
+    - If tool calls fail, analyze and retry with a different approach.
+    - Ask clarifying questions only when ambiguity blocks safe execution.
+    - Treat successful `.ex` changes as hot-updated by default.
+    - Only suggest restart when runtime/tools explicitly indicate it.
+    - Do not infer restart necessity from uptime/process age.
+    - Current invocation may still run old code; next invocation should observe new code.
 
-    Skills live under `workspace/skills/<name>/SKILL.md`.
+    ## Capabilities
 
-    - **Create**: `skill_create(name, description, content)` - Add a reusable workflow
-    - **Use**: skills appear with the `skill_` prefix (e.g. `skill_explain_code`)
+    - Built-in tools: file IO, shell, web, messaging, scheduling, reflection/evolution.
+    - Workspace custom tools: create/list/delete under `workspace/tools/`.
+    - Markdown skills: create/list and invoke via `skill_<name>`.
 
-    Code-based capabilities belong in built-in tools or workspace tools, not skills.
+    Prefer Markdown skills for reusable instruction workflows.
+    Prefer tools/evolution for code-level capabilities.
 
-    ### Evolution
+    ## Evolution and Safety
 
-    The agent can improve itself:
+    - Use `reflect` before high-impact `evolve` changes.
+    - Keep changes small, testable, and reversible.
+    - Respect security boundaries; do not execute dangerous shell patterns.
+    - Preserve evidence: report what was changed and what was verified.
 
-    - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
-    - **Create new Markdown skills**: `skill_create()` - Add reusable workflows
-    - **Create new workspace tools**: `tool_create()` - Add reusable Elixir capabilities when explicitly requested
-    - **Self-modify**: `soul_update()` - Update personality and values
+    ## Verification Checklist
 
-    Use `skill_create()` for instructions. Use tools and `evolve()` for code-based capabilities.
+    After meaningful code changes, run:
 
-    ## Guidelines
+    - `mix format --check-formatted`
+    - `mix credo --strict`
+    - `mix dialyzer`
 
-    - Be clear and direct in responses
-    - Explain reasoning when helpful
-    - Ask clarifying questions when needed
-    - State intent before tool calls, but never predict results before receiving them
-    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
-    - Do not infer restarts from process age or uptime.
-    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
+    If any check fails, fix root causes before claiming completion.
+    """
+  end
+
+  defp tools_template do
+    """
+    # TOOLS
+
+    Tool reference for the runtime prompt.
+
+    ## Built-in Tool Families
+
+    - File operations: `read`, `write`, `edit`, `list_dir`
+    - Shell and execution: `bash`
+    - Communication: `message`
+    - Web and retrieval: `web_search`, `web_fetch`
+    - Scheduling and background work: `cron`, `spawn_task`
+    - Skills and custom capabilities: `skill_list`, `skill_create`, `tool_list`, `tool_create`, `tool_delete`
+    - Self-improvement: `reflect`, `evolve`, `soul_update`
+
+    ## Usage Principles
+
+    - Prefer deterministic tools over free-form reasoning when possible.
+    - Use the smallest tool that can solve the task.
+    - Validate tool outputs before taking follow-up actions.
+    - For code changes, pair tool execution with verification checks.
+
+    ## Workspace Extension Model
+
+    - Workspace tools are Elixir modules under `workspace/tools/<name>/`.
+    - Skills are Markdown workflows under `workspace/skills/<name>/SKILL.md`.
+    - Use tools for executable capabilities; use skills for reusable guidance.
     """
   end
 
@@ -282,7 +346,7 @@ defmodule Nex.Agent.Onboarding do
     """
     # Soul
 
-    I am a personal AI assistant.
+    I am Nex Agent, a personal AI assistant.
 
     ## Personality
 
