@@ -178,7 +178,7 @@ defmodule Mix.Tasks.Nex.Agent do
   defp acquire_gateway_lock do
     config = Nex.Agent.Config.load()
     gateway = config.gateway || %{}
-    port = Map.get(gateway, "port", 18790)
+    port = Map.get(gateway, "port", 18_790)
 
     :gen_tcp.listen(port, [
       :binary,

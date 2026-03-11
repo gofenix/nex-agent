@@ -40,11 +40,10 @@ defmodule Nex.Agent.Tool.Reflect do
 
     formatted =
       modules
-      |> Enum.map(fn m ->
+      |> Enum.map_join("\n", fn m ->
         name = m |> to_string() |> String.replace_prefix("Elixir.", "")
         if CustomTools.custom_module?(m), do: "- #{name} (custom tool)", else: "- #{name}"
       end)
-      |> Enum.join("\n")
 
     {:ok, "Evolvable modules (#{length(modules)}):\n#{formatted}"}
   end
@@ -69,10 +68,9 @@ defmodule Nex.Agent.Tool.Reflect do
       {:ok, "No evolution history for #{module_str}"}
     else
       formatted =
-        Enum.map(versions, fn v ->
+        Enum.map_join(versions, "\n", fn v ->
           "- #{v.id} (#{v.timestamp})"
         end)
-        |> Enum.join("\n")
 
       {:ok, "Versions for #{module_str}:\n#{formatted}"}
     end

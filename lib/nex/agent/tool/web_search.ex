@@ -96,13 +96,12 @@ defmodule Nex.Agent.Tool.WebSearch do
     results = web_results["results"] || []
 
     formatted =
-      Enum.map(results, fn r ->
+      Enum.map_join(results, "\n---\n", fn r ->
         title = r["title"] || ""
         url = r["url"] || ""
         desc = r["description"] || ""
         "#{title}\n#{url}\n#{desc}\n"
       end)
-      |> Enum.join("\n---\n")
 
     if formatted == "" do
       "No results found."

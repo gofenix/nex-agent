@@ -59,10 +59,9 @@ defmodule Nex.Agent.Tool.SkillList do
 
     formatted =
       skills
-      |> Enum.map(fn skill ->
+      |> Enum.map_join("\n", fn skill ->
         "- #{skill.name}: #{skill.description}"
       end)
-      |> Enum.join("\n")
 
     {:ok,
      %{

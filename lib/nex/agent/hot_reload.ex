@@ -32,20 +32,18 @@ defmodule Nex.Agent.HotReload do
   end
 
   defp compile_and_load(_path, content, module_str, expected_module) do
-    try do
-      quoted = Code.string_to_quoted!(content)
-      compiled = Code.compile_quoted(quoted)
+    quoted = Code.string_to_quoted!(content)
+    compiled = Code.compile_quoted(quoted)
 
-      case pick_compiled_module(compiled, expected_module) do
-        {:ok, {module, _binary}} ->
-          success(module, maybe_hot_swap(module))
+    case pick_compiled_module(compiled, expected_module) do
+      {:ok, {module, _binary}} ->
+        success(module, maybe_hot_swap(module))
 
-        {:error, reason} ->
-          failure(module_str, reason)
-      end
-    rescue
-      e -> failure(module_str, Exception.message(e))
+      {:error, reason} ->
+        failure(module_str, reason)
     end
+  rescue
+    e -> failure(module_str, Exception.message(e))
   end
 
   defp pick_compiled_module(compiled, expected_module) do

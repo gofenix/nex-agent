@@ -1,9 +1,9 @@
 defmodule Nex.Agent do
   alias Nex.Agent.{
-    SessionManager,
-    Session,
-    Runner,
     Onboarding,
+    Runner,
+    Session,
+    SessionManager,
     Skills
   }
 

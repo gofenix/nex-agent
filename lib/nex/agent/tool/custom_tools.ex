@@ -223,23 +223,21 @@ defmodule Nex.Agent.Tool.CustomTools do
   end
 
   defp compile_module(path, code) do
-    try do
-      quoted = Code.string_to_quoted!(code)
-      compiled = Code.compile_quoted(quoted, path)
+    quoted = Code.string_to_quoted!(code)
+    compiled = Code.compile_quoted(quoted, path)
 
-      case compiled do
-        [{module, binary} | _] ->
-          :code.purge(module)
-          :code.delete(module)
-          {:module, _} = :code.load_binary(module, String.to_charlist(path), binary)
-          {:ok, module}
+    case compiled do
+      [{module, binary} | _] ->
+        :code.purge(module)
+        :code.delete(module)
+        {:module, _} = :code.load_binary(module, String.to_charlist(path), binary)
+        {:ok, module}
 
-        _ ->
-          {:error, "Tool source did not compile to a module"}
-      end
-    rescue
-      e -> {:error, Exception.message(e)}
+      _ ->
+        {:error, "Tool source did not compile to a module"}
     end
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   defp validate_loaded_tool(module, expected_name) do

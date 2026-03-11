@@ -42,12 +42,10 @@ defmodule Nex.Agent.Channel.Feishu.Frame do
   @doc "Decode a binary Protobuf frame."
   @spec decode(binary()) :: {:ok, t()} | {:error, term()}
   def decode(binary) when is_binary(binary) do
-    try do
-      frame = decode_frame(binary)
-      {:ok, frame}
-    rescue
-      e -> {:error, e}
-    end
+    frame = decode_frame(binary)
+    {:ok, frame}
+  rescue
+    e -> {:error, e}
   end
 
   @doc "Encode a frame struct to binary Protobuf."

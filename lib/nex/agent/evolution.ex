@@ -298,17 +298,15 @@ defmodule Nex.Agent.Evolution do
   defp maybe_health_check(false, _module), do: :ok
 
   defp maybe_health_check(true, module) do
-    try do
-      info = module.__info__(:functions)
+    info = module.__info__(:functions)
 
-      if is_list(info) do
-        :ok
-      else
-        {:error, "Health check failed: module interface incomplete"}
-      end
-    rescue
-      e -> {:error, "Health check failed: #{Exception.message(e)}"}
+    if is_list(info) do
+      :ok
+    else
+      {:error, "Health check failed: module interface incomplete"}
     end
+  rescue
+    e -> {:error, "Health check failed: #{Exception.message(e)}"}
   end
 
   defp compile_and_load(module, code) do

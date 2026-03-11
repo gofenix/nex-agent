@@ -192,7 +192,7 @@ defmodule Nex.Agent.Channel.Discord do
         op: 2,
         d: %{
           token: state.token,
-          intents: 33281,
+          intents: 33_281,
           properties: %{
             os: "linux",
             browser: "nex_agent",
@@ -350,12 +350,12 @@ defmodule Nex.Agent.Channel.Discord do
          function_exported?(:websocket_client, :start_link, 4) do
       _pid =
         spawn_link(fn ->
-          case apply(:websocket_client, :start_link, [
+          case :websocket_client.start_link(
                  String.to_charlist(@gateway_url),
                  __MODULE__.WsHandler,
                  [parent: parent],
                  []
-               ]) do
+               ) do
             {:ok, ws_pid} ->
               send(parent, {:ws_connected, ws_pid})
               ref = Process.monitor(ws_pid)
@@ -381,23 +381,18 @@ defmodule Nex.Agent.Channel.Discord do
   defp send_ws(nil, _payload), do: :ok
 
   defp send_ws(ws_pid, payload) do
-    try do
-      send(ws_pid, {:send, Jason.encode!(payload)})
-    rescue
-      _ -> :ok
-    end
+    send(ws_pid, {:send, Jason.encode!(payload)})
+  rescue
+    _ -> :ok
   end
 
   defp close_ws(%{ws_pid: nil} = state), do: state
 
   defp close_ws(%{ws_pid: pid} = state) do
-    try do
-      Process.exit(pid, :shutdown)
-    rescue
-      _ -> :ok
-    end
-
+    _ = Process.exit(pid, :shutdown)
     cancel_heartbeat(%{state | ws_pid: nil, ws_ref: nil})
+  rescue
+    _ -> cancel_heartbeat(%{state | ws_pid: nil, ws_ref: nil})
   end
 
   defp cancel_heartbeat(%{heartbeat_timer: nil} = state), do: state

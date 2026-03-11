@@ -3,10 +3,10 @@ defmodule Nex.Agent.Runner do
 
   alias Nex.Agent.{
     Bus,
-    Session,
     ContextBuilder,
-    Skills,
-    Memory
+    Memory,
+    Session,
+    Skills
   }
 
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
@@ -776,7 +776,7 @@ defmodule Nex.Agent.Runner do
   defp extract_tool_call(response) do
     tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
-    if tool_calls && length(tool_calls) > 0 do
+    if is_list(tool_calls) and tool_calls != [] do
       tc = List.first(tool_calls)
       func = Map.get(tc, :function) || Map.get(tc, "function") || %{}
 

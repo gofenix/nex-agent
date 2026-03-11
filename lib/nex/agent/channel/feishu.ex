@@ -388,8 +388,7 @@ defmodule Nex.Agent.Channel.Feishu do
       if map_size(fragments) >= sum do
         merged =
           0..(sum - 1)
-          |> Enum.map(&Map.get(fragments, &1, <<>>))
-          |> Enum.join()
+          |> Enum.map_join(&Map.get(fragments, &1, <<>>))
 
         state = %{
           state

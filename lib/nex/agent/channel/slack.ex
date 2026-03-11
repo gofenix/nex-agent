@@ -344,23 +344,18 @@ defmodule Nex.Agent.Channel.Slack do
   defp send_ws(nil, _payload), do: :ok
 
   defp send_ws(ws_pid, payload) do
-    try do
-      send(ws_pid, {:send, Jason.encode!(payload)})
-    rescue
-      _ -> :ok
-    end
+    send(ws_pid, {:send, Jason.encode!(payload)})
+  rescue
+    _ -> :ok
   end
 
   defp close_ws(%{ws_pid: nil} = state), do: state
 
   defp close_ws(%{ws_pid: pid} = state) do
-    try do
-      Process.exit(pid, :shutdown)
-    rescue
-      _ -> :ok
-    end
-
+    _ = Process.exit(pid, :shutdown)
     cancel_ping(%{state | ws_pid: nil, ws_ref: nil})
+  rescue
+    _ -> cancel_ping(%{state | ws_pid: nil, ws_ref: nil})
   end
 
   defp cancel_ping(%{ping_timer: nil} = state), do: state

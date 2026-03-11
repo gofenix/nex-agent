@@ -635,7 +635,7 @@ defmodule Nex.Agent.Config do
 
   defp default_gateway do
     %{
-      "port" => 18790
+      "port" => 18_790
     }
   end
 
