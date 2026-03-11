@@ -762,7 +762,7 @@ defmodule Nex.Agent.Runner do
       {:ok, response} ->
         extract_tool_call(response)
 
-      {:error, %{status: 400} = err} when tool_choice != nil ->
+      {:error, err} when tool_choice != nil ->
         err_msg = err |> inspect() |> String.downcase()
 
         if String.contains?(err_msg, "tool_choice") do

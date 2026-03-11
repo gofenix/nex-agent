@@ -305,8 +305,8 @@ defmodule Nex.Agent.Memory do
   defp workspace_opts(nil), do: []
   defp workspace_opts(workspace), do: [workspace: workspace]
 
-  defp tool_choice_for(:anthropic, name), do: %{"type" => "tool", "name" => name}
+  defp tool_choice_for(:anthropic, name), do: %{type: "tool", name: name}
 
   defp tool_choice_for(_provider, name),
-    do: %{"type" => "function", "function" => %{"name" => name}}
+    do: %{type: "function", function: %{name: name}}
 end
