@@ -6,6 +6,7 @@ defmodule Nex.Agent.ContextBuilder do
 
   alias Nex.Agent.Skills
 
+  @identity_file "IDENTITY.md"
   @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
   @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
 
@@ -22,6 +23,7 @@ defmodule Nex.Agent.ContextBuilder do
     parts =
       []
       |> add_identity(workspace)
+      |> add_runtime_guidance(workspace)
       |> load_bootstrap_files(workspace)
       |> add_memory(workspace)
       |> then(fn parts ->
@@ -36,16 +38,31 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp add_identity(parts, workspace) do
+    identity =
+      workspace
+      |> Path.join(@identity_file)
+      |> File.read()
+      |> case do
+        {:ok, content} ->
+          case String.trim(content) do
+            "" -> default_identity()
+            trimmed -> trimmed
+          end
+
+        {:error, _} ->
+          default_identity()
+      end
+
+    parts ++ [identity]
+  end
+
+  defp add_runtime_guidance(parts, workspace) do
     workspace_path = Path.expand(workspace)
     system = :os.type() |> elem(0) |> to_string()
     arch = :os.type() |> elem(1) |> to_string()
     runtime = "#{system} #{arch}, Elixir #{System.version()}"
 
-    identity = """
-    # nanobot
-
-    You are nanobot, a helpful AI assistant.
-
+    runtime_guidance = """
     ## Runtime
     #{runtime}
 
@@ -56,7 +73,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
     - Workspace tools: #{Path.join(workspace_path, "tools")}/{tool-name}/
 
-    ## nanobot Guidelines
+    ## Guidelines
     - State intent before tool calls, but NEVER predict or claim results before receiving them.
     - Before modifying a file, read it first. Do not assume files or directories exist.
     - After writing or editing a file, re-read it if accuracy matters.
@@ -69,7 +86,15 @@ defmodule Nex.Agent.ContextBuilder do
     Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
     """
 
-    parts ++ [identity]
+    parts ++ [runtime_guidance]
+  end
+
+  defp default_identity do
+    """
+    # Nex Agent
+
+    You are Nex Agent, a helpful AI assistant.
+    """
   end
 
   defp load_bootstrap_files(parts, workspace) do

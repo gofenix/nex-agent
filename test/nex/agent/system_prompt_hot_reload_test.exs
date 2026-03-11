@@ -21,6 +21,11 @@ defmodule Nex.Agent.SystemPromptHotReloadTest do
     assert prompt =~
              "Caveat: the current call may still run old code. Expect the next call to observe the new version."
 
+    assert prompt =~ "# Nex Agent"
+    assert prompt =~ "You are Nex Agent, a helpful AI assistant."
+    refute prompt =~ "You are nanobot"
+    refute prompt =~ "# nanobot"
+
     soul_template = Nex.Agent.Workspace.templates()["SOUL.md"]
 
     assert soul_template =~
@@ -30,5 +35,25 @@ defmodule Nex.Agent.SystemPromptHotReloadTest do
 
     assert soul_template =~
              "Caveat: the current call may still run old code. Expect the next call to observe the new version."
+  end
+
+  test "system prompt prefers workspace IDENTITY.md for agent identity" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "nex_agent_system_prompt_identity_test_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(tmp_dir)
+    File.write!(Path.join(tmp_dir, "IDENTITY.md"), "# Custom Agent\n\nYou are Custom Agent.")
+
+    prompt = ContextBuilder.build_system_prompt(workspace: tmp_dir, skip_skills: true)
+
+    assert prompt =~ "# Custom Agent"
+    assert prompt =~ "You are Custom Agent."
+    refute prompt =~ "You are Nex Agent, a helpful AI assistant."
+    assert prompt =~ "## Runtime"
+    assert prompt =~ "## Workspace"
+    assert prompt =~ "## Guidelines"
   end
 end
