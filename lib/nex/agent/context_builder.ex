@@ -62,6 +62,9 @@ defmodule Nex.Agent.ContextBuilder do
     - After writing or editing a file, re-read it if accuracy matters.
     - If a tool call fails, analyze the error before retrying with a different approach.
     - Ask for clarification when the request is ambiguous.
+    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
+    - Do not infer restarts from process age or uptime.
+    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
 
     Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
     """
@@ -122,7 +125,11 @@ defmodule Nex.Agent.ContextBuilder do
           parts
         end
 
-      parts ++ ["# Skills\n\nSkills are Markdown workflow instructions exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code).\n\n" <> summary]
+      parts ++
+        [
+          "# Skills\n\nSkills are Markdown workflow instructions exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code).\n\n" <>
+            summary
+        ]
     end
   end
 
@@ -158,7 +165,14 @@ defmodule Nex.Agent.ContextBuilder do
           [String.t()] | nil,
           keyword()
         ) :: [message()]
-  def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil, opts \\ []) do
+  def build_messages(
+        history,
+        current_message,
+        channel \\ nil,
+        chat_id \\ nil,
+        media \\ nil,
+        opts \\ []
+      ) do
     runtime_ctx = build_runtime_context(channel, chat_id)
     user_content = build_user_content(current_message, media)
 
@@ -241,7 +255,9 @@ defmodule Nex.Agent.ContextBuilder do
   @doc """
   Add assistant message to messages list.
   """
-  @spec add_assistant_message([message()], String.t() | nil, [map()] | nil, String.t() | nil) :: [message()]
+  @spec add_assistant_message([message()], String.t() | nil, [map()] | nil, String.t() | nil) :: [
+          message()
+        ]
   def add_assistant_message(messages, content, tool_calls \\ nil, reasoning_content \\ nil) do
     msg = %{"role" => "assistant", "content" => content || ""}
 
@@ -277,5 +293,4 @@ defmodule Nex.Agent.ContextBuilder do
         }
       ]
   end
-
 end

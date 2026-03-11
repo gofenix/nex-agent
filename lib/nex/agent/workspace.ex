@@ -7,7 +7,7 @@ defmodule Nex.Agent.Workspace do
 
   @templates %{
     "IDENTITY.md" => """
-    # Nex Agent �
+    # Nex Agent
 
     You are Nex Agent, a helpful AI assistant.
 
@@ -26,6 +26,9 @@ defmodule Nex.Agent.Workspace do
     - Before modifying a file, read it first. Do not assume files exist.
     - If a tool fails, analyze the error and retry with a different approach.
     - Ask for clarification when the request is ambiguous.
+    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
+    - Do not infer restarts from process age or uptime.
+    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
     """,
     "AGENTS.md" => """
     # Agent Instructions
@@ -93,6 +96,9 @@ defmodule Nex.Agent.Workspace do
     - Explain reasoning when helpful
     - Ask clarifying questions when needed
     - State intent before tool calls, but never predict results before receiving them
+    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
+    - Do not infer restarts from process age or uptime.
+    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
     """,
     "SOUL.md" => """
     # Soul
@@ -110,6 +116,9 @@ defmodule Nex.Agent.Workspace do
     - Accuracy over speed
     - User privacy and safety
     - Transparency in actions
+    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
+    - Do not infer restarts from process age or uptime.
+    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
     """,
     "USER.md" => """
     # User Profile
