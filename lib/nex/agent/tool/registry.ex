@@ -16,16 +16,19 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
-    Nex.Agent.Tool.SkillCreate,
-    Nex.Agent.Tool.ToolCreate,
     Nex.Agent.Tool.ToolList,
     Nex.Agent.Tool.ToolDelete,
-    Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
     Nex.Agent.Tool.SkillList,
     Nex.Agent.Tool.Evolve,
-    Nex.Agent.Tool.Reflect,
     Nex.Agent.Tool.Cron
+  ]
+
+  @hidden_project_tools [
+    Nex.Agent.Tool.SkillCreate,
+    Nex.Agent.Tool.ToolCreate,
+    Nex.Agent.Tool.SoulUpdate,
+    Nex.Agent.Tool.Reflect
   ]
 
   # Client API
@@ -250,7 +253,7 @@ defmodule Nex.Agent.Tool.Registry do
         filepath = Path.join(tool_dir, file)
 
         case extract_module_name(filepath) do
-          {:ok, module} when module not in @default_tools ->
+          {:ok, module} when module not in @default_tools and module not in @hidden_project_tools ->
             # Try loading compiled beam first; if missing, compile the source file
             case Code.ensure_loaded(module) do
               {:module, _} ->

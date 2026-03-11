@@ -1,4 +1,4 @@
-defmodule Nex.Agent.Evolution do
+defmodule Nex.Agent.Action.Code do
   @moduledoc """
   Code evolution engine - runtime code modification and hot loading.
 
@@ -20,6 +20,41 @@ defmodule Nex.Agent.Evolution do
   @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
 
   @doc """
+  Execute a structured code action payload.
+  """
+  @spec execute(map(), map()) :: {:ok, map()} | {:error, String.t()}
+  def execute(payload, _ctx) do
+    module_str = Map.get(payload, "module")
+    code = Map.get(payload, "code")
+    reason = Map.get(payload, "reason") || "code evolution"
+
+    cond do
+      not is_binary(module_str) or String.trim(module_str) == "" ->
+        {:error, "code action requires module"}
+
+      not is_binary(code) or String.trim(code) == "" ->
+        {:error, "code action requires code"}
+
+      true ->
+        module = String.to_atom("Elixir.#{module_str}")
+
+        case upgrade_module(module, code, reason: reason, validate: true) do
+          {:ok, %{version: version, hot_reload: hot_reload}} ->
+            {:ok,
+             %{
+               module: module_str,
+               version_id: Map.get(version, :id, "ok"),
+               hot_reload: hot_reload,
+               rollback: nil
+             }}
+
+          {:error, error} ->
+            {:error, "Code action failed for #{module_str}: #{error}. Fix the code and try again."}
+        end
+    end
+  end
+
+  @doc """
   Upgrade a module with new code.
 
   Always creates a backup before upgrade. Validates code syntax,
@@ -32,6 +67,7 @@ defmodule Nex.Agent.Evolution do
   @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade_module(module, code, opts \\ []) do
     validate = Keyword.get(opts, :validate, true)
+    reason = Keyword.get(opts, :reason, "upgrade")
 
     source_path = source_path(module)
 
@@ -41,11 +77,12 @@ defmodule Nex.Agent.Evolution do
          {:ok, hot_reload} <- compile_and_load(module, code),
          :ok <- maybe_health_check(validate, module) do
       version = save_version(module, code)
-      Logger.info("[Evolution] Upgraded #{inspect(module)} -> version #{version.id}")
+      persist_evolution(module, source_path, reason)
+      Logger.info("[Action.Code] Upgraded #{inspect(module)} -> version #{version.id}")
       {:ok, %{version: version, hot_reload: hot_reload}}
     else
       {:error, reason} ->
-        Logger.warning("[Evolution] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
+        Logger.warning("[Action.Code] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
         _ = rollback(module)
         {:error, to_error(reason)}
     end
@@ -371,6 +408,35 @@ defmodule Nex.Agent.Evolution do
     end
   rescue
     _ -> nil
+  end
+
+  defp persist_evolution(module, source_path, reason) do
+    Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+      module_short =
+        module
+        |> to_string()
+        |> String.replace_prefix("Elixir.Nex.Agent.", "")
+
+      msg = "evolve(#{module_short}): #{reason}"
+
+      case System.cmd("git", ["add", source_path], stderr_to_stdout: true) do
+        {_, 0} ->
+          case System.cmd("git", ["commit", "-m", msg], stderr_to_stdout: true) do
+            {_, 0} ->
+              Task.start(fn ->
+                System.cmd("git", ["push"], stderr_to_stdout: true)
+              end)
+
+              Logger.info("[Action.Code] Committed evolution: #{msg}")
+
+            {output, _} ->
+              Logger.debug("[Action.Code] Git commit skipped: #{String.trim(output)}")
+          end
+
+        {output, _} ->
+          Logger.warning("[Action.Code] Git add failed: #{String.trim(output)}")
+      end
+    end)
   end
 
   defp to_error({:error, reason}), do: to_error(reason)

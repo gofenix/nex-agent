@@ -31,7 +31,7 @@ flowchart TD
     D --> F["Tools + Skills"]
     D --> G["Cron + Subagent"]
     D --> H["Reflect + Evolve"]
-    H --> I["Evolution + Surgeon"]
+    H --> I["Action"]
 ```
 
 ## What You Can Build
@@ -47,7 +47,7 @@ flowchart TD
 
 | Capability | What it means |
 | --- | --- |
-| **Self-evolving by design** | `reflect`, `evolve`, `soul_update`, skills, and tools keep the agent from staying static |
+| **Self-evolving by design** | `evolve` routes improvements across memory, skills, tools, soul, and code |
 | **Long-running sessions** | Sessions are scoped by `channel:chat_id` and keep memory, history, and isolation |
 | **Works in your chat apps** | Telegram, Feishu, Discord, Slack, and DingTalk are already supported |
 | **Tools, skills, and memory built in** | File access, shell, web, messaging, memory search, scheduling, and skills come built in |
@@ -68,7 +68,7 @@ That path is layered:
 - `MEMORY.md` / `HISTORY.md` / daily logs: accumulate long-term experience
 - Skills: turn new abilities into reusable building blocks
 - Tools: expand what the agent can actually do
-- Code: use `reflect` and `evolve` to inspect and modify the agent itself
+- Code: use `evolve` as the unified self-improvement entrypoint
 
 That is why “self-evolving” is not just a slogan here. It is a direction that runs from prompt and memory all the way down to source code.
 
@@ -82,7 +82,7 @@ NexAgent already follows that path in code:
 - `Gateway` manages chat app connections
 - `InboundWorker` consumes inbound messages and routes sessions
 - `SessionManager`, `Tool.Registry`, `Cron`, and `Subagent` run as long-lived services
-- `Evolution` and `Surgeon` handle hot updates, versioning, and rollback paths
+- `Action.Code` handles hot updates, versioning, rollback paths, and persistence
 
 That is why Elixir/OTP is not background trivia in this project. It is one of the main reasons the project exists in this form.
 
@@ -276,12 +276,8 @@ Default built-in tools:
 - `cron`
 - `spawn_task`
 - `skill_list`
-- `skill_create`
 - `tool_list`
-- `tool_create`
 - `tool_delete`
-- `soul_update`
-- `reflect`
 - `evolve`
 
 Together, these cover files, shell commands, web access, outbound messaging, memory retrieval, scheduling, and self-improvement.
@@ -290,7 +286,7 @@ Together, these cover files, shell commands, web access, outbound messaging, mem
 
 Custom Elixir tools live in `~/.nex/agent/workspace/tools/<name>/` and are registered as first-class tools.
 
-- `tool_create` creates a workspace custom tool
+- `evolve` can create workspace custom tools through the tool layer
 - `tool_list` inspects built-in and custom tools
 - `tool_delete` removes a custom tool
 
@@ -357,26 +353,22 @@ Through `MEMORY.md`, `HISTORY.md`, and daily logs, the agent can keep accumulati
 
 ### Skills and tools
 
-Through `skill_create` and the tool system, the agent can keep expanding what it can do.
+Through `evolve`, the agent can still expand skills and tools without exposing multiple parallel evolution entrypoints.
 
 ### Code evolution
 
 The clearest differentiator is the source-level evolution path:
 
-- `reflect`: inspect module source, history, and diffs
-- `evolve`: submit updated module code
-- `Evolution`: backup, validate, compile, load, and version code
-- `Surgeon`: coordinate upgrades, hot swaps, and rollback paths
+- `Reflect`: internal reflection step that creates a structured evolution plan
+- `Evolve`: unified evolution entrypoint
+- `Action`: execute soul, memory, skill, tool, or code changes
+- `Action.Code`: backup, validate, compile, load, version, and rollback code
 
 That is what makes NexAgent more than a configurable agent. It is an agent system that is explicitly being built to modify and improve itself.
 
 ```mermaid
 flowchart LR
-    A["Reflect<br/>Read source / history / diff"] --> B["Understand<br/>Find the problem or opportunity"]
-    B --> C["Evolve<br/>Submit new code"]
-    C --> D["Evolution<br/>Backup / validate / compile / load"]
-    D --> E["Surgeon<br/>Hot-swap / rollback protection"]
-    E --> F["Agent keeps running"]
+    A["Reflect<br/>Plan the right layer"] --> B["Evolve<br/>Route the change"] --> C["Action<br/>Apply soul / memory / skill / tool / code"] --> D["Agent keeps running"]
 ```
 
 ## Automation
@@ -448,7 +440,7 @@ flowchart TB
 
     subgraph L5["Evolution Layer"]
         K["Reflect + Evolve"]
-        L["Evolution + Surgeon"]
+        L["Action"]
     end
 
     A --> B --> C --> D
@@ -467,7 +459,7 @@ Another way to read the system is:
 - **Agent layer**: InboundWorker + Runner
 - **Capability layer**: Tools + Skills + Memory + Sessions
 - **Background layer**: Cron + Subagent
-- **Evolution layer**: Reflect + Evolve + Evolution + Surgeon
+- **Evolution layer**: Reflect + Evolve + Action
 
 Core roles in code:
 
@@ -480,7 +472,7 @@ Core roles in code:
 - `Skills`: load and execute skills
 - `Cron`: manage scheduled jobs
 - `Subagent`: manage background subagents
-- `Evolution` / `Surgeon`: manage source-level self-improvement
+- `Action.Code`: manage source-level self-improvement
 
 These parts are held together by an OTP supervision tree instead of being scattered across unrelated scripts.
 

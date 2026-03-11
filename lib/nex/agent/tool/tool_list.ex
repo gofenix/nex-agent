@@ -1,7 +1,7 @@
 defmodule Nex.Agent.Tool.ToolList do
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.Evolution
+  alias Nex.Agent.Action.Code
   alias Nex.Agent.Tool.CustomTools
   alias Nex.Agent.Tool.Registry
 
@@ -60,7 +60,7 @@ defmodule Nex.Agent.Tool.ToolList do
         "scope" => "builtin",
         "module" => inspect(module),
         "description" => description_for(module),
-        "source_path" => if(module, do: Evolution.source_path(module), else: nil)
+        "source_path" => if(module, do: Code.source_path(module), else: nil)
       }
     end)
   end
@@ -95,7 +95,7 @@ defmodule Nex.Agent.Tool.ToolList do
             "scope" => "builtin",
             "module" => inspect(module),
             "description" => description_for(module),
-            "source_path" => Evolution.source_path(module),
+            "source_path" => Code.source_path(module),
             "definition" => definition_for(module)
           }
       end

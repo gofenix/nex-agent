@@ -98,8 +98,8 @@ defmodule Mix.Tasks.Nex.Agent.EvolveSubagent do
     Mix.shell().info("⚠️  Automatic evolution application not yet implemented.")
     Mix.shell().info("Please review the report and manually use `evolve` tool.")
 
-    # Future: Integrate with Surgeon
-    # Nex.Agent.Surgeon.upgrade(module, new_code, reason: "Self-evolution: #{version}")
+    # Future: Integrate with Evolution
+    # Nex.Agent.Action.Code.upgrade_module(module, new_code, reason: "Self-evolution: #{version}")
   end
 
   defp get_option(opts, flag, default) do

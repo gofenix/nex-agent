@@ -233,8 +233,6 @@ defmodule Nex.Agent.Onboarding do
     - **cron** - Schedule tasks
     - **memory_search** - Search long-term memory
     - **skill_list** - Inspect local Markdown skills
-    - **skill_create** - Create local Markdown skills
-    - **tool_create** - Create workspace custom Elixir tools
     - **tool_list** - Inspect built-in and custom tools
     - **tool_delete** - Delete workspace custom tools
 
@@ -242,7 +240,6 @@ defmodule Nex.Agent.Onboarding do
 
     Custom Elixir tools live under `workspace/tools/<name>/`.
 
-    - **Create**: `tool_create(name, description, content)` - Add a workspace custom tool
     - **Inspect**: `tool_list(scope, detail)` - View built-in and custom tools
     - **Delete**: `tool_delete(name)` - Remove a custom tool
 
@@ -250,21 +247,17 @@ defmodule Nex.Agent.Onboarding do
 
     Skills live under `workspace/skills/<name>/SKILL.md`.
 
-    - **Create**: `skill_create(name, description, content)` - Add a reusable workflow
     - **Use**: skills appear with the `skill_` prefix (e.g. `skill_explain_code`)
 
     Code-based capabilities belong in built-in tools or workspace tools, not skills.
 
     ### Evolution
 
-    The agent can improve itself:
+    The agent improves itself through a single entrypoint:
 
-    - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
-    - **Create new Markdown skills**: `skill_create()` - Add reusable workflows
-    - **Create new workspace tools**: `tool_create()` - Add reusable Elixir capabilities when explicitly requested
-    - **Self-modify**: `soul_update()` - Update personality and values
+    - **evolve** - Reflect on the problem, choose the right layer (memory, skill, tool, soul, or code), and apply the change
 
-    Use `skill_create()` for instructions. Use tools and `evolve()` for code-based capabilities.
+    Prefer `evolve()` for self-improvement instead of calling low-level evolution helpers directly.
 
     ## Guidelines
 
