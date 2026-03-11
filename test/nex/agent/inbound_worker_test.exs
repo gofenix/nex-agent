@@ -73,8 +73,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:bus_message, :telegram_outbound, out2}, 1_000
     assert out2.content == "echo: second"
 
-    # ensure_agent creates agents directly now, start_fun is no longer called
-    assert Agent.get(start_count, & &1) == 0
+    assert Agent.get(start_count, & &1) == 1
   end
 
   test "supports /new and /stop control commands" do

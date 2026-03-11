@@ -11,7 +11,6 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.{Bus, Config}
 
   defstruct [
-    :config,
     :agent_start_fun,
     :agent_prompt_fun,
     :agent_abort_fun,
@@ -26,7 +25,6 @@ defmodule Nex.Agent.InboundWorker do
   @type agent_abort_fun :: (term() -> :ok | {:error, term()})
 
   @type t :: %__MODULE__{
-          config: Config.t(),
           agent_start_fun: agent_start_fun(),
           agent_prompt_fun: agent_prompt_fun(),
           agent_abort_fun: agent_abort_fun(),
@@ -49,7 +47,6 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def init(opts) do
     state = %__MODULE__{
-      config: Keyword.get(opts, :config, Config.load()),
       agent_start_fun: Keyword.get(opts, :agent_start_fun, &Nex.Agent.start/1),
       agent_prompt_fun: Keyword.get(opts, :agent_prompt_fun, &Nex.Agent.prompt/3),
       agent_abort_fun: Keyword.get(opts, :agent_abort_fun, &Nex.Agent.abort/1),
@@ -320,28 +317,14 @@ defmodule Nex.Agent.InboundWorker do
       :error ->
         opts = agent_start_opts(key)
 
-        session = Nex.Agent.SessionManager.get_or_create(key)
-        Logger.info("InboundWorker creating new agent session=#{session.key} for key=#{key}")
+        case state.agent_start_fun.(opts) do
+          {:ok, agent} ->
+            Logger.info("InboundWorker created new agent session=#{agent.session.key} for key=#{key}")
+            {:ok, agent, put_in(state.agents[key], agent)}
 
-        provider = Keyword.get(opts, :provider, :openai)
-        model = Keyword.get(opts, :model, "gpt-4o")
-        api_key = Keyword.get(opts, :api_key)
-        base_url = Keyword.get(opts, :base_url)
-        cwd = Keyword.get(opts, :cwd, File.cwd!())
-        max_iterations = Keyword.get(opts, :max_iterations, 40)
-
-        agent = %Nex.Agent{
-          session_key: key,
-          session: session,
-          provider: provider,
-          model: model,
-          api_key: api_key,
-          base_url: base_url,
-          cwd: cwd,
-          max_iterations: max_iterations
-        }
-
-        {:ok, agent, put_in(state.agents[key], agent)}
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -356,7 +339,6 @@ defmodule Nex.Agent.InboundWorker do
       model: config.model,
       api_key: Config.get_current_api_key(config),
       base_url: Config.get_current_base_url(config),
-      project: session_key,
       cwd: home,
       max_iterations: Config.get_max_iterations(config),
       channel: channel,
