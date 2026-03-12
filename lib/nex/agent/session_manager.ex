@@ -120,6 +120,7 @@ defmodule Nex.Agent.SessionManager do
       true ->
         marked_session = put_consolidation_flag(session, true)
         Session.save(marked_session)
+
         {:reply, {:ok, marked_session, unconsolidated},
          %{state | cache: Map.put(cache, key, marked_session)}}
     end

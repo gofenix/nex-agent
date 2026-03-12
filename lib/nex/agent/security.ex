@@ -8,17 +8,31 @@ defmodule Nex.Agent.Security do
   # Dangerous commands that are explicitly blocked
   @blocked_commands [
     # System destruction
-    "mkfs", "fdisk", "parted", "diskpart",
+    "mkfs",
+    "fdisk",
+    "parted",
+    "diskpart",
     # Raw disk operations
     "dd",
     # System power
-    "shutdown", "reboot", "poweroff", "halt",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
     # Network attacks
-    "nc", "netcat", "ncat",
+    "nc",
+    "netcat",
+    "ncat",
     # Privilege escalation
-    "sudo", "su",
+    "sudo",
+    "su",
     # Shell escapes (these spawn interactive shells)
-    "bash", "sh", "zsh", "fish", "csh", "tcsh"
+    "bash",
+    "sh",
+    "zsh",
+    "fish",
+    "csh",
+    "tcsh"
   ]
 
   # Core shell deny patterns for shell safety
