@@ -6,7 +6,7 @@ defmodule Nex.Agent.Tool.ToolDelete do
   alias Nex.Agent.Tool.CustomTools
 
   def name, do: "tool_delete"
-  def description, do: "Delete a workspace custom tool from workspace/tools."
+  def description, do: "Delete a workspace custom tool from the TOOL layer."
   def category, do: :evolution
 
   def definition do

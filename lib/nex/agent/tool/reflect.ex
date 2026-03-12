@@ -5,13 +5,13 @@ defmodule Nex.Agent.Tool.Reflect do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.Evolution
+  alias Nex.Agent.CodeUpgrade
   alias Nex.Agent.Tool.CustomTools
 
   def name, do: "reflect"
 
   def description,
-    do: "Read the source code of any agent module for understanding and improvement."
+    do: "Inspect CODE-layer source modules, version history, and diffs before a code upgrade."
 
   def category, do: :evolution
 
@@ -27,7 +27,7 @@ defmodule Nex.Agent.Tool.Reflect do
             type: "string",
             enum: ["source", "versions", "diff", "list_modules"],
             description:
-              "source: view current code, versions: list history, diff: compare versions, list_modules: list all evolvable modules"
+              "source: view current code, versions: list history, diff: compare versions, list_modules: list all upgradable modules"
           }
         },
         required: ["action"]
@@ -36,7 +36,7 @@ defmodule Nex.Agent.Tool.Reflect do
   end
 
   def execute(%{"action" => "list_modules"}, _ctx) do
-    modules = Evolution.list_evolvable_modules()
+    modules = CodeUpgrade.list_upgradable_modules()
 
     formatted =
       modules
@@ -45,13 +45,13 @@ defmodule Nex.Agent.Tool.Reflect do
         if CustomTools.custom_module?(m), do: "- #{name} (custom tool)", else: "- #{name}"
       end)
 
-    {:ok, "Evolvable modules (#{length(modules)}):\n#{formatted}"}
+    {:ok, "Upgradable modules (#{length(modules)}):\n#{formatted}"}
   end
 
   def execute(%{"action" => "source", "module" => module_str}, _ctx) do
     module = String.to_existing_atom("Elixir.#{module_str}")
 
-    case Evolution.get_source(module) do
+    case CodeUpgrade.get_source(module) do
       {:ok, source} -> {:ok, "# #{module_str}\n\n```elixir\n#{source}\n```"}
       {:error, reason} -> {:error, reason}
     end
@@ -62,7 +62,7 @@ defmodule Nex.Agent.Tool.Reflect do
   def execute(%{"action" => "versions", "module" => module_str}, _ctx) do
     module = String.to_existing_atom("Elixir.#{module_str}")
 
-    versions = Evolution.list_versions(module)
+    versions = CodeUpgrade.list_versions(module)
 
     if versions == [] do
       {:ok, "No evolution history for #{module_str}"}
@@ -80,7 +80,7 @@ defmodule Nex.Agent.Tool.Reflect do
 
   def execute(%{"action" => "diff", "module" => module_str, "code" => new_code}, _ctx) do
     module = String.to_existing_atom("Elixir.#{module_str}")
-    diff = Evolution.diff(module, new_code)
+    diff = CodeUpgrade.diff(module, new_code)
     {:ok, diff}
   rescue
     ArgumentError -> {:error, "Unknown module: #{module_str}"}

@@ -292,9 +292,18 @@ defmodule Nex.Agent.Onboarding do
     Prefer Markdown skills for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
 
-    ## Evolution and Safety
+    ## Six-Layer Evolution
 
-    - Use `reflect` before high-impact `evolve` changes.
+    - SOUL: identity and long-term operating principles
+    - USER: user model and collaboration preferences
+    - MEMORY: long-term facts about environment and project context
+    - SKILL: reusable workflows and procedural knowledge
+    - TOOL: deterministic executable capabilities
+    - CODE: internal implementation upgrades
+
+    ## Safety
+
+    - Use `reflect` before high-impact `upgrade_code` changes.
     - Keep changes small, testable, and reversible.
     - Respect security boundaries; do not execute dangerous shell patterns.
     - Preserve evidence: report what was changed and what was verified.
@@ -324,8 +333,11 @@ defmodule Nex.Agent.Onboarding do
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
     - Scheduling and background work: `cron`, `spawn_task`
-    - Skills and custom capabilities: `skill_list`, `skill_create`, `tool_list`, `tool_create`, `tool_delete`
-    - Self-improvement: `reflect`, `evolve`, `soul_update`
+    - SOUL layer: `soul_update`
+    - USER/MEMORY layer: `memory_write`
+    - SKILL layer: `skill_list`, `skill_create`
+    - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
+    - CODE layer: `reflect`, `upgrade_code`
 
     ## Usage Principles
 

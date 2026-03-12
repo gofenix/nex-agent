@@ -30,8 +30,8 @@ flowchart TD
     D --> E["Sessions + Memory"]
     D --> F["Tools + Skills"]
     D --> G["Cron + Subagent"]
-    D --> H["Reflect + Evolve"]
-    H --> I["Evolution + Surgeon"]
+    D --> H["Reflect + Upgrade Code"]
+    H --> I["CodeUpgrade + UpgradeManager"]
 ```
 
 ## What You Can Build
@@ -47,7 +47,7 @@ flowchart TD
 
 | Capability | What it means |
 | --- | --- |
-| **Self-evolving by design** | `reflect`, `evolve`, `soul_update`, skills, and tools keep the agent from staying static |
+| **Self-evolving by design** | `soul_update`, `memory_write`, `skill_create`, `tool_create`, `reflect`, and `upgrade_code` keep the agent from staying static |
 | **Long-running sessions** | Sessions are scoped by `channel:chat_id` and keep memory, history, and isolation |
 | **Works in your chat apps** | Telegram, Feishu, Discord, Slack, and DingTalk are already supported |
 | **Tools, skills, and memory built in** | File access, shell, web, messaging, memory search, scheduling, and skills come built in |
@@ -68,7 +68,7 @@ That path is layered:
 - `MEMORY.md` / `HISTORY.md` / daily logs: accumulate long-term experience
 - Skills: turn new abilities into reusable building blocks
 - Tools: expand what the agent can actually do
-- Code: use `reflect` and `evolve` to inspect and modify the agent itself
+- Code: use `reflect` and `upgrade_code` to inspect and modify the agent itself
 
 That is why “self-evolving” is not just a slogan here. It is a direction that runs from prompt and memory all the way down to source code.
 
@@ -82,7 +82,7 @@ NexAgent already follows that path in code:
 - `Gateway` manages chat app connections
 - `InboundWorker` consumes inbound messages and routes sessions
 - `SessionManager`, `Tool.Registry`, `Cron`, and `Subagent` run as long-lived services
-- `Evolution` and `Surgeon` handle hot updates, versioning, and rollback paths
+- `CodeUpgrade` and `UpgradeManager` handle hot updates, versioning, and rollback paths
 
 That is why Elixir/OTP is not background trivia in this project. It is one of the main reasons the project exists in this form.
 
@@ -272,7 +272,7 @@ Default built-in tools:
 - `web_search`
 - `web_fetch`
 - `message`
-- `memory_search`
+- `memory_write`
 - `cron`
 - `spawn_task`
 - `skill_list`
@@ -282,9 +282,9 @@ Default built-in tools:
 - `tool_delete`
 - `soul_update`
 - `reflect`
-- `evolve`
+- `upgrade_code`
 
-Together, these cover files, shell commands, web access, outbound messaging, memory retrieval, scheduling, and self-improvement.
+Together, these cover files, shell commands, web access, outbound messaging, long-term memory, scheduling, skill growth, tool growth, and code upgrades.
 
 ### Custom global tools
 
@@ -341,41 +341,56 @@ The point of this design is simple:
 - not everything should be pushed into the prompt
 - long-term memory, history, and daily experience should play different roles
 
-## Self-Evolution
+## Six-Layer Growth
 
 This is one of the defining capabilities of NexAgent.
 
-Its evolution does not happen at a single point. It happens in layers.
+Its evolution does not happen at a single point. It happens in six layers.
+
+- `SOUL`: who the agent is and which long-term principles it follows
+- `USER`: who the user is and how the agent should collaborate with them
+- `MEMORY`: durable facts about the environment, project, and operational context
+- `SKILL`: reusable workflows and procedural knowledge
+- `TOOL`: deterministic executable capabilities
+- `CODE`: internal implementation upgrades
 
 ### Soul
 
 `SOUL.md` adjusts behavior, personality, and values.
 
+### User
+
+`USER.md` captures who the user is, how they prefer to collaborate, and what should stay stable across sessions.
+
 ### Memory
 
-Through `MEMORY.md`, `HISTORY.md`, and daily logs, the agent can keep accumulating experience instead of depending only on the current chat window.
+Through `MEMORY.md`, `HISTORY.md`, and daily logs, the agent can keep accumulating durable project and environment facts instead of depending only on the current chat window.
 
-### Skills and tools
+### Skills
 
-Through `skill_create` and the tool system, the agent can keep expanding what it can do.
+Through `skill_create`, the agent can keep expanding reusable workflows and procedural knowledge.
+
+### Tools
+
+Through `tool_create` and workspace custom tools, the agent can keep expanding deterministic executable capability.
 
 ### Code evolution
 
-The clearest differentiator is the source-level evolution path:
+The code layer has its own explicit upgrade path:
 
 - `reflect`: inspect module source, history, and diffs
-- `evolve`: submit updated module code
-- `Evolution`: backup, validate, compile, load, and version code
-- `Surgeon`: coordinate upgrades, hot swaps, and rollback paths
+- `upgrade_code`: submit updated module code
+- `CodeUpgrade`: backup, validate, compile, load, and version code
+- `UpgradeManager`: coordinate code upgrades, hot swaps, and rollback paths
 
-That is what makes NexAgent more than a configurable agent. It is an agent system that is explicitly being built to modify and improve itself.
+That is what makes NexAgent more than a configurable agent. It is an agent system that is explicitly being built to learn, extend, and upgrade itself across multiple layers.
 
 ```mermaid
 flowchart LR
     A["Reflect<br/>Read source / history / diff"] --> B["Understand<br/>Find the problem or opportunity"]
-    B --> C["Evolve<br/>Submit new code"]
-    C --> D["Evolution<br/>Backup / validate / compile / load"]
-    D --> E["Surgeon<br/>Hot-swap / rollback protection"]
+    B --> C["Upgrade Code<br/>Submit new code"]
+    C --> D["CodeUpgrade<br/>Backup / validate / compile / load"]
+    D --> E["UpgradeManager<br/>Hot-swap / rollback protection"]
     E --> F["Agent keeps running"]
 ```
 
@@ -446,9 +461,9 @@ flowchart TB
         J["Subagent"]
     end
 
-    subgraph L5["Evolution Layer"]
-        K["Reflect + Evolve"]
-        L["Evolution + Surgeon"]
+    subgraph L5["Code Layer"]
+        K["Reflect + Upgrade Code"]
+        L["CodeUpgrade + UpgradeManager"]
     end
 
     A --> B --> C --> D
@@ -467,7 +482,7 @@ Another way to read the system is:
 - **Agent layer**: InboundWorker + Runner
 - **Capability layer**: Tools + Skills + Memory + Sessions
 - **Background layer**: Cron + Subagent
-- **Evolution layer**: Reflect + Evolve + Evolution + Surgeon
+- **Six-layer growth model**: Soul + User + Memory + Skill + Tool + Code
 
 Core roles in code:
 
@@ -480,7 +495,7 @@ Core roles in code:
 - `Skills`: load and execute skills
 - `Cron`: manage scheduled jobs
 - `Subagent`: manage background subagents
-- `Evolution` / `Surgeon`: manage source-level self-improvement
+- `CodeUpgrade` / `UpgradeManager`: manage source-level code upgrades
 
 These parts are held together by an OTP supervision tree instead of being scattered across unrelated scripts.
 

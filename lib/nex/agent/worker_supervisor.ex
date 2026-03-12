@@ -15,7 +15,7 @@ defmodule Nex.Agent.WorkerSupervisor do
   @impl true
   def init(_opts) do
     children = [
-      Nex.Agent.Surgeon,
+      Nex.Agent.UpgradeManager,
       Nex.Agent.InboundWorker,
       Nex.Agent.Subagent
     ]

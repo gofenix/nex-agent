@@ -1,16 +1,16 @@
-defmodule Nex.Agent.Surgeon do
+defmodule Nex.Agent.UpgradeManager do
   @moduledoc """
-  Code surgeon — safe hot-reload orchestrator for agent modules.
+  Code upgrade manager for agent modules.
 
-  Upgrades module code at runtime via Evolution. All successful upgrades
-  are persisted via git commit + async push. Manual rollback available via
-  `Evolution.rollback/1`.
+  Orchestrates source upgrades via `CodeUpgrade`. All successful upgrades
+  are persisted via git commit + async push. Manual rollback is available
+  through `CodeUpgrade.rollback/1`.
   """
 
   use GenServer
   require Logger
 
-  alias Nex.Agent.Evolution
+  alias Nex.Agent.CodeUpgrade
 
   @core_modules [
     Nex.Agent.Runner,
@@ -63,7 +63,7 @@ defmodule Nex.Agent.Surgeon do
   defp surgery(module, code, opts) do
     reason = Keyword.get(opts, :reason, "upgrade")
 
-    case Evolution.upgrade_module(module, code, validate: true) do
+    case CodeUpgrade.upgrade_module(module, code, validate: true) do
       {:ok, result} ->
         source_path = get_source_path(module)
         persist_evolution(module, source_path, reason)
@@ -81,7 +81,7 @@ defmodule Nex.Agent.Surgeon do
         |> to_string()
         |> String.replace_prefix("Elixir.Nex.Agent.", "")
 
-      msg = "evolve(#{module_short}): #{reason}"
+      msg = "upgrade_code(#{module_short}): #{reason}"
 
       case System.cmd("git", ["add", source_path], stderr_to_stdout: true) do
         {_, 0} ->
@@ -91,19 +91,19 @@ defmodule Nex.Agent.Surgeon do
                 System.cmd("git", ["push"], stderr_to_stdout: true)
               end)
 
-              Logger.info("[Surgeon] Committed evolution: #{msg}")
+              Logger.info("[UpgradeManager] Committed code upgrade: #{msg}")
 
             {output, _} ->
-              Logger.debug("[Surgeon] Git commit skipped: #{String.trim(output)}")
+              Logger.debug("[UpgradeManager] Git commit skipped: #{String.trim(output)}")
           end
 
         {output, _} ->
-          Logger.warning("[Surgeon] Git add failed: #{String.trim(output)}")
+          Logger.warning("[UpgradeManager] Git add failed: #{String.trim(output)}")
       end
     end)
   end
 
   defp get_source_path(module) do
-    Evolution.source_path(module)
+    CodeUpgrade.source_path(module)
   end
 end

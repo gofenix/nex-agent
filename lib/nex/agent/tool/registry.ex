@@ -24,7 +24,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
     Nex.Agent.Tool.SkillList,
-    Nex.Agent.Tool.Evolve,
+    Nex.Agent.Tool.UpgradeCode,
     Nex.Agent.Tool.Reflect,
     Nex.Agent.Tool.Cron
   ]

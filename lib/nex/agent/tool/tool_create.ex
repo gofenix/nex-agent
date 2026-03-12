@@ -6,7 +6,10 @@ defmodule Nex.Agent.Tool.ToolCreate do
   alias Nex.Agent.Tool.CustomTools
 
   def name, do: "tool_create"
-  def description, do: "Create a new workspace custom Elixir tool under workspace/tools."
+
+  def description,
+    do: "Create a new workspace custom Elixir tool in the TOOL layer under workspace/tools."
+
   def category, do: :evolution
 
   def definition do

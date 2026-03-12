@@ -22,8 +22,12 @@ defmodule Nex.Agent.ContextBuilderTest do
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
     assert prompt =~ "## Runtime Evolution"
-    assert prompt =~ "Save durable user profile details"
-    assert prompt =~ "Save repeatable multi-step procedures"
+    assert prompt =~ "Route long-term changes into the correct layer"
+
+    assert prompt =~
+             "- USER: user profile, preferences, timezone, communication style, collaboration expectations"
+
+    assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
   end
 
   test "runtime system messages are injected without becoming user content", %{

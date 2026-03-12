@@ -1,8 +1,8 @@
-defmodule Nex.Agent.SubAgent.Evolution do
+defmodule Nex.Agent.SubAgent.Review do
   @moduledoc """
-  Self-evolution system for SubAgents.
+  Performance review system for SubAgents.
 
-  Tracks performance, analyzes patterns, and suggests improvements.
+  Tracks performance, analyzes patterns, and suggests code upgrade opportunities.
   """
 
   alias Nex.Agent.Memory
@@ -17,7 +17,7 @@ defmodule Nex.Agent.SubAgent.Evolution do
           timestamp: String.t()
         }
 
-  @type evolution_suggestion :: %{
+  @type review_suggestion :: %{
           module: atom(),
           current_version: String.t(),
           suggested_version: String.t(),
@@ -50,10 +50,10 @@ defmodule Nex.Agent.SubAgent.Evolution do
   end
 
   @doc """
-  Analyze recent performance and generate evolution suggestions.
+  Analyze recent performance and generate review suggestions.
   """
   @spec self_reflect(atom(), keyword()) ::
-          {:ok, evolution_suggestion()} | {:ok, nil} | {:error, String.t()}
+          {:ok, review_suggestion()} | {:ok, nil} | {:error, String.t()}
   def self_reflect(subagent_module, opts \\ []) do
     window = Keyword.get(opts, :window, "7d")
     min_tasks = Keyword.get(opts, :min_tasks, 10)
@@ -67,7 +67,7 @@ defmodule Nex.Agent.SubAgent.Evolution do
     else
       analysis = analyze_metrics(metrics)
 
-      if should_evolve?(analysis) do
+      if should_suggest_upgrade?(analysis) do
         suggestion = generate_suggestion(subagent_module, analysis)
         {:ok, suggestion}
       else
@@ -77,12 +77,12 @@ defmodule Nex.Agent.SubAgent.Evolution do
   end
 
   @doc """
-  Generate a human-readable evolution report.
+  Generate a human-readable performance review report.
   """
-  @spec generate_report(evolution_suggestion()) :: String.t()
+  @spec generate_report(review_suggestion()) :: String.t()
   def generate_report(suggestion) do
     """
-    🤖 SubAgent Evolution Report
+    🤖 SubAgent Review Report
     ============================
 
     Module: #{suggestion.module}
@@ -101,8 +101,8 @@ defmodule Nex.Agent.SubAgent.Evolution do
     #{String.slice(suggestion.proposed_code, 0, 500)}...
     ```
 
-    To apply this evolution:
-      mix nex.agent evolve #{suggestion.module} --suggestion #{suggestion.suggested_version}
+    To apply this code upgrade:
+      mix nex.agent review_subagent report #{suggestion.module}
     """
   end
 
@@ -165,9 +165,9 @@ defmodule Nex.Agent.SubAgent.Evolution do
     }
   end
 
-  defp should_evolve?(%{needs_improvement: true}), do: true
-  defp should_evolve?(%{success_rate: rate}) when rate < 0.95, do: true
-  defp should_evolve?(_), do: false
+  defp should_suggest_upgrade?(%{needs_improvement: true}), do: true
+  defp should_suggest_upgrade?(%{success_rate: rate}) when rate < 0.95, do: true
+  defp should_suggest_upgrade?(_), do: false
 
   defp generate_suggestion(module, analysis) do
     version = get_next_version(module)

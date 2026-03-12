@@ -11,7 +11,7 @@ defmodule Nex.Agent.Subagent do
   require Logger
 
   alias Nex.Agent.{Bus, Session}
-  alias Nex.Agent.SubAgent.Evolution
+  alias Nex.Agent.SubAgent.Review
 
   @max_subagent_iterations 15
 
@@ -241,7 +241,7 @@ defmodule Nex.Agent.Subagent do
         duration = System.monotonic_time(:millisecond) - start_time
 
         # Record performance metrics
-        Evolution.record_performance(subagent_module, %{
+        Review.record_performance(subagent_module, %{
           task_type: label,
           success: true,
           duration_ms: duration,
@@ -257,7 +257,7 @@ defmodule Nex.Agent.Subagent do
         error_msg = inspect(reason)
 
         # Record failure metrics
-        Evolution.record_performance(subagent_module, %{
+        Review.record_performance(subagent_module, %{
           task_type: label,
           success: false,
           duration_ms: duration,

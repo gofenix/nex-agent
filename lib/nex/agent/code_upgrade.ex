@@ -1,9 +1,10 @@
-defmodule Nex.Agent.Evolution do
+defmodule Nex.Agent.CodeUpgrade do
   @moduledoc """
-  Code evolution engine - runtime code modification and hot loading.
+  Code upgrade layer - runtime code modification and hot loading.
 
-  This is the core of the self-evolving agent. It allows the agent to
-  modify its own code and reload it without restarting.
+  This is the execution layer for code upgrades. It validates updated source,
+  writes it to disk, compiles it, hot-reloads it, versions it, and rolls back
+  on failure.
 
   ## Safety
 
@@ -17,7 +18,7 @@ defmodule Nex.Agent.Evolution do
   alias Nex.Agent.HotReload
   alias Nex.Agent.Tool.CustomTools
 
-  @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
+  @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/code_upgrades")
 
   @doc """
   Upgrade a module with new code.
@@ -41,11 +42,11 @@ defmodule Nex.Agent.Evolution do
          {:ok, hot_reload} <- compile_and_load(module, code),
          :ok <- maybe_health_check(module) do
       version = save_version(module, code)
-      Logger.info("[Evolution] Upgraded #{inspect(module)} -> version #{version.id}")
+      Logger.info("[CodeUpgrade] Upgraded #{inspect(module)} -> version #{version.id}")
       {:ok, %{version: version, hot_reload: hot_reload}}
     else
       {:error, reason} ->
-        Logger.warning("[Evolution] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
+        Logger.warning("[CodeUpgrade] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
         _ = rollback(module)
         {:error, to_error(reason)}
     end
@@ -137,21 +138,21 @@ defmodule Nex.Agent.Evolution do
   end
 
   @doc """
-  Check if a module can be evolved.
+  Check if a module can be upgraded.
   """
-  @spec can_evolve?(atom()) :: boolean()
-  def can_evolve?(module) do
+  @spec can_upgrade?(atom()) :: boolean()
+  def can_upgrade?(module) do
     Code.ensure_loaded?(module) or
       (CustomTools.custom_module?(module) and File.exists?(source_path(module)))
   end
 
   @doc """
-  List all modules that can be evolved (agent modules).
+  List all modules that can be upgraded (agent modules).
   """
-  @spec list_evolvable_modules() :: [atom()]
-  def list_evolvable_modules do
+  @spec list_upgradable_modules() :: [atom()]
+  def list_upgradable_modules do
     (app_modules() ++ CustomTools.list_modules())
-    |> Enum.filter(&can_evolve?/1)
+    |> Enum.filter(&can_upgrade?/1)
     |> Enum.uniq()
   end
 

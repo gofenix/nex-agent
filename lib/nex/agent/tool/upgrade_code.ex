@@ -1,16 +1,16 @@
-defmodule Nex.Agent.Tool.Evolve do
+defmodule Nex.Agent.Tool.UpgradeCode do
   @moduledoc """
-  Self-evolution tool - lets the agent modify and hot-reload any of its own modules.
+  Code upgrade tool - lets the agent modify and hot-reload its own modules.
   """
   @behaviour Nex.Agent.Tool.Behaviour
   require Logger
-  alias Nex.Agent.Surgeon
+  alias Nex.Agent.UpgradeManager
 
-  def name, do: "evolve"
+  def name, do: "upgrade_code"
 
   def description,
     do:
-      "Modify and hot-reload any agent module. Use to improve tools, fix bugs, or add capabilities. Surgeon auto-protects core modules with canary monitoring."
+      "Upgrade and hot-reload an agent source module. Use this only for CODE-layer changes to internal implementation."
 
   def category, do: :evolution
 
@@ -32,11 +32,11 @@ defmodule Nex.Agent.Tool.Evolve do
 
   def execute(%{"module" => module_str, "code" => code, "reason" => reason}, _ctx) do
     module = String.to_atom("Elixir.#{module_str}")
-    Logger.info("[Evolve] Upgrading #{module_str}: #{reason}")
-    surgery_type = if Surgeon.core_module?(module), do: "precision", else: "normal"
-    Logger.info("[Evolve] Surgery type: #{surgery_type} for #{module_str}")
+    Logger.info("[UpgradeCode] Upgrading #{module_str}: #{reason}")
+    surgery_type = if UpgradeManager.core_module?(module), do: "precision", else: "normal"
+    Logger.info("[UpgradeCode] Upgrade type: #{surgery_type} for #{module_str}")
 
-    case Surgeon.upgrade(module, code, reason: reason) do
+    case UpgradeManager.upgrade(module, code, reason: reason) do
       {:ok, %{version: version, hot_reload: hot_reload}} ->
         version_id = Map.get(version, :id, "ok")
 
@@ -47,19 +47,19 @@ defmodule Nex.Agent.Tool.Evolve do
           end
 
         message =
-          "Module #{module_str} upgraded (#{surgery_type} surgery, v#{version_id}). Reason: #{reason}. Hot reload restart_required=#{hot_reload.restart_required}.#{registry_note}"
+          "Module #{module_str} upgraded (#{surgery_type} upgrade, v#{version_id}). Reason: #{reason}. Hot reload restart_required=#{hot_reload.restart_required}.#{registry_note}"
 
         {:ok,
          %{
            message: message,
            module: module_str,
-           surgery_type: surgery_type,
+           upgrade_type: surgery_type,
            version_id: version_id,
            hot_reload: hot_reload
          }}
 
       {:error, error} ->
-        {:error, "Evolution failed for #{module_str}: #{error}. Fix the code and try again."}
+        {:error, "Code upgrade failed for #{module_str}: #{error}. Fix the code and try again."}
     end
   end
 

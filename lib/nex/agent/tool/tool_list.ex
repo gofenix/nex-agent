@@ -3,12 +3,15 @@ defmodule Nex.Agent.Tool.ToolList do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.Evolution
+  alias Nex.Agent.CodeUpgrade
   alias Nex.Agent.Tool.CustomTools
   alias Nex.Agent.Tool.Registry
 
   def name, do: "tool_list"
-  def description, do: "List built-in and custom tools, or inspect a specific tool."
+
+  def description,
+    do: "List built-in and custom tools in the TOOL layer, or inspect a specific tool."
+
   def category, do: :evolution
 
   def definition do
@@ -60,9 +63,10 @@ defmodule Nex.Agent.Tool.ToolList do
       %{
         "name" => name,
         "scope" => "builtin",
+        "layer" => layer_for(module),
         "module" => inspect(module),
         "description" => description_for(module),
-        "source_path" => if(module, do: Evolution.source_path(module), else: nil)
+        "source_path" => if(module, do: CodeUpgrade.source_path(module), else: nil)
       }
     end)
   end
@@ -73,6 +77,7 @@ defmodule Nex.Agent.Tool.ToolList do
       %{
         "name" => tool["name"],
         "scope" => tool["scope"],
+        "layer" => "tool",
         "module" => tool["module"],
         "description" => tool["description"],
         "source_path" => tool.source_path,
@@ -95,9 +100,10 @@ defmodule Nex.Agent.Tool.ToolList do
           %{
             "name" => name,
             "scope" => "builtin",
+            "layer" => layer_for(module),
             "module" => inspect(module),
             "description" => description_for(module),
-            "source_path" => Evolution.source_path(module),
+            "source_path" => CodeUpgrade.source_path(module),
             "definition" => definition_for(module)
           }
       end
@@ -113,6 +119,7 @@ defmodule Nex.Agent.Tool.ToolList do
         %{
           "name" => tool["name"],
           "scope" => tool["scope"],
+          "layer" => "tool",
           "module" => tool["module"],
           "description" => tool["description"],
           "source_path" => tool.source_path,
@@ -137,4 +144,25 @@ defmodule Nex.Agent.Tool.ToolList do
       do: module.definition(),
       else: nil
   end
+
+  defp layer_for(module) when is_atom(module) do
+    if function_exported?(module, :name, 0) do
+      case module.name() do
+        "soul_update" -> "soul"
+        "memory_write" -> "user_memory"
+        "skill_create" -> "skill"
+        "skill_list" -> "skill"
+        "tool_create" -> "tool"
+        "tool_list" -> "tool"
+        "tool_delete" -> "tool"
+        "reflect" -> "code"
+        "upgrade_code" -> "code"
+        _ -> "tool"
+      end
+    else
+      "tool"
+    end
+  end
+
+  defp layer_for(_module), do: "tool"
 end

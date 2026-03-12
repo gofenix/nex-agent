@@ -9,7 +9,7 @@ defmodule Nex.Agent.Tool.MemoryWrite do
 
   def description do
     """
-    Persist important long-term information to workspace memory.
+    Persist important long-term information to the USER or MEMORY layer.
 
     Use this when you learn something that should survive future sessions.
 

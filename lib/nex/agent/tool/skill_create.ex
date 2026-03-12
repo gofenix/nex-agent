@@ -8,7 +8,7 @@ defmodule Nex.Agent.Tool.SkillCreate do
 
   def description do
     """
-    Create a new reusable Markdown skill.
+    Create a new reusable Markdown skill in the SKILL layer.
 
     Use this to save procedural memory: a repeatable workflow, checklist, or operating pattern
     that proved useful during a complex task. Good candidates include multi-step fixes, user-corrected

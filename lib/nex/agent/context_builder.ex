@@ -86,13 +86,16 @@ defmodule Nex.Agent.ContextBuilder do
     guidance = """
     ## Runtime Evolution
 
-    Decide for yourself when new information should become persistent knowledge.
+    Route long-term changes into the correct layer:
 
-    - Save durable user profile details, preferences, timezone, communication style, and personal context to `USER.md`
-    - Save durable environment facts, project conventions, workflow lessons, and important operational context to `MEMORY.md`
-    - Save repeatable multi-step procedures and reusable workflows as skills
-    - Do not persist one-off outputs, temporary state, or information that is easy to rediscover
-    - After a complex task, user correction, or hard-won debugging path, actively evaluate whether something should be saved
+    - SOUL: identity, values, and long-term operating principles
+    - USER: user profile, preferences, timezone, communication style, collaboration expectations
+    - MEMORY: environment facts, project conventions, workflow lessons, durable operational context
+    - SKILL: reusable multi-step workflows and procedural knowledge
+    - TOOL: deterministic executable capabilities
+    - CODE: internal implementation upgrades
+
+    Prefer the highest layer that solves the need. Do not persist one-off outputs, temporary state, or information that is easy to rediscover.
     """
 
     parts ++ [guidance]

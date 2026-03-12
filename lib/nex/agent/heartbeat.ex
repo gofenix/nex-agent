@@ -5,7 +5,7 @@ defmodule Nex.Agent.Heartbeat do
   Built-in maintenance (once per day):
   - Session GC: delete sessions older than 30 days
   - Memory log archive: archive daily logs older than 60 days
-  - Evolution cleanup: keep only latest 10 versions per module
+  - Code upgrade cleanup: keep only latest 10 versions per module
 
   User-defined tasks from HEARTBEAT.md:
   - `every:` interval-based tasks
@@ -200,7 +200,7 @@ defmodule Nex.Agent.Heartbeat do
           results = [
             {:session_gc, run_session_gc()},
             {:log_archive, run_log_archive()},
-            {:evolution_cleanup, run_evolution_cleanup()}
+            {:code_upgrade_cleanup, run_code_upgrade_cleanup()}
           ]
 
           send(heartbeat, {:maintenance_done, results})
@@ -292,7 +292,7 @@ defmodule Nex.Agent.Heartbeat do
       :error
   end
 
-  defp run_evolution_cleanup, do: :ok
+  defp run_code_upgrade_cleanup, do: :ok
 
   # ── HEARTBEAT.md Tasks ──
 

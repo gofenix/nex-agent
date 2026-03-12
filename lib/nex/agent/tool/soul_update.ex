@@ -6,8 +6,7 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   def name, do: "soul_update"
 
   def description,
-    do:
-      "Update your SOUL.md personality/behavior file. SOUL.md is located at ~/.nex/agent/workspace/SOUL.md (the workspace root, NOT in the memory/ folder)."
+    do: "Update your SOUL.md identity and principle file in the configured workspace root."
 
   def category, do: :evolution
 
@@ -26,8 +25,14 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   end
 
   def execute(%{"content" => content}, _ctx) do
-    soul_path =
-      Path.join([System.get_env("HOME", "."), ".nex", "agent", "workspace", "SOUL.md"])
+    workspace =
+      Application.get_env(
+        :nex_agent,
+        :workspace_path,
+        Path.join(System.get_env("HOME", "."), ".nex/agent/workspace")
+      )
+
+    soul_path = Path.join(workspace, "SOUL.md")
 
     dir = Path.dirname(soul_path)
     File.mkdir_p!(dir)
