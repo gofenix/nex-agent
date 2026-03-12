@@ -19,6 +19,20 @@ defmodule Nex.Agent.Runner do
   @memory_window 50
   @max_tool_result_length 8000
   @tool_hint_preview_length 220
+  @memory_nudge_interval 6
+  @memory_flush_min_messages 12
+  @skill_complexity_tool_calls 4
+  @skill_complexity_tool_rounds 2
+  @user_correction_terms [
+    "actually",
+    "instead",
+    "that's wrong",
+    "that is wrong",
+    "不对",
+    "应该",
+    "改成",
+    "不是这个"
+  ]
 
   @doc """
   Run agent loop with session and prompt.
@@ -29,13 +43,17 @@ defmodule Nex.Agent.Runner do
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
+    workspace = Keyword.get(opts, :workspace)
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
 
     session =
       if Keyword.get(opts, :skip_consolidation, false),
         do: session,
-        else: maybe_consolidate_memory(session, provider, model, api_key, base_url)
+        else: maybe_consolidate_memory(session, provider, model, api_key, base_url, opts)
+
+    initial_message_count = length(session.messages)
+    {session, runtime_system_messages} = prepare_evolution_turn(session, prompt)
 
     history_limit = Keyword.get(opts, :history_limit, @memory_window)
     history = Session.get_history(session, history_limit)
@@ -45,26 +63,51 @@ defmodule Nex.Agent.Runner do
 
     messages =
       ContextBuilder.build_messages(history, prompt, channel, chat_id, nil,
-        skip_skills: Keyword.get(opts, :skip_skills, false)
+        skip_skills: Keyword.get(opts, :skip_skills, false),
+        workspace: workspace,
+        runtime_system_messages: runtime_system_messages
       )
 
     session = Session.add_message(session, "user", prompt)
 
     Logger.info("[Runner] LLM request: history=#{length(history)} messages=#{length(messages)}")
 
-    run_loop(session, messages, 0, max_iterations, opts)
+    opts =
+      opts
+      |> Keyword.put(:workspace, workspace)
+      |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
+
+    case run_loop(session, messages, 0, max_iterations, opts) do
+      {:ok, result, final_session} ->
+        {:ok, result, finalize_evolution_turn(final_session, initial_message_count, prompt)}
+
+      {:error, reason, final_session} ->
+        {:error, reason, finalize_evolution_turn(final_session, initial_message_count, prompt)}
+    end
   end
 
-  defp maybe_consolidate_memory(session, provider, model, api_key, base_url) do
+  defp maybe_consolidate_memory(session, provider, model, api_key, base_url, opts) do
     case SessionManager.start_consolidation(session.key, @memory_window) do
       {:ok, consolidation_session, unconsolidated} ->
         Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
 
         Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+          _ =
+            maybe_flush_memory_before_consolidation(
+              consolidation_session,
+              provider,
+              model,
+              api_key,
+              base_url,
+              opts
+            )
+
           case Memory.consolidate(consolidation_session, provider, model,
                  api_key: api_key,
                  base_url: base_url,
-                 memory_window: @memory_window
+                 memory_window: @memory_window,
+                 workspace: Keyword.get(opts, :workspace),
+                 req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun)
                ) do
             {:ok, updated_session} ->
               SessionManager.finish_consolidation(updated_session)
@@ -89,6 +132,72 @@ defmodule Nex.Agent.Runner do
         session
     end
   end
+
+  defp prepare_evolution_turn(session, prompt) do
+    metadata = evolution_metadata(session)
+    turns_since_memory = metadata["turns_since_memory_write"] || 0
+    turns_for_this_request = turns_since_memory + 1
+    pending_skill_nudge = metadata["pending_skill_nudge"] == true
+
+    runtime_system_messages =
+      []
+      |> maybe_add_memory_nudge(turns_for_this_request)
+      |> maybe_add_skill_nudge(pending_skill_nudge)
+
+    updated_metadata =
+      metadata
+      |> Map.put("turns_since_memory_write", turns_for_this_request)
+      |> Map.put("pending_skill_nudge", false)
+      |> Map.put("last_prompt", prompt)
+
+    {put_evolution_metadata(session, updated_metadata), runtime_system_messages}
+  end
+
+  defp finalize_evolution_turn(session, initial_message_count, prompt) do
+    delta_messages = Enum.drop(session.messages, initial_message_count)
+    signals = collect_evolution_signals(delta_messages, prompt)
+    metadata = evolution_metadata(session)
+    wrote_memory = signals.wrote_memory
+    created_skill = signals.created_skill
+
+    updated_metadata =
+      metadata
+      |> Map.put(
+        "turns_since_memory_write",
+        if(wrote_memory, do: 0, else: Map.get(metadata, "turns_since_memory_write", 0))
+      )
+      |> Map.put("last_complex_task", signals.complex_task)
+      |> Map.put("last_tool_call_count", signals.tool_call_count)
+      |> Map.put("last_tool_rounds", signals.tool_rounds)
+      |> Map.put(
+        "pending_skill_nudge",
+        signals.complex_task and not created_skill
+      )
+
+    put_evolution_metadata(session, updated_metadata)
+  end
+
+  defp maybe_add_memory_nudge(messages, turns_since_memory_write) do
+    if turns_since_memory_write >= @memory_nudge_interval and
+         rem(turns_since_memory_write, @memory_nudge_interval) == 0 do
+      messages ++
+        [
+          "[Runtime Evolution Nudge] Several exchanges have passed without a memory update. " <>
+            "If this session revealed durable facts about the user, environment, or project conventions, decide whether to save them with memory_write."
+        ]
+    else
+      messages
+    end
+  end
+
+  defp maybe_add_skill_nudge(messages, true) do
+    messages ++
+      [
+        "[Runtime Evolution Nudge] The previous task was complex. If you discovered a reusable workflow, troubleshooting path, or corrected multi-step procedure, decide whether to save it with skill_create."
+      ]
+  end
+
+  defp maybe_add_skill_nudge(messages, _), do: messages
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
     iter_start = System.monotonic_time(:millisecond)
@@ -230,7 +339,8 @@ defmodule Nex.Agent.Runner do
           reasoning_content: reasoning_content
         )
 
-      {new_messages, results, session} = execute_tools(session, messages, tool_call_dicts, opts)
+      {new_messages, results, session, opts} =
+        execute_tools(session, messages, tool_call_dicts, opts)
 
       maybe_publish_tool_results(results, opts)
 
@@ -664,7 +774,7 @@ defmodule Nex.Agent.Runner do
         {msgs, sess}
       end)
 
-    {new_messages, results, session}
+    {new_messages, results, session, update_evolution_signals(opts, results)}
   end
 
   defp parse_args(args) when is_binary(args) do
@@ -739,6 +849,7 @@ defmodule Nex.Agent.Runner do
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
+      workspace: Keyword.get(opts, :workspace),
       metadata: Keyword.get(opts, :metadata, %{})
     }
   end
@@ -810,4 +921,159 @@ defmodule Nex.Agent.Runner do
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp default_evolution_signals do
+    %{
+      tool_call_count: 0,
+      tool_rounds: 0,
+      tool_errors: 0,
+      used_tools: []
+    }
+  end
+
+  defp update_evolution_signals(opts, results) do
+    current = Keyword.get(opts, :_evolution_signals, default_evolution_signals())
+
+    tool_errors =
+      Enum.count(results, fn {_id, _name, result, _args} ->
+        String.starts_with?(result, "Error:")
+      end)
+
+    used_tools = Enum.map(results, fn {_id, name, _result, _args} -> name end)
+
+    Keyword.put(opts, :_evolution_signals, %{
+      tool_call_count: current.tool_call_count + length(results),
+      tool_rounds: current.tool_rounds + if(results == [], do: 0, else: 1),
+      tool_errors: current.tool_errors + tool_errors,
+      used_tools: current.used_tools ++ used_tools
+    })
+  end
+
+  defp evolution_metadata(session) do
+    Map.get(session.metadata || %{}, "runtime_evolution", %{})
+  end
+
+  defp put_evolution_metadata(session, metadata) do
+    %{session | metadata: Map.put(session.metadata || %{}, "runtime_evolution", metadata)}
+  end
+
+  defp collect_evolution_signals(delta_messages, prompt) do
+    tool_messages = Enum.filter(delta_messages, &(Map.get(&1, "role") == "tool"))
+    tool_call_count = length(tool_messages)
+    used_tools = Enum.map(tool_messages, &Map.get(&1, "name"))
+
+    tool_rounds =
+      delta_messages
+      |> Enum.filter(&(Map.get(&1, "role") == "assistant" and is_list(Map.get(&1, "tool_calls"))))
+      |> length()
+
+    tool_errors =
+      tool_messages
+      |> Enum.count(fn msg ->
+        msg
+        |> Map.get("content", "")
+        |> to_string()
+        |> String.starts_with?("Error:")
+      end)
+
+    correction_hint =
+      prompt
+      |> String.downcase()
+      |> then(fn lowered -> Enum.any?(@user_correction_terms, &String.contains?(lowered, &1)) end)
+
+    %{
+      wrote_memory: "memory_write" in used_tools,
+      created_skill: "skill_create" in used_tools,
+      tool_call_count: tool_call_count,
+      tool_rounds: tool_rounds,
+      tool_errors: tool_errors,
+      correction_hint: correction_hint,
+      complex_task:
+        tool_call_count >= @skill_complexity_tool_calls or
+          tool_rounds >= @skill_complexity_tool_rounds or
+          tool_errors > 0 or correction_hint
+    }
+  end
+
+  defp maybe_flush_memory_before_consolidation(session, provider, model, api_key, base_url, opts) do
+    unconsolidated = length(session.messages) - session.last_consolidated
+
+    if unconsolidated < @memory_flush_min_messages do
+      :ok
+    else
+      lines =
+        session.messages
+        |> Enum.drop(session.last_consolidated)
+        |> Enum.take(-@memory_window)
+        |> Enum.map(fn msg ->
+          role = Map.get(msg, "role", "unknown")
+          content = Map.get(msg, "content", "") |> to_string()
+          "[#{role}] #{content}"
+        end)
+        |> Enum.reject(&(&1 == "[unknown] "))
+
+      if lines == [] do
+        :ok
+      else
+        prompt = """
+        Review this conversation excerpt before archival. If it contains one durable fact worth saving,
+        call memory_write exactly once. Choose target=user for stable user profile details, or target=memory
+        for durable project/environment/workflow knowledge. If nothing is worth saving, do not call any tool.
+
+        ## USER.md
+        #{Memory.read_user_profile(workspace: Keyword.get(opts, :workspace))}
+
+        ## MEMORY.md
+        #{Memory.read_long_term(workspace: Keyword.get(opts, :workspace))}
+
+        ## Recent Conversation
+        #{Enum.join(lines, "\n")}
+        """
+
+        messages = [
+          %{
+            "role" => "system",
+            "content" =>
+              "You are a memory flush agent. Only call memory_write when the conversation contains durable long-term knowledge worth saving."
+          },
+          %{"role" => "user", "content" => prompt}
+        ]
+
+        case call_llm_for_consolidation(messages,
+               provider: provider,
+               model: model,
+               api_key: api_key,
+               base_url: base_url,
+               tools: [
+                 %{
+                   "type" => "function",
+                   "function" => Nex.Agent.Tool.MemoryWrite.definition()
+                 }
+               ],
+               tool_choice: tool_choice_for_memory_write(provider),
+               req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun)
+             ) do
+          {:ok, %{} = args} when map_size(args) > 0 ->
+            _ =
+              Memory.apply_memory_write(
+                Map.get(args, "action"),
+                Map.get(args, "target"),
+                Map.get(args, "content"),
+                Map.get(args, "old_text"),
+                workspace: Keyword.get(opts, :workspace)
+              )
+
+            :ok
+
+          _ ->
+            :ok
+        end
+      end
+    end
+  end
+
+  defp tool_choice_for_memory_write(:anthropic), do: %{type: "tool", name: "memory_write"}
+
+  defp tool_choice_for_memory_write(_provider),
+    do: %{type: "function", function: %{name: "memory_write"}}
 end

@@ -76,6 +76,13 @@ defmodule Nex.Agent.Tool.SkillList do
   end
 
   defp skills_dir do
-    Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
+    workspace =
+      Application.get_env(
+        :nex_agent,
+        :workspace_path,
+        Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
+      )
+
+    Path.join(workspace, "skills")
   end
 end

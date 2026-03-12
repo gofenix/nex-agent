@@ -22,9 +22,9 @@ defmodule Nex.Agent.Memory do
   @doc """
   Initialize memory directory structure.
   """
-  @spec init() :: :ok
-  def init do
-    File.mkdir_p!(memory_dir())
+  @spec init(keyword()) :: :ok
+  def init(opts \\ []) do
+    File.mkdir_p!(memory_dir(opts))
     :ok
   end
 
@@ -71,6 +71,54 @@ defmodule Nex.Agent.Memory do
   def get_memory_context(opts \\ []) do
     long_term = read_long_term(opts)
     if long_term == "", do: "", else: "## Long-term Memory\n#{long_term}"
+  end
+
+  @doc """
+  Read the user profile file from USER.md.
+  """
+  @spec read_user_profile(keyword()) :: String.t()
+  def read_user_profile(opts \\ []) do
+    user_file = user_file(opts)
+
+    if File.exists?(user_file) do
+      File.read!(user_file)
+    else
+      ""
+    end
+  end
+
+  @doc """
+  Write USER.md content.
+  """
+  @spec write_user_profile(String.t(), keyword()) :: :ok
+  def write_user_profile(content, opts \\ []) do
+    ensure_workspace(opts)
+    File.write!(user_file(opts), content)
+    :ok
+  end
+
+  @doc """
+  Apply a direct memory write operation to MEMORY.md or USER.md.
+  """
+  @spec apply_memory_write(String.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
+          {:ok, map()} | {:error, String.t()}
+  def apply_memory_write(action, target, content, old_text, opts \\ []) do
+    target = normalize_target(target)
+    current = read_target(target, opts)
+
+    case action do
+      "add" ->
+        do_add_memory(target, current, content, opts)
+
+      "replace" ->
+        do_replace_memory(target, current, old_text, content, opts)
+
+      "remove" ->
+        do_remove_memory(target, current, old_text, opts)
+
+      other ->
+        {:error, "Unsupported memory action: #{inspect(other)}"}
+    end
   end
 
   @doc """
@@ -288,13 +336,15 @@ defmodule Nex.Agent.Memory do
   defp stringify_result(value) when is_binary(value), do: value
   defp stringify_result(value), do: Jason.encode!(value)
 
-  defp init(opts) do
-    File.mkdir_p!(memory_dir(opts))
-    :ok
+  defp memory_dir(opts) do
+    Path.join(workspace_path(opts), "memory")
   end
 
-  defp memory_dir(opts \\ []) do
-    Path.join(workspace_path(opts), "memory")
+  defp ensure_workspace(opts) do
+    workspace = workspace_path(opts)
+    File.mkdir_p!(workspace)
+    File.mkdir_p!(memory_dir(opts))
+    :ok
   end
 
   defp workspace_path(opts) do
@@ -303,6 +353,100 @@ defmodule Nex.Agent.Memory do
 
   defp workspace_opts(nil), do: []
   defp workspace_opts(workspace), do: [workspace: workspace]
+
+  defp user_file(opts), do: Path.join(workspace_path(opts), "USER.md")
+
+  defp target_file("memory", opts), do: Path.join(memory_dir(opts), "MEMORY.md")
+  defp target_file("user", opts), do: user_file(opts)
+
+  defp normalize_target(target) when target in ["memory", :memory], do: "memory"
+  defp normalize_target(target) when target in ["user", :user], do: "user"
+  defp normalize_target(_target), do: "memory"
+
+  defp read_target(target, opts) do
+    target_file = target_file(target, opts)
+
+    if File.exists?(target_file) do
+      File.read!(target_file)
+    else
+      ""
+    end
+  end
+
+  defp write_target(target, content, opts) do
+    ensure_workspace(opts)
+    File.write!(target_file(target, opts), content)
+    :ok
+  end
+
+  defp do_add_memory(_target, _current, nil, _opts), do: {:error, "content is required for add"}
+  defp do_add_memory(_target, _current, "", _opts), do: {:error, "content is required for add"}
+
+  defp do_add_memory(target, current, content, opts) do
+    trimmed = String.trim(content)
+
+    if trimmed == "" do
+      {:error, "content is required for add"}
+    else
+      updated =
+        cond do
+          String.trim(current) == "" ->
+            trimmed <> "\n"
+
+          String.contains?(current, trimmed) ->
+            current
+
+          true ->
+            String.trim_trailing(current) <> "\n\n" <> trimmed <> "\n"
+        end
+
+      :ok = write_target(target, updated, opts)
+      {:ok, %{target: target, action: "add", content: trimmed}}
+    end
+  end
+
+  defp do_replace_memory(_target, _current, old_text, _content, _opts)
+       when old_text in [nil, ""] do
+    {:error, "old_text is required for replace"}
+  end
+
+  defp do_replace_memory(_target, _current, _old_text, new_content, _opts)
+       when new_content in [nil, ""] do
+    {:error, "content is required for replace"}
+  end
+
+  defp do_replace_memory(target, current, old_text, new_content, opts) do
+    case String.split(current, old_text, parts: 2) do
+      [prefix, suffix] when suffix != current ->
+        updated = prefix <> new_content <> suffix
+        :ok = write_target(target, updated, opts)
+        {:ok, %{target: target, action: "replace", old_text: old_text}}
+
+      _ ->
+        {:error, "old_text not found in #{target}"}
+    end
+  end
+
+  defp do_remove_memory(_target, _current, old_text, _opts) when old_text in [nil, ""] do
+    {:error, "old_text is required for remove"}
+  end
+
+  defp do_remove_memory(target, current, old_text, opts) do
+    case String.split(current, old_text, parts: 2) do
+      [prefix, suffix] when suffix != current ->
+        updated =
+          (prefix <> suffix)
+          |> String.replace(~r/\n{3,}/, "\n\n")
+          |> String.trim_trailing()
+          |> Kernel.<>("\n")
+
+        :ok = write_target(target, updated, opts)
+        {:ok, %{target: target, action: "remove", old_text: old_text}}
+
+      _ ->
+        {:error, "old_text not found in #{target}"}
+    end
+  end
 
   defp tool_choice_for(:anthropic, name), do: %{type: "tool", name: name}
 

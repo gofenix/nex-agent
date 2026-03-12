@@ -5,7 +5,18 @@ defmodule Nex.Agent.Tool.SkillCreate do
   alias Nex.Agent.Skills
 
   def name, do: "skill_create"
-  def description, do: "Create a new reusable skill."
+
+  def description do
+    """
+    Create a new reusable Markdown skill.
+
+    Use this to save procedural memory: a repeatable workflow, checklist, or operating pattern
+    that proved useful during a complex task. Good candidates include multi-step fixes, user-corrected
+    procedures, and workflows discovered after tool failures or retries. Do not use this for one-off
+    outputs or code-based capabilities; those should stay in tools.
+    """
+  end
+
   def category, do: :evolution
 
   def definition do
@@ -16,8 +27,15 @@ defmodule Nex.Agent.Tool.SkillCreate do
         type: "object",
         properties: %{
           name: %{type: "string", description: "Skill name (snake_case)"},
-          description: %{type: "string", description: "What this skill does"},
-          content: %{type: "string", description: "Markdown skill content"}
+          description: %{
+            type: "string",
+            description: "What reusable workflow this skill captures"
+          },
+          content: %{
+            type: "string",
+            description:
+              "Markdown skill content describing when to use the skill, the workflow steps, and key pitfalls"
+          }
         },
         required: ["name", "description", "content"]
       }

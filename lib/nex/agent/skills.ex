@@ -235,7 +235,14 @@ defmodule Nex.Agent.Skills do
   defp yaml_scalar(value), do: inspect(value)
 
   defp skills_dir do
-    Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
+    workspace =
+      Application.get_env(
+        :nex_agent,
+        :workspace_path,
+        Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
+      )
+
+    Path.join(workspace, "skills")
   end
 
   defp escape_yaml_string(value),

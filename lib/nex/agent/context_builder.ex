@@ -22,6 +22,7 @@ defmodule Nex.Agent.ContextBuilder do
       []
       |> add_identity()
       |> add_runtime_guidance(workspace)
+      |> add_evolution_guidance()
       |> load_bootstrap_files(workspace)
       |> add_memory(workspace)
       |> then(fn parts ->
@@ -79,6 +80,22 @@ defmodule Nex.Agent.ContextBuilder do
 
     You are Nex Agent, a helpful AI assistant.
     """
+  end
+
+  defp add_evolution_guidance(parts) do
+    guidance = """
+    ## Runtime Evolution
+
+    Decide for yourself when new information should become persistent knowledge.
+
+    - Save durable user profile details, preferences, timezone, communication style, and personal context to `USER.md`
+    - Save durable environment facts, project conventions, workflow lessons, and important operational context to `MEMORY.md`
+    - Save repeatable multi-step procedures and reusable workflows as skills
+    - Do not persist one-off outputs, temporary state, or information that is easy to rediscover
+    - After a complex task, user correction, or hard-won debugging path, actively evaluate whether something should be saved
+    """
+
+    parts ++ [guidance]
   end
 
   defp load_bootstrap_files(parts, workspace) do
@@ -191,6 +208,7 @@ defmodule Nex.Agent.ContextBuilder do
       ) do
     runtime_ctx = build_runtime_context(channel, chat_id)
     user_content = build_user_content(current_message, media)
+    runtime_system_messages = Keyword.get(opts, :runtime_system_messages, [])
 
     merged =
       if is_binary(user_content) do
@@ -201,6 +219,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     [
       %{"role" => "system", "content" => build_system_prompt(opts)},
+      Enum.map(runtime_system_messages, &%{"role" => "system", "content" => &1}),
       Enum.map(history, &clean_history_entry/1),
       %{"role" => "user", "content" => merged}
     ]
