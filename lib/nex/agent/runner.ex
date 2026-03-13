@@ -317,7 +317,7 @@ defmodule Nex.Agent.Runner do
       )
 
       {:ok,
-       content ||
+       render_text(content) ||
          "I detected a repeated action loop and stopped. Please try a different approach.",
        session}
     else
@@ -385,14 +385,16 @@ defmodule Nex.Agent.Runner do
          _on_progress,
          _opts
        ) do
-    Logger.info("[Runner] LLM finished: #{String.slice(content || "", 0, 100)}")
+    content_text = render_text(content)
+
+    Logger.info("[Runner] LLM finished: #{String.slice(content_text, 0, 100)}")
 
     session =
-      Session.add_message(session, "assistant", content || "",
+      Session.add_message(session, "assistant", content_text,
         reasoning_content: reasoning_content
       )
 
-    {:ok, content || "", session}
+    {:ok, content_text, session}
   end
 
   defp normalize_tool_calls(tool_calls) do
@@ -466,7 +468,7 @@ defmodule Nex.Agent.Runner do
     inspect(args, limit: :infinity, printable_limit: 500)
   end
 
-  defp normalize_tool_hint_args(args, _tool_name), do: to_string(args)
+  defp normalize_tool_hint_args(args, _tool_name), do: render_text(args)
 
   defp truncate_tool_hint(text, max_len) when is_binary(text) and byte_size(text) > max_len do
     String.slice(text, 0, max_len - 3) <> "..."
@@ -478,6 +480,7 @@ defmodule Nex.Agent.Runner do
 
   defp strip_think_tags(content) do
     content
+    |> render_text()
     |> String.replace(~r/<think>.*?<\/think>/s, "")
     |> String.trim()
   end
@@ -485,7 +488,7 @@ defmodule Nex.Agent.Runner do
   defp maybe_publish_tool_results(results, opts) do
     if Process.whereis(Nex.Agent.Bus) do
       Enum.each(results, fn {_id, tool_name, result, args} ->
-        success = not String.starts_with?(to_string(result), "Error")
+        success = not String.starts_with?(render_text(result), "Error")
 
         Bus.publish(:tool_result, %{
           tool: tool_name,
@@ -689,6 +692,7 @@ defmodule Nex.Agent.Runner do
           false
         end
       end)
+      |> Enum.uniq_by(& &1["name"])
     else
       []
     end
@@ -814,7 +818,7 @@ defmodule Nex.Agent.Runner do
           Jason.encode!(result, pretty: true)
 
         {:ok, result} ->
-          to_string(result)
+          render_text(result)
 
         {:error, "Unknown tool: " <> _} when is_binary(tool_name) ->
           # Tool not in Registry — try Skills system (handles skill_xxx pattern)
@@ -833,7 +837,7 @@ defmodule Nex.Agent.Runner do
     skill_name = String.replace_prefix(name, "skill_", "")
 
     case Skills.execute(skill_name, args["input"] || args[:input] || "", invoked_by: :model) do
-      {:ok, %{result: result}} -> to_string(result)
+      {:ok, %{result: result}} -> render_text(result)
       {:ok, result} -> if(is_binary(result), do: result, else: inspect(result))
       {:error, reason} -> "Error executing skill #{skill_name}: #{inspect(reason)}"
     end
@@ -972,7 +976,7 @@ defmodule Nex.Agent.Runner do
       |> Enum.count(fn msg ->
         msg
         |> Map.get("content", "")
-        |> to_string()
+        |> render_text()
         |> String.starts_with?("Error:")
       end)
 
@@ -1007,7 +1011,7 @@ defmodule Nex.Agent.Runner do
         |> Enum.take(-@memory_window)
         |> Enum.map(fn msg ->
           role = Map.get(msg, "role", "unknown")
-          content = Map.get(msg, "content", "") |> to_string()
+          content = Map.get(msg, "content", "") |> render_text()
           "[#{role}] #{content}"
         end)
         |> Enum.reject(&(&1 == "[unknown] "))
@@ -1069,6 +1073,44 @@ defmodule Nex.Agent.Runner do
             :ok
         end
       end
+    end
+  end
+
+  defp render_text(nil), do: ""
+  defp render_text(text) when is_binary(text), do: text
+
+  defp render_text(text) when is_atom(text) or is_integer(text) or is_float(text),
+    do: to_string(text)
+
+  defp render_text(content) when is_list(content) do
+    cond do
+      List.ascii_printable?(content) ->
+        to_string(content)
+
+      Enum.all?(content, &text_content_part?/1) ->
+        Enum.map_join(content, "", fn
+          %{"type" => "text", "text" => text} -> text
+          %{type: "text", text: text} -> text
+          text when is_binary(text) -> text
+        end)
+
+      true ->
+        render_structured(content)
+    end
+  end
+
+  defp render_text(content) when is_map(content), do: render_structured(content)
+  defp render_text(content), do: inspect(content, printable_limit: 500, limit: 50)
+
+  defp text_content_part?(%{"type" => "text", "text" => text}) when is_binary(text), do: true
+  defp text_content_part?(%{type: "text", text: text}) when is_binary(text), do: true
+  defp text_content_part?(text) when is_binary(text), do: true
+  defp text_content_part?(_), do: false
+
+  defp render_structured(content) do
+    case Jason.encode(content, pretty: true) do
+      {:ok, encoded} -> encoded
+      _ -> inspect(content, printable_limit: 500, limit: 50)
     end
   end
 

@@ -161,4 +161,60 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     assert get_in(session_after_second.metadata, ["runtime_evolution", "pending_skill_nudge"]) ==
              false
   end
+
+  test "structured tool arguments crash in tool hint normalization", %{workspace: workspace} do
+    llm_client = fn _messages, _opts ->
+      {:ok,
+       %{
+         content: "thinking",
+         finish_reason: nil,
+         tool_calls: [
+           %{
+             id: "call_bad_args",
+             function: %{
+               name: "list_dir",
+               arguments: [%{"a" => 1}]
+             }
+           }
+         ]
+       }}
+    end
+
+    assert {:ok, _result, _session} =
+             Runner.run(Session.new("runner-structured-args"), "trigger structured args",
+               llm_client: llm_client,
+               on_progress: fn _, _ -> :ok end,
+               workspace: workspace,
+               skip_consolidation: true
+             )
+  end
+
+  test "structured model content crashes in progress thinking sanitization", %{
+    workspace: workspace
+  } do
+    llm_client = fn _messages, _opts ->
+      {:ok,
+       %{
+         content: [%{"nested" => [%{"x" => 1}]}],
+         finish_reason: nil,
+         tool_calls: [
+           %{
+             id: "call_progress_content",
+             function: %{
+               name: "list_dir",
+               arguments: %{"path" => "."}
+             }
+           }
+         ]
+       }}
+    end
+
+    assert {:ok, _result, _session} =
+             Runner.run(Session.new("runner-structured-content"), "trigger structured content",
+               llm_client: llm_client,
+               on_progress: fn _, _ -> :ok end,
+               workspace: workspace,
+               skip_consolidation: true
+             )
+  end
 end
