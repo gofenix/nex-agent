@@ -63,5 +63,11 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert File.exists?(Path.join(workspace, "skills/legacy-skill/SKILL.md"))
     assert File.exists?(Path.join(workspace, "sessions/legacy-session/messages.jsonl"))
     assert File.exists?(Path.join(workspace, "tools/legacy-tool/tool.ex"))
+
+    memory_template = File.read!(Path.join(workspace, "memory/MEMORY.md"))
+    assert memory_template =~ "## Environment Facts"
+    assert memory_template =~ "## Project Conventions"
+    assert memory_template =~ "## Workflow Lessons"
+    refute memory_template =~ "## User Information"
   end
 end

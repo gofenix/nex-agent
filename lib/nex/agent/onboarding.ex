@@ -406,21 +406,21 @@ defmodule Nex.Agent.Onboarding do
 
     This file stores important facts that persist across conversations.
 
-    ## User Information
+    ## Environment Facts
 
-    (Important facts about the user)
+    (Stable facts about runtime, infrastructure, and toolchain)
 
-    ## Preferences
+    ## Project Conventions
 
-    (User preferences learned over time)
+    (Important project-specific conventions and decisions)
 
     ## Project Context
 
     (Information about ongoing projects)
 
-    ## Important Notes
+    ## Workflow Lessons
 
-    (Things to remember)
+    (Reusable lessons learned from successful or failed execution paths)
 
     ---
 
