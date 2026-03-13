@@ -11,7 +11,7 @@ defmodule Nex.Agent.Tool.Message do
     %{
       name: "message",
       description:
-        "Send a message to the user. Use this when you want to communicate something immediately.",
+        "Send a message to the user. Use this when you want to communicate something immediately. For Feishu, you can send structured native message types by providing msg_type plus content_json.",
       parameters: %{
         type: "object",
         properties: %{
@@ -19,12 +19,12 @@ defmodule Nex.Agent.Tool.Message do
           msg_type: %{
             type: "string",
             description:
-              "Optional explicit message type for channels that support structured messages, such as Feishu."
+              "Optional explicit message type for channels that support structured messages, such as Feishu. Feishu examples: text, post, interactive, image, file, audio, media, sticker, share_chat, share_user, system."
           },
           content_json: %{
             type: ["object", "string"],
             description:
-              "Optional structured message payload. For Feishu this should be the raw content JSON object/string for the specified msg_type."
+              "Optional structured message payload. For Feishu this should be the raw content JSON object/string for the specified msg_type. Examples: image => {image_key}, file/audio/media/sticker => {file_key}, share_chat => {chat_id}, share_user => {user_id}, text => {text}, system => {type, params}."
           },
           receive_id_type: %{
             type: "string",

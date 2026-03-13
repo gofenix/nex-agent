@@ -69,6 +69,19 @@ defmodule Nex.Agent.ContextBuilder do
     - Caveat: the current call may still run old code. Expect the next call to observe the new version.
 
     Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
+
+    ## Feishu Messaging
+    When using the `message` tool for channel=`feishu`:
+    - If you only have plain text, send `content` only. The runtime will keep the legacy default behavior.
+    - If you need a native Feishu format, set `msg_type` and `content_json` explicitly.
+    - Prefer `text` for short progress updates.
+    - Prefer `interactive` for formatted reports, code blocks, and structured summaries.
+    - Use `image` with `{"image_key": "..."}`
+    - Use `file`, `audio`, `media`, or `sticker` with `{"file_key": "..."}`
+    - Use `share_chat` with `{"chat_id": "..."}`
+    - Use `share_user` with `{"user_id": "..."}`
+    - Use `system` only when the user clearly needs a Feishu system message and you know the exact payload.
+    - If you do not already have a valid `image_key` or `file_key`, do not guess one.
     """
 
     parts ++ [runtime_guidance]
