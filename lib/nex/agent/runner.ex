@@ -183,7 +183,8 @@ defmodule Nex.Agent.Runner do
       messages ++
         [
           "[Runtime Evolution Nudge] Several exchanges have passed without a memory update. " <>
-            "If this session revealed durable facts about the user, environment, or project conventions, decide whether to save them with memory_write."
+            "If this session revealed durable user profile facts, use user_update. " <>
+            "If it revealed durable environment or project conventions, use memory_write."
         ]
     else
       messages

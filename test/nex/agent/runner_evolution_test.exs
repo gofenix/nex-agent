@@ -87,6 +87,10 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                  String.contains?(&1["content"], "Several exchanges have passed"))
            )
 
+    system_prompt = Enum.find(messages, &(&1["role"] == "system"))["content"]
+    assert system_prompt =~ "use user_update"
+    assert system_prompt =~ "use memory_write"
+
     assert get_in(session.metadata, ["runtime_evolution", "turns_since_memory_write"]) == 0
   end
 
