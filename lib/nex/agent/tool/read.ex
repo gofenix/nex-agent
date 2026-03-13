@@ -35,23 +35,28 @@ defmodule Nex.Agent.Tool.Read do
   def execute(%{"path" => path} = args, _ctx) do
     case Security.validate_path(path) do
       {:ok, expanded} ->
-        case File.read(expanded) do
-          {:ok, content} ->
-            # Apply line range selection if specified
-            content = apply_line_range(content, args["offset"], args["limit"])
+        if reserved_profile_shadow_path?(expanded) do
+          {:error,
+           "USER profile lives at workspace/USER.md. Use user_update or read workspace/USER.md directly."}
+        else
+          case File.read(expanded) do
+            {:ok, content} ->
+              # Apply line range selection if specified
+              content = apply_line_range(content, args["offset"], args["limit"])
 
-            # Truncate if still too large
-            truncated =
-              if byte_size(content) > 100_000 do
-                String.slice(content, 0, 100_000) <> "\n\n[Output truncated]"
-              else
-                content
-              end
+              # Truncate if still too large
+              truncated =
+                if byte_size(content) > 100_000 do
+                  String.slice(content, 0, 100_000) <> "\n\n[Output truncated]"
+                else
+                  content
+                end
 
-            {:ok, truncated}
+              {:ok, truncated}
 
-          {:error, reason} ->
-            {:error, "Error reading file #{expanded}: #{inspect(reason)}"}
+            {:error, reason} ->
+              {:error, "Error reading file #{expanded}: #{inspect(reason)}"}
+          end
         end
 
       {:error, reason} ->
@@ -60,6 +65,10 @@ defmodule Nex.Agent.Tool.Read do
   end
 
   def execute(_args, _ctx), do: {:error, "path is required"}
+
+  defp reserved_profile_shadow_path?(expanded) do
+    Enum.take(Path.split(expanded), -2) == ["memory", "USER.md"]
+  end
 
   # Private helper for line range selection
   defp apply_line_range(content, nil, nil), do: content
