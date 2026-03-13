@@ -560,7 +560,9 @@ defmodule Nex.Agent.Channel.Feishu do
       |> Map.get("content", Map.get(message, :content))
       |> parse_content()
 
-    {content, _media_paths} = extract_content(msg_type, content_json, message_id)
+    normalized_content = normalize_inbound_content(msg_type, content_json, message_id)
+    content = Map.get(normalized_content, "summary")
+    resources = Map.get(normalized_content, "resources", [])
 
     Logger.debug(
       "[Feishu] normalize_message msg_type=#{inspect(msg_type)} sender_type=#{inspect(sender_type)} sender_id=#{inspect(sender_id)} chat_id=#{inspect(chat_id)} content=#{inspect(content)}"
@@ -602,7 +604,10 @@ defmodule Nex.Agent.Channel.Feishu do
              "message_id" => message_id,
              "user_id" => user_id,
              "chat_type" => to_string(chat_type),
-             "message_type" => msg_type
+             "message_type" => msg_type,
+             "raw_content_json" => content_json,
+             "normalized_content" => Map.delete(normalized_content, "summary"),
+             "resources" => resources
            }
          }}
     end
@@ -618,97 +623,170 @@ defmodule Nex.Agent.Channel.Feishu do
   defp parse_content(content) when is_map(content), do: content
   defp parse_content(_), do: %{}
 
-  defp extract_content("text", content_json, _message_id) do
+  defp normalize_inbound_content("text", content_json, _message_id) do
     text = Map.get(content_json, "text") || Map.get(content_json, :text)
-    {text, []}
+    %{"summary" => text, "text" => text, "resources" => []}
   end
 
-  defp extract_content("post", content_json, _message_id) do
-    text = extract_post_text(content_json)
-    {text, []}
+  defp normalize_inbound_content("post", content_json, _message_id) do
+    {summary, resources} = extract_post_text(content_json)
+    %{"summary" => summary, "post" => content_json, "resources" => resources}
   end
 
-  defp extract_content("image", content_json, message_id) do
+  defp normalize_inbound_content("image", content_json, message_id) do
     image_key =
       Map.get(content_json, "image_key") ||
         Map.get(content_json, :image_key)
 
     if image_key do
-      {"[image: #{image_key} message_id:#{message_id}]", []}
+      %{
+        "summary" => "[image: #{image_key} message_id:#{message_id}]",
+        "image_key" => image_key,
+        "resources" => [%{"type" => "image", "image_key" => image_key, "message_id" => message_id}]
+      }
     else
-      {nil, []}
+      %{"summary" => nil, "resources" => []}
     end
   end
 
-  defp extract_content(msg_type, content_json, _message_id)
-       when msg_type in ["audio", "file", "media"] do
+  defp normalize_inbound_content(msg_type, content_json, _message_id)
+       when msg_type in ["audio", "file", "media", "sticker", "folder"] do
     file_key =
       Map.get(content_json, "image_key") ||
         Map.get(content_json, "file_key") ||
         Map.get(content_json, :image_key) ||
         Map.get(content_json, :file_key)
 
+    file_name = Map.get(content_json, "file_name") || Map.get(content_json, :file_name)
+    duration = Map.get(content_json, "duration") || Map.get(content_json, :duration)
+
     if file_key do
-      content_text = "[#{msg_type}: #{file_key}]"
-      {content_text, []}
+      content_text =
+        case file_name do
+          name when is_binary(name) and name != "" -> "[#{msg_type}: #{name} #{file_key}]"
+          _ -> "[#{msg_type}: #{file_key}]"
+        end
+
+      %{
+        "summary" => content_text,
+        "file_key" => file_key,
+        "file_name" => file_name,
+        "duration" => duration,
+        "resources" => [
+          %{
+            "type" => msg_type,
+            "file_key" => file_key,
+            "file_name" => file_name,
+            "duration" => duration
+          }
+        ]
+      }
     else
-      {nil, []}
+      %{"summary" => nil, "resources" => []}
     end
   end
 
-  defp extract_content("interactive", content_json, _message_id) do
+  defp normalize_inbound_content("interactive", content_json, _message_id) do
     text = extract_interactive_content(content_json)
-    {text, []}
+    %{"summary" => text, "interactive" => content_json, "resources" => []}
   end
 
-  defp extract_content(msg_type, content_json, _message_id)
+  defp normalize_inbound_content(msg_type, content_json, _message_id)
        when msg_type in [
               "share_chat",
               "share_user",
               "share_calendar_event",
+              "calendar",
+              "general_calendar",
               "system",
-              "merge_forward"
+              "merge_forward",
+              "location",
+              "video_chat",
+              "todo",
+              "vote",
+              "hongbao"
             ] do
     text = extract_share_card_content(content_json, msg_type)
-    {text, []}
+    %{"summary" => text, "card" => content_json, "resources" => []}
   end
 
-  defp extract_content(_msg_type, _content_json, _message_id) do
-    {nil, []}
+  defp normalize_inbound_content(msg_type, content_json, _message_id) do
+    summary =
+      cond do
+        is_map(content_json) and map_size(content_json) > 0 -> "[#{msg_type}]"
+        true -> nil
+      end
+
+    %{"summary" => summary, "raw" => content_json, "resources" => []}
   end
 
   defp extract_post_text(content_json) do
     case Map.get(content_json, "zh_cn") || Map.get(content_json, "content") do
       nil ->
-        nil
+        {nil, []}
 
       post_content when is_map(post_content) ->
         title = Map.get(post_content, "title", "")
         content_blocks = Map.get(post_content, "content", [])
 
-        parts =
-          Enum.flat_map(content_blocks, fn block ->
+        {parts, resources} =
+          Enum.reduce(content_blocks, {[], []}, fn block, {parts_acc, res_acc} ->
             if is_list(block) do
-              Enum.map(block, fn
-                %{"tag" => "text", "text" => t} -> t
-                %{"tag" => "at", "user_name" => name} -> "@#{name}"
-                _ -> ""
-              end)
+              {block_parts, block_resources} =
+                Enum.reduce(block, {[], []}, fn
+                  %{"tag" => "text", "text" => t}, {acc_parts, acc_res} ->
+                    {[t | acc_parts], acc_res}
+
+                  %{"tag" => "at", "user_name" => name}, {acc_parts, acc_res} ->
+                    {["@#{name}" | acc_parts], acc_res}
+
+                  %{"tag" => "a", "text" => text, "href" => href}, {acc_parts, acc_res} ->
+                    text = if is_binary(text) and text != "", do: "#{text}(#{href})", else: href
+                    {[text | acc_parts], acc_res}
+
+                  %{"tag" => "img", "image_key" => image_key}, {acc_parts, acc_res} ->
+                    {["[image]" | acc_parts], [%{"type" => "image", "image_key" => image_key} | acc_res]}
+
+                  %{"tag" => "media", "file_key" => file_key} = media, {acc_parts, acc_res} ->
+                    {["[media]" | acc_parts],
+                     [
+                       %{
+                         "type" => "media",
+                         "file_key" => file_key,
+                         "image_key" => Map.get(media, "image_key")
+                       }
+                       | acc_res
+                     ]}
+
+                  %{"tag" => "emotion", "emoji_type" => emoji_type}, {acc_parts, acc_res} ->
+                    {[":" <> to_string(emoji_type) <> ":" | acc_parts], acc_res}
+
+                  %{"tag" => "code_block", "text" => text}, {acc_parts, acc_res} ->
+                    {["```" <> to_string(text) <> "```" | acc_parts], acc_res}
+
+                  %{"tag" => "hr"}, {acc_parts, acc_res} ->
+                    {["---" | acc_parts], acc_res}
+
+                  _, acc ->
+                    acc
+                end)
+
+              {Enum.reverse(block_parts) ++ parts_acc, Enum.reverse(block_resources) ++ res_acc}
             else
-              []
+              {parts_acc, res_acc}
             end
           end)
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.join(" ")
+
+        parts = parts |> Enum.reject(&(&1 == "")) |> Enum.join(" ")
 
         if title != "" do
-          "#{title}\n#{parts}"
+          {"#{title}\n#{parts}", resources}
         else
-          parts
+          {parts, resources}
         end
 
       _ ->
-        nil
+        {nil, []}
     end
   end
 
@@ -716,8 +794,16 @@ defmodule Nex.Agent.Channel.Feishu do
     case msg_type do
       "share_chat" -> "[shared chat: #{Map.get(content_json, "chat_id", "")}]"
       "share_user" -> "[shared user: #{Map.get(content_json, "user_id", "")}]"
+      "share_calendar_event" -> calendar_summary(content_json, "shared calendar event")
+      "calendar" -> calendar_summary(content_json, "calendar invitation")
+      "general_calendar" -> calendar_summary(content_json, "calendar")
       "system" -> "[system message]"
       "merge_forward" -> "[merged forward messages]"
+      "location" -> location_summary(content_json)
+      "video_chat" -> "[video chat: #{Map.get(content_json, "topic", "")}]"
+      "todo" -> todo_summary(content_json)
+      "vote" -> vote_summary(content_json)
+      "hongbao" -> "[红包]"
       _ -> "[#{msg_type}]"
     end
   end
@@ -810,28 +896,136 @@ defmodule Nex.Agent.Channel.Feishu do
   defp do_send(payload, state) do
     chat_id = Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || ""
     content = Map.get(payload, :content) || Map.get(payload, "content") || ""
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    msg_type = metadata_get(metadata, "msg_type")
+    content_json = metadata_get(metadata, "content_json")
 
     cond do
       not is_binary(chat_id) or chat_id == "" ->
         {:error, :invalid_chat_id, state}
 
-      not is_binary(content) or String.trim(content) == "" ->
+      is_nil(content_json) and (not is_binary(content) or String.trim(content) == "") ->
         {:error, :invalid_content, state}
 
       state.app_id == "" or state.app_secret == "" ->
         {:error, :missing_credentials, state}
 
       true ->
-        metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
         is_progress = Map.get(metadata, "_progress") || Map.get(metadata, :_progress)
 
-        if is_progress do
+        cond do
+          is_binary(msg_type) and msg_type != "" ->
+            send_explicit_message(payload, chat_id, content, msg_type, content_json, state)
+
+          is_progress ->
           send_text(payload, chat_id, content, state)
-        else
+
+          true ->
           send_interactive_card(payload, chat_id, content, state)
         end
     end
   end
+
+  defp send_explicit_message(payload, chat_id, content, msg_type, content_json, state) do
+    with {:ok, token, state} <- get_tenant_access_token(state),
+         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
+         {:ok, encoded_content} <- build_outbound_content(msg_type, content, content_json),
+         {:ok, _body} <-
+           feishu_post(
+             state,
+             "/im/v1/messages?receive_id_type=#{receive_id_type}",
+             %{
+               "receive_id" => chat_id,
+               "msg_type" => msg_type,
+               "content" => encoded_content
+             },
+             [{"Authorization", "Bearer #{token}"}]
+           ) do
+      {:ok, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp build_outbound_content("text", content, nil) when is_binary(content) do
+    {:ok, Jason.encode!(%{"text" => content})}
+  end
+
+  defp build_outbound_content("post", content, nil) when is_binary(content) do
+    {:ok,
+     Jason.encode!(%{
+       "zh_cn" => %{
+         "content" => [[%{"tag" => "md", "text" => content}]]
+       }
+     })}
+  end
+
+  defp build_outbound_content("interactive", content, nil) when is_binary(content) do
+    {:ok, Jason.encode!(build_interactive_card(content))}
+  end
+
+  defp build_outbound_content(msg_type, _content, content_json)
+       when msg_type in [
+              "text",
+              "post",
+              "interactive",
+              "image",
+              "file",
+              "audio",
+              "media",
+              "sticker",
+              "share_chat",
+              "share_user",
+              "system"
+            ] do
+    with {:ok, normalized} <- normalize_outbound_content_json(content_json),
+         :ok <- validate_explicit_message(msg_type, normalized) do
+      {:ok, Jason.encode!(normalized)}
+    end
+  end
+
+  defp build_outbound_content(msg_type, _content, _content_json),
+    do: {:error, {:unsupported_msg_type, msg_type}}
+
+  defp normalize_outbound_content_json(nil), do: {:error, :missing_content_json}
+
+  defp normalize_outbound_content_json(content_json) when is_map(content_json),
+    do: {:ok, stringify_keys(content_json)}
+
+  defp normalize_outbound_content_json(content_json) when is_binary(content_json) do
+    case Jason.decode(content_json) do
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      {:ok, other} -> {:error, {:invalid_content_json, other}}
+      {:error, reason} -> {:error, {:invalid_content_json, reason}}
+    end
+  end
+
+  defp normalize_outbound_content_json(other), do: {:error, {:invalid_content_json, other}}
+
+  defp validate_explicit_message("text", %{"text" => text}) when is_binary(text) and text != "",
+    do: :ok
+
+  defp validate_explicit_message("post", %{"zh_cn" => %{} = _post}), do: :ok
+  defp validate_explicit_message("interactive", %{}), do: :ok
+  defp validate_explicit_message("image", %{"image_key" => key}) when is_binary(key) and key != "", do: :ok
+  defp validate_explicit_message(msg_type, %{"file_key" => key})
+       when msg_type in ["file", "audio", "media", "sticker"] and is_binary(key) and key != "",
+       do: :ok
+
+  defp validate_explicit_message("share_chat", %{"chat_id" => key})
+       when is_binary(key) and key != "",
+       do: :ok
+
+  defp validate_explicit_message("share_user", %{"user_id" => key})
+       when is_binary(key) and key != "",
+       do: :ok
+
+  defp validate_explicit_message("system", %{"type" => type, "params" => %{} = _params})
+       when is_binary(type) and type != "",
+       do: :ok
+
+  defp validate_explicit_message(msg_type, payload),
+    do: {:error, {:invalid_explicit_content, msg_type, payload}}
 
   defp send_text(payload, chat_id, content, state) do
     with {:ok, token, state} <- get_tenant_access_token(state),
@@ -1018,7 +1212,7 @@ defmodule Nex.Agent.Channel.Feishu do
   defp outbound_receive_id_type(payload, chat_id) do
     metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
 
-    case Map.get(metadata, "receive_id_type") || Map.get(metadata, :receive_id_type) do
+    case metadata_get(metadata, "receive_id_type") do
       type when type in ["open_id", "chat_id", "user_id", "union_id", "email"] ->
         {:ok, type}
 
@@ -1067,6 +1261,58 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp trim_dedup_cache(ids), do: ids
+
+  defp metadata_get(metadata, key) do
+    Map.get(metadata, key) ||
+      case key do
+        "msg_type" -> Map.get(metadata, :msg_type)
+        "content_json" -> Map.get(metadata, :content_json)
+        "receive_id_type" -> Map.get(metadata, :receive_id_type)
+        _ -> nil
+      end
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    map
+    |> Enum.map(fn {key, value} -> {to_string(key), stringify_value(value)} end)
+    |> Map.new()
+  end
+
+  defp stringify_value(value) when is_map(value), do: stringify_keys(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
+
+  defp calendar_summary(content_json, label) do
+    summary = Map.get(content_json, "summary", "")
+    start_time = Map.get(content_json, "start_time", "")
+    end_time = Map.get(content_json, "end_time", "")
+    "[#{label}: #{summary} #{start_time}-#{end_time}]"
+  end
+
+  defp location_summary(content_json) do
+    name = Map.get(content_json, "name", "")
+    longitude = Map.get(content_json, "longitude", "")
+    latitude = Map.get(content_json, "latitude", "")
+    "[location: #{name} #{longitude},#{latitude}]"
+  end
+
+  defp todo_summary(content_json) do
+    summary =
+      case Map.get(content_json, "summary") do
+        %{"title" => title} -> title
+        value when is_binary(value) -> value
+        _ -> ""
+      end
+
+    due_time = Map.get(content_json, "due_time", "")
+    "[todo: #{summary} due #{due_time}]"
+  end
+
+  defp vote_summary(content_json) do
+    topic = Map.get(content_json, "topic", "")
+    options = Map.get(content_json, "options", []) |> Enum.join(", ")
+    "[vote: #{topic} #{options}]"
+  end
 
   defp allowed?(_sender_id, []), do: true
 

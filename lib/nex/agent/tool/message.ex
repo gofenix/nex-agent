@@ -16,6 +16,21 @@ defmodule Nex.Agent.Tool.Message do
         type: "object",
         properties: %{
           content: %{type: "string", description: "The message content to send"},
+          msg_type: %{
+            type: "string",
+            description:
+              "Optional explicit message type for channels that support structured messages, such as Feishu."
+          },
+          content_json: %{
+            type: ["object", "string"],
+            description:
+              "Optional structured message payload. For Feishu this should be the raw content JSON object/string for the specified msg_type."
+          },
+          receive_id_type: %{
+            type: "string",
+            description:
+              "Optional explicit recipient ID type for Feishu (open_id, chat_id, user_id, union_id, email)."
+          },
           channel: %{
             type: "string",
             description:
@@ -38,8 +53,11 @@ defmodule Nex.Agent.Tool.Message do
     content = Map.get(args, "content")
     channel = Map.get(args, "channel") || Map.get(ctx, :channel, "telegram")
     chat_id = Map.get(args, "chat_id") || Map.get(ctx, :chat_id, "")
+    msg_type = Map.get(args, "msg_type")
+    content_json = Map.get(args, "content_json")
+    receive_id_type = Map.get(args, "receive_id_type")
 
-    if content do
+    if content || content_json do
       topic =
         case channel do
           "telegram" -> :telegram_outbound
@@ -49,7 +67,12 @@ defmodule Nex.Agent.Tool.Message do
           _ -> :outbound
         end
 
-      metadata = Map.get(ctx, :metadata, %{}) |> Map.put("_from_tool", true)
+      metadata =
+        Map.get(ctx, :metadata, %{})
+        |> Map.put("_from_tool", true)
+        |> maybe_put("msg_type", msg_type)
+        |> maybe_put("content_json", content_json)
+        |> maybe_put("receive_id_type", receive_id_type)
 
       payload = %{
         chat_id: chat_id,
@@ -63,7 +86,10 @@ defmodule Nex.Agent.Tool.Message do
 
       {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
     else
-      {:error, "content is required"}
+      {:error, "content or content_json is required"}
     end
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end
