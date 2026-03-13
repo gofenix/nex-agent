@@ -1,2 +1,0 @@
-- Implemented registry-first dedupe in `Runner.registry_definitions/2` with `Enum.uniq_by(& &1["name"])` after validation, preserving existing order while dropping later skill duplicates.
-- Normalized structured Runner content with a local `render_text/1` helper instead of broad repo-wide `to_string/1` replacement.

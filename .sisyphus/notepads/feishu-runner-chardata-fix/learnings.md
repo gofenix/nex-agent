@@ -1,2 +1,0 @@
-- `Runner` needs a single binary-safe rendering helper for tool hints, progress text, tool results, and archived message content; fixing only one `to_string/1` site leaves other structured-content paths exposed.
-- A real duplicate-tool regression is easiest to trigger by combining a runtime-registered tool named `skill_message` with an injected Skills entry named `message`, then inspecting `opts[:tools]` inside a stubbed `llm_client`.

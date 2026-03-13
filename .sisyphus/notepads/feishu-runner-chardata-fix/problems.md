@@ -1,1 +1,0 @@
-- `test/nex/agent/inbound_worker_test.exs` is synthetic and exercises Bus/InboundWorker with a stubbed Runner path; it verifies the user-visible symptom but not live Feishu API behavior.
