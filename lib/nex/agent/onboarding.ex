@@ -70,45 +70,9 @@ defmodule Nex.Agent.Onboarding do
     b = base_dir()
     w = workspace_dir()
 
-    # Migrate skills/ from agent root to workspace
-    old_skills = Path.join(b, "skills")
-    new_skills = Path.join(w, "skills")
-
-    if File.exists?(old_skills) and not File.exists?(new_skills) do
-      File.rename(old_skills, new_skills)
-      Logger.info("[Onboarding] Migrated skills/ to workspace/skills/")
-    end
-
-    # Migrate sessions/ from agent root to workspace
-    old_sessions = Path.join(b, "sessions")
-    new_sessions = Path.join(w, "sessions")
-
-    if File.exists?(old_sessions) and not File.exists?(new_sessions) do
-      File.rename(old_sessions, new_sessions)
-      Logger.info("[Onboarding] Migrated sessions/ to workspace/sessions/")
-    end
-
-    # Migrate legacy global tools/ into workspace/tools
-    old_tools = Path.join(b, "tools")
-    new_tools = Path.join(w, "tools")
-
-    if File.exists?(old_tools) do
-      File.mkdir_p!(new_tools)
-
-      old_tools
-      |> File.ls!()
-      |> Enum.each(fn entry ->
-        source = Path.join(old_tools, entry)
-        destination = Path.join(new_tools, entry)
-
-        unless File.exists?(destination) do
-          File.rename(source, destination)
-        end
-      end)
-
-      File.rm_rf!(old_tools)
-      Logger.info("[Onboarding] Migrated tools/ to workspace/tools/")
-    end
+    migrate_legacy_dir(Path.join(b, "skills"), Path.join(w, "skills"), "skills")
+    migrate_legacy_dir(Path.join(b, "sessions"), Path.join(w, "sessions"), "sessions")
+    migrate_legacy_dir(Path.join(b, "tools"), Path.join(w, "tools"), "tools")
 
     # Clean up legacy artifacts
     legacy_paths = [
@@ -122,6 +86,26 @@ defmodule Nex.Agent.Onboarding do
         Logger.info("[Onboarding] Removed legacy: #{path}")
       end
     end)
+  end
+
+  defp migrate_legacy_dir(old_dir, new_dir, label) do
+    if File.exists?(old_dir) do
+      File.mkdir_p!(new_dir)
+
+      old_dir
+      |> File.ls!()
+      |> Enum.each(fn entry ->
+        source = Path.join(old_dir, entry)
+        destination = Path.join(new_dir, entry)
+
+        unless File.exists?(destination) do
+          File.rename(source, destination)
+        end
+      end)
+
+      File.rm_rf!(old_dir)
+      Logger.info("[Onboarding] Migrated #{label}/ to workspace/#{label}/")
+    end
   end
 
   defp init_workspace_templates do
@@ -282,6 +266,7 @@ defmodule Nex.Agent.Onboarding do
     - Only suggest restart when runtime/tools explicitly indicate it.
     - Do not infer restart necessity from uptime/process age.
     - Current invocation may still run old code; next invocation should observe new code.
+    - Test hygiene: use isolated temp directories and clean them in `on_exit`; do not leave persistent artifacts under `~/.nex/agent` from tests.
 
     ## Capabilities
 
@@ -334,8 +319,8 @@ defmodule Nex.Agent.Onboarding do
     - Web and retrieval: `web_search`, `web_fetch`
     - Scheduling and background work: `cron`, `spawn_task`
     - SOUL layer: `soul_update`
-    - USER layer: `memory_write` with `target=user`
-    - MEMORY layer: `memory_write` with `target=memory`
+    - USER layer: `user_update`
+    - MEMORY layer: `memory_write`
     - SKILL layer: `skill_list`, `skill_create`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `upgrade_code`
