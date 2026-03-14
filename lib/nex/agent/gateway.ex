@@ -243,7 +243,7 @@ defmodule Nex.Agent.Gateway do
     base_url = Nex.Agent.Config.get_current_base_url(config)
 
     opts = [
-      provider: String.to_atom(config.provider),
+      provider: Nex.Agent.Config.provider_to_atom(config.provider),
       model: config.model,
       api_key: api_key,
       base_url: base_url

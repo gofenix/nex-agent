@@ -86,6 +86,12 @@ defmodule Nex.Agent.Bus do
   @impl true
   def handle_call({:unsubscribe, topic, pid}, _from, state) do
     subscribers = Map.get(state.subscribers, topic, [])
+
+    # Only demonitor if pid was actually in subscribers list
+    if pid in subscribers do
+      Process.demonitor(pid, [:flush])
+    end
+
     new_subscribers = List.delete(subscribers, pid)
     new_state = %{state | subscribers: Map.put(state.subscribers, topic, new_subscribers)}
     {:reply, :ok, new_state}

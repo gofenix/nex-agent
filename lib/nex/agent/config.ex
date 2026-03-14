@@ -557,6 +557,23 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
+  Convert provider string to atom safely.
+  Returns :openai for unknown providers to prevent atom leaks.
+  """
+  @spec provider_to_atom(String.t()) :: atom()
+  def provider_to_atom(provider) when is_binary(provider) do
+    case provider do
+      "anthropic" -> :anthropic
+      "openai" -> :openai
+      "openrouter" -> :openrouter
+      "ollama" -> :ollama
+      _ -> :openai
+    end
+  end
+
+  def provider_to_atom(provider) when is_atom(provider), do: provider
+
+  @doc """
   Validate whether the configuration is valid.
   """
   @spec valid?(t()) :: boolean()

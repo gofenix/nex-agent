@@ -343,7 +343,7 @@ defmodule Nex.Agent.InboundWorker do
   defp agent_start_opts(session_key) do
     config = Config.load()
     [channel, chat_id] = String.split(session_key, ":", parts: 2)
-    provider = String.to_atom(config.provider)
+    provider = Config.provider_to_atom(config.provider)
     home = System.get_env("HOME", File.cwd!())
 
     [

@@ -575,14 +575,21 @@ defmodule Nex.Agent.Cron do
     data = Enum.map(jobs, &serialize_job/1)
     encoded = Jason.encode!(data, pretty: true)
 
-    Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-      dir = Path.dirname(@jobs_file)
-      File.mkdir_p!(dir)
-      suffix = :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
-      tmp_path = @jobs_file <> ".tmp.#{suffix}"
-      File.write!(tmp_path, encoded)
-      File.rename!(tmp_path, @jobs_file)
-    end)
+    dir = Path.dirname(@jobs_file)
+    File.mkdir_p!(dir)
+    suffix = :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
+    tmp_path = @jobs_file <> ".tmp.#{suffix}"
+
+    case File.write(tmp_path, encoded) do
+      :ok ->
+        case File.rename(tmp_path, @jobs_file) do
+          :ok -> :ok
+          {:error, reason} -> {:error, "Failed to rename jobs file: #{reason}"}
+        end
+
+      {:error, reason} ->
+        {:error, "Failed to write jobs file: #{reason}"}
+    end
   end
 
   defp serialize_job(j) do

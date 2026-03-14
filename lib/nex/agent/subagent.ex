@@ -34,6 +34,8 @@ defmodule Nex.Agent.Subagent do
           tasks: %{String.t() => task_entry()}
         }
 
+  @max_completed_tasks 100
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -314,7 +316,22 @@ defmodule Nex.Agent.Subagent do
           error: updated[:error]
         })
 
-        %{state | tasks: Map.put(state.tasks, task_id, updated)}
+        new_tasks = Map.put(state.tasks, task_id, updated)
+        %{state | tasks: cleanup_old_tasks(new_tasks)}
+    end
+  end
+
+  defp cleanup_old_tasks(tasks) do
+    completed_tasks =
+      tasks
+      |> Enum.filter(fn {_id, task} -> task.status in [:completed, :failed, :cancelled] end)
+      |> Enum.sort_by(fn {_id, task} -> task.completed_at || 0 end, :desc)
+
+    if length(completed_tasks) > @max_completed_tasks do
+      tasks_to_remove = Enum.drop(completed_tasks, @max_completed_tasks) |> Enum.map(&elem(&1, 0))
+      Map.drop(tasks, tasks_to_remove)
+    else
+      tasks
     end
   end
 

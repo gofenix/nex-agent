@@ -6,6 +6,14 @@ defmodule Nex.Agent.Tool.UpgradeCode do
   require Logger
   alias Nex.Agent.UpgradeManager
 
+  @protected_modules [
+    "Nex.Agent.Security",
+    "Nex.Agent.UpgradeManager",
+    "Nex.Agent.CodeUpgrade",
+    "Nex.Agent.Tool.UpgradeCode",
+    "Nex.Agent.Tool.Registry"
+  ]
+
   def name, do: "upgrade_code"
 
   def description,
@@ -31,44 +39,57 @@ defmodule Nex.Agent.Tool.UpgradeCode do
   end
 
   def execute(%{"module" => module_str, "code" => code, "reason" => reason}, _ctx) do
-    if custom_tool_module?(module_str) do
-      {:error,
-       "upgrade_code is for CODE-layer framework modules only. For workspace custom tools, use TOOL-layer operations (tool_create/edit)."}
-    else
-      module = String.to_atom("Elixir.#{module_str}")
-      Logger.info("[UpgradeCode] Upgrading #{module_str}: #{reason}")
-      surgery_type = if UpgradeManager.core_module?(module), do: "precision", else: "normal"
-      Logger.info("[UpgradeCode] Upgrade type: #{surgery_type} for #{module_str}")
+    cond do
+      protected_module?(module_str) ->
+        {:error,
+         "Cannot upgrade protected module #{module_str}. This module is essential for agent security and stability."}
 
-      case UpgradeManager.upgrade(module, code, reason: reason) do
-        {:ok, %{version: version, hot_reload: hot_reload}} ->
-          version_id = Map.get(version, :id, "ok")
+      custom_tool_module?(module_str) ->
+        {:error,
+         "upgrade_code is for CODE-layer framework modules only. For workspace custom tools, use TOOL-layer operations (tool_create/edit)."}
 
-          registry_note =
-            case Map.get(hot_reload, :registry_swap) do
-              %{attempted: true, tool_name: tool_name} -> " Registry updated for #{tool_name}."
-              _ -> ""
-            end
+      true ->
+        module = String.to_atom("Elixir.#{module_str}")
+        Logger.info("[UpgradeCode] Upgrading #{module_str}: #{reason}")
+        surgery_type = if UpgradeManager.core_module?(module), do: "precision", else: "normal"
+        Logger.info("[UpgradeCode] Upgrade type: #{surgery_type} for #{module_str}")
 
-          message =
-            "Module #{module_str} upgraded (#{surgery_type} upgrade, v#{version_id}). Reason: #{reason}. Hot reload restart_required=#{hot_reload.restart_required}.#{registry_note}"
+        case UpgradeManager.upgrade(module, code, reason: reason) do
+          {:ok, %{version: version, hot_reload: hot_reload}} ->
+            version_id = Map.get(version, :id, "ok")
 
-          {:ok,
-           %{
-             message: message,
-             module: module_str,
-             upgrade_type: surgery_type,
-             version_id: version_id,
-             hot_reload: hot_reload
-           }}
+            registry_note =
+              case Map.get(hot_reload, :registry_swap) do
+                %{attempted: true, tool_name: tool_name} -> " Registry updated for #{tool_name}."
+                _ -> ""
+              end
 
-        {:error, error} ->
-          {:error, "Code upgrade failed for #{module_str}: #{error}. Fix the code and try again."}
-      end
+            message =
+              "Module #{module_str} upgraded (#{surgery_type} upgrade, v#{version_id}). Reason: #{reason}. Hot reload restart_required=#{hot_reload.restart_required}.#{registry_note}"
+
+            {:ok,
+             %{
+               message: message,
+               module: module_str,
+               upgrade_type: surgery_type,
+               version_id: version_id,
+               hot_reload: hot_reload
+             }}
+
+          {:error, error} ->
+            {:error,
+             "Code upgrade failed for #{module_str}: #{error}. Fix the code and try again."}
+        end
     end
   end
 
   def execute(_args, _ctx), do: {:error, "module, code, and reason are required"}
+
+  defp protected_module?(module_str) when is_binary(module_str) do
+    module_str in @protected_modules
+  end
+
+  defp protected_module?(_), do: false
 
   defp custom_tool_module?(module_str) when is_binary(module_str) do
     String.starts_with?(module_str, "Nex.Agent.Tool.Custom.")
