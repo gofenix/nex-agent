@@ -319,7 +319,11 @@ defmodule Nex.Agent.Memory do
 
     updated_session = %{
       session
-      | last_consolidated: if(archive_all, do: 0, else: length(session.messages) - keep_count)
+      | last_consolidated:
+          if(archive_all,
+            do: length(session.messages),
+            else: length(session.messages) - keep_count
+          )
     }
 
     Logger.info(

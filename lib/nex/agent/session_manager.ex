@@ -4,11 +4,14 @@ defmodule Nex.Agent.SessionManager do
   """
 
   use GenServer
+  require Logger
 
   alias Nex.Agent.Session
 
   @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
   @consolidation_flag "consolidation_in_progress"
+  @consolidation_started_at_flag "consolidation_started_at"
+  @consolidation_timeout_sec 900
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, name: Keyword.get(opts, :name, __MODULE__))
@@ -107,7 +110,11 @@ defmodule Nex.Agent.SessionManager do
   end
 
   def handle_call({:start_consolidation, key, min_unconsolidated}, _from, %{cache: cache} = state) do
-    session = load_session(cache, key)
+    session =
+      cache
+      |> load_session(key)
+      |> maybe_recover_stale_consolidation()
+
     unconsolidated = length(session.messages) - session.last_consolidated
 
     cond do
@@ -199,12 +206,53 @@ defmodule Nex.Agent.SessionManager do
     Map.get(session.metadata || %{}, @consolidation_flag, false) == true
   end
 
+  defp maybe_recover_stale_consolidation(%Session{} = session) do
+    if consolidation_in_progress?(session) and stale_consolidation?(session) do
+      Logger.warning(
+        "[SessionManager] Recovering stale memory consolidation flag for #{session.key}"
+      )
+
+      session
+      |> put_consolidation_flag(false)
+      |> then(fn cleared ->
+        Session.save(cleared)
+        cleared
+      end)
+    else
+      session
+    end
+  end
+
+  defp stale_consolidation?(%Session{} = session) do
+    metadata = session.metadata || %{}
+
+    case Map.get(metadata, @consolidation_started_at_flag) do
+      timestamp when is_binary(timestamp) ->
+        case DateTime.from_iso8601(timestamp) do
+          {:ok, started_at, _offset} ->
+            DateTime.diff(DateTime.utc_now(), started_at, :second) >= @consolidation_timeout_sec
+
+          _ ->
+            true
+        end
+
+      _ ->
+        true
+    end
+  end
+
   defp put_consolidation_flag(%Session{} = session, enabled) do
     metadata =
       if enabled do
-        Map.put(session.metadata || %{}, @consolidation_flag, true)
+        session.metadata
+        |> Kernel.||(%{})
+        |> Map.put(@consolidation_flag, true)
+        |> Map.put(@consolidation_started_at_flag, DateTime.utc_now() |> DateTime.to_iso8601())
       else
-        Map.delete(session.metadata || %{}, @consolidation_flag)
+        session.metadata
+        |> Kernel.||(%{})
+        |> Map.delete(@consolidation_flag)
+        |> Map.delete(@consolidation_started_at_flag)
       end
 
     %{session | metadata: metadata}
@@ -232,7 +280,7 @@ defmodule Nex.Agent.SessionManager do
       incoming
       | created_at: existing.created_at,
         updated_at: updated_at,
-        metadata: Map.merge(existing.metadata || %{}, incoming.metadata || %{}),
+        metadata: incoming.metadata || existing.metadata || %{},
         messages: messages,
         last_consolidated:
           min(max(existing.last_consolidated, incoming.last_consolidated), length(messages))

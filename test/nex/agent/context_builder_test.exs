@@ -31,6 +31,10 @@ defmodule Nex.Agent.ContextBuilderTest do
              "- USER: user profile, preferences, timezone, communication style, collaboration expectations"
 
     assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
+    assert prompt =~ "inspect both long-term memory files and the current session state/history"
+
+    assert prompt =~
+             "Empty `MEMORY.md` or `HISTORY.md` does not imply this is the first conversation"
   end
 
   test "runtime system messages are merged into system prompt", %{

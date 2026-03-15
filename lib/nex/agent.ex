@@ -98,6 +98,7 @@ defmodule Nex.Agent do
         base_url: base_url,
         cwd: cwd,
         max_iterations: max_iterations,
+        session_key: agent.session_key,
         channel: channel,
         chat_id: chat_id
       ]

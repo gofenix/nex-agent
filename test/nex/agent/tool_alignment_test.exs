@@ -67,11 +67,15 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert {:ok, result} = ToolList.execute(%{"scope" => "builtin"}, %{})
 
     builtins = result[:builtin]
+    memory_rebuild = Enum.find(builtins, &(&1["name"] == "memory_rebuild"))
+    memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
+    assert memory_rebuild["layers"] == ["memory"]
+    assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
     assert reflect["layers"] == ["code"]
     assert upgrade["layers"] == ["code"]
@@ -111,6 +115,64 @@ defmodule Nex.Agent.ToolAlignmentTest do
     names = Enum.map(tools, & &1["name"])
 
     assert Enum.count(names, fn name -> name == "skill_message" end) == 1
+  end
+
+  test "agent prompt passes session key into runner tool context", %{workspace: workspace} do
+    llm_client = fn messages, _opts ->
+      tool_result_present =
+        Enum.any?(messages, fn
+          %{"role" => "tool", "name" => "memory_status", "content" => content} ->
+            String.contains?(content, "\"session_key\"")
+
+          _ ->
+            false
+        end)
+
+      if tool_result_present do
+        tool_result =
+          Enum.find(messages, fn
+            %{"role" => "tool", "name" => "memory_status"} -> true
+            _ -> false
+          end)
+
+        {:ok, %{content: tool_result["content"], finish_reason: nil, tool_calls: []}}
+      else
+        {:ok,
+         %{
+           content: "",
+           finish_reason: nil,
+           tool_calls: [
+             %{
+               id: "memory_status",
+               function: %{
+                 name: "memory_status",
+                 arguments: %{}
+               }
+             }
+           ]
+         }}
+      end
+    end
+
+    {:ok, agent} =
+      Nex.Agent.start(
+        workspace: workspace,
+        channel: "feishu",
+        chat_id: "session-key-check",
+        api_key: "test-api-key"
+      )
+
+    assert {:ok, result, _updated_agent} =
+             Nex.Agent.prompt(agent, "检查记忆状态",
+               llm_client: llm_client,
+               workspace: workspace,
+               skip_consolidation: true,
+               channel: "feishu",
+               chat_id: "session-key-check"
+             )
+
+    decoded = Jason.decode!(result)
+    assert decoded["session_key"] == "feishu:session-key-check"
   end
 
   defp wait_for_registry_tool(name, module, attempts \\ 20)

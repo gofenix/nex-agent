@@ -152,6 +152,17 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   @impl true
+  def handle_call(:get_tenant_access_token, _from, state) do
+    case get_tenant_access_token(state) do
+      {:ok, token, new_state} ->
+        {:reply, {:ok, token}, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
   def handle_call({:ingest_event, payload}, _from, state) do
     case normalize_event(payload) do
       {:challenge, challenge} ->

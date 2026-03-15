@@ -150,6 +150,8 @@ defmodule Nex.Agent.Tool.ToolList do
       case module.name() do
         "soul_update" -> ["soul"]
         "user_update" -> ["user"]
+        "memory_status" -> ["memory"]
+        "memory_rebuild" -> ["memory"]
         "memory_write" -> ["memory"]
         "skill_create" -> ["skill"]
         "skill_list" -> ["skill"]

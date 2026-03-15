@@ -16,6 +16,8 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
+    Nex.Agent.Tool.MemoryStatus,
+    Nex.Agent.Tool.MemoryRebuild,
     Nex.Agent.Tool.MemoryWrite,
     Nex.Agent.Tool.UserUpdate,
     Nex.Agent.Tool.SkillCreate,
