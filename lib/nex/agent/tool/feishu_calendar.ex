@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.FeishuCalendar do
 
   def name, do: "feishu_calendar"
   def description, do: "Manage Feishu calendars and events."
-  def category, do: :Base
+  def category, do: :base
 
   def definition do
     %{

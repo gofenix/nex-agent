@@ -176,10 +176,6 @@ defmodule Nex.Agent.Feishu.Api do
     {:error, {:http_error, status, body}}
   end
 
-  defp handle_result({:ok, body}) when is_map(body) do
-    normalize_response(body)
-  end
-
   defp handle_result({:error, reason}) do
     {:error, {:request_failed, reason}}
   end

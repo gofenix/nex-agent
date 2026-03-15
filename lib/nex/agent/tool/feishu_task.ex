@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.FeishuTask do
 
   def name, do: "feishu_task"
   def description, do: "Manage Feishu tasks."
-  def category, do: :Base
+  def category, do: :base
 
   def definition do
     %{

@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.FeishuBitable do
 
   def name, do: "feishu_bitable"
   def description, do: "Manage Feishu Bitable (multi-dimensional tables)."
-  def category, do: :Base
+  def category, do: :base
 
   def definition do
     %{

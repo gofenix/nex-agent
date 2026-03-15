@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.FeishuChat do
 
   def name, do: "feishu_chat"
   def description, do: "Manage Feishu chat groups and members."
-  def category, do: :Base
+  def category, do: :base
 
   def definition do
     %{

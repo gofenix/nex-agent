@@ -936,8 +936,6 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  defp maybe_attach_inbound_media(inbound, state), do: {inbound, state}
-
   defp hydrate_inbound_media(resources, state) do
     Enum.reduce(resources, {:ok, [], state}, fn resource, {:ok, media_acc, acc_state} ->
       case hydrate_single_resource(resource, acc_state) do
@@ -1005,7 +1003,6 @@ defmodule Nex.Agent.Channel.Feishu do
       {:ok, data_url, mime_type, state}
     else
       {:error, reason} -> {:error, reason, state}
-      {:error, reason, new_state} -> {:error, reason, new_state}
     end
   end
 

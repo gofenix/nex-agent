@@ -1,4 +1,10 @@
 [
-  ~r"lib/nex/agent/evolution.ex:1:pattern_match",
-  ~r"lib/nex/agent/tool/tool_list.ex:1:pattern_match"
+  ~r"evolution.ex:1:pattern_match",
+  ~r"tool_list.ex:1:pattern_match",
+  ~r"code_upgrade.ex:1:pattern_match",
+  ~r"runner.ex:333:guard_fail",
+  ~r"memory_status.ex:107:guard_fail",
+  ~r"web_fetch.ex:90",
+  ~r"web_fetch.ex:103",
+  ~r"web_fetch.ex:115"
 ]

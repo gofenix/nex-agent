@@ -91,9 +91,7 @@ defmodule Nex.Agent.Tool.FeishuDoc do
     end
   end
 
-  defp extract_doc_id(data) when is_binary(data), do: data
-
-  defp extract_doc_id(data) when is_map(data) do
+  defp extract_doc_id(data) do
     cond do
       Map.has_key?(data, "document") ->
         doc = Map.get(data, "document")
@@ -109,8 +107,6 @@ defmodule Nex.Agent.Tool.FeishuDoc do
         nil
     end
   end
-
-  defp extract_doc_id(_), do: nil
 
   defp read_document(args) do
     doc_id = Map.get(args, "document_id")
@@ -153,9 +149,6 @@ defmodule Nex.Agent.Tool.FeishuDoc do
                block_count: 0
              }}
         end
-
-      {:ok, other} ->
-        {:error, "Unexpected response: #{inspect(other)}"}
 
       {:error, reason} ->
         {:error, format_error(reason)}

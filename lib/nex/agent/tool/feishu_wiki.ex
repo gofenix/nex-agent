@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.FeishuWiki do
 
   def name, do: "feishu_wiki"
   def description, do: "Manage Feishu Wiki knowledge base."
-  def category, do: :Base
+  def category, do: :base
 
   def definition do
     %{
