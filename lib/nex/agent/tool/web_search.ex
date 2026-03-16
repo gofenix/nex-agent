@@ -70,7 +70,10 @@ defmodule Nex.Agent.Tool.WebSearch do
       "count" => count
     }
 
-    case Req.get(@ddg_url, params: params, follow_redirects: true) do
+    req_opts = [params: params, follow_redirects: true]
+    req_opts = maybe_add_proxy(req_opts)
+
+    case Req.get(@ddg_url, req_opts) do
       {:ok, %{status: 200, body: body}} ->
         results = parse_results(body)
         {:ok, results}
@@ -80,6 +83,18 @@ defmodule Nex.Agent.Tool.WebSearch do
 
       {:error, reason} ->
         {:ok, %{error: "Search failed: #{inspect(reason)}"}}
+    end
+  end
+
+  defp maybe_add_proxy(opts) do
+    proxy =
+      System.get_env("HTTPS_PROXY") || System.get_env("https_proxy") ||
+        System.get_env("HTTP_PROXY") || System.get_env("http_proxy")
+
+    if proxy && proxy != "" do
+      Keyword.put(opts, :proxy, proxy)
+    else
+      opts
     end
   end
 
