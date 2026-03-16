@@ -87,12 +87,26 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   defp maybe_add_proxy(opts) do
-    proxy =
+    proxy_url =
       System.get_env("HTTPS_PROXY") || System.get_env("https_proxy") ||
         System.get_env("HTTP_PROXY") || System.get_env("http_proxy")
 
-    if proxy && proxy != "" do
-      Keyword.put(opts, :proxy, proxy)
+    if proxy_url && proxy_url != "" do
+      case URI.parse(proxy_url) do
+        %URI{scheme: scheme, host: host, port: port}
+        when is_binary(host) and host != "" ->
+          proxy_scheme = if scheme in ["https", "HTTPS"], do: :https, else: :http
+
+          proxy_port =
+            if port && port > 0, do: port, else: if(proxy_scheme == :https, do: 443, else: 80)
+
+          Keyword.put(opts, :connect_options,
+            proxy: {proxy_scheme, String.to_charlist(host), proxy_port, []}
+          )
+
+        _ ->
+          opts
+      end
     else
       opts
     end
