@@ -81,10 +81,12 @@ defmodule Nex.Agent.Runner do
 
     case run_loop(session, messages, 0, max_iterations, opts) do
       {:ok, result, final_session} ->
-        {:ok, result, finalize_evolution_turn(final_session, initial_message_count, prompt)}
+        {:ok, result,
+         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
 
       {:error, reason, final_session} ->
-        {:error, reason, finalize_evolution_turn(final_session, initial_message_count, prompt)}
+        {:error, reason,
+         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
     end
   end
 
@@ -168,7 +170,7 @@ defmodule Nex.Agent.Runner do
     {put_evolution_metadata(session, updated_metadata), runtime_system_messages}
   end
 
-  defp finalize_evolution_turn(session, initial_message_count, prompt) do
+  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace) do
     delta_messages = Enum.drop(session.messages, initial_message_count)
     signals = collect_evolution_signals(delta_messages, prompt)
     metadata = evolution_metadata(session)
@@ -189,7 +191,37 @@ defmodule Nex.Agent.Runner do
         signals.complex_task and not created_skill
       )
 
+    # Record evolution signals for the Evolution module
+    maybe_record_evolution_signal(signals, prompt, workspace)
+
     put_evolution_metadata(session, updated_metadata)
+  end
+
+  defp maybe_record_evolution_signal(signals, prompt, workspace) do
+    if signals.correction_hint or signals.tool_errors > 0 do
+      Nex.Agent.Evolution.record_signal(
+        %{
+          source: "runner",
+          signal:
+            cond do
+              signals.correction_hint and signals.tool_errors > 0 ->
+                "User correction with #{signals.tool_errors} tool error(s): #{String.slice(prompt, 0, 200)}"
+
+              signals.correction_hint ->
+                "User correction: #{String.slice(prompt, 0, 200)}"
+
+              true ->
+                "#{signals.tool_errors} tool error(s) during: #{String.slice(prompt, 0, 200)}"
+            end,
+          context: %{
+            tool_errors: signals.tool_errors,
+            correction: signals.correction_hint,
+            tools_used: signals.used_tools |> Enum.uniq()
+          }
+        },
+        workspace: workspace
+      )
+    end
   end
 
   defp maybe_add_memory_nudge(messages, turns_since_memory_write) do
@@ -1011,6 +1043,7 @@ defmodule Nex.Agent.Runner do
     %{
       wrote_memory: "memory_write" in used_tools,
       created_skill: "skill_create" in used_tools,
+      used_tools: used_tools,
       tool_call_count: tool_call_count,
       tool_rounds: tool_rounds,
       tool_errors: tool_errors,

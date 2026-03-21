@@ -26,6 +26,7 @@ defmodule Mix.Tasks.Nex.Agent do
     ensure_finch_started()
 
     {opts, positional} = OptionParser.parse!(args, switches: @switches, aliases: @aliases)
+    opts = Enum.into(opts, %{})
 
     configure_logging(opts)
 
@@ -36,12 +37,14 @@ defmodule Mix.Tasks.Nex.Agent do
     end
   end
 
-  defp dispatch([], %{message: message} = opts) when is_binary(message) and message != "" do
-    with_cli_targeting(opts, fn target -> run_single(opts, target) end)
-  end
-
   defp dispatch([], opts) do
-    with_cli_targeting(opts, &run_interactive/1)
+    case opts[:message] do
+      message when is_binary(message) and message != "" ->
+        with_cli_targeting(opts, fn target -> run_single(opts, target) end)
+
+      _ ->
+        with_cli_targeting(opts, &run_interactive/1)
+    end
   end
 
   defp dispatch(["onboard"], opts) do
@@ -66,6 +69,14 @@ defmodule Mix.Tasks.Nex.Agent do
 
   defp dispatch(["config" | _] = args, opts) do
     with_config_targeting(opts, fn target -> run_config(args, target) end)
+  end
+
+  defp dispatch(["evolve"], opts) do
+    with_cli_targeting(opts, fn target -> run_evolve("daily", target) end)
+  end
+
+  defp dispatch(["evolve", scope], opts) when scope in ~w(daily weekly consolidation) do
+    with_cli_targeting(opts, fn target -> run_evolve(scope, target) end)
   end
 
   defp dispatch(args, _opts) do
@@ -103,6 +114,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent gateway [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway stop [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway restart [--config PATH] [--workspace PATH]")
+    Mix.shell().info("  mix nex.agent evolve [daily|weekly|consolidation]")
     Mix.shell().info("  mix nex.agent config show [--config PATH]")
     Mix.shell().info("  mix nex.agent config set provider VALUE [--config PATH]")
     Mix.shell().info("  mix nex.agent config set model VALUE [--config PATH]")
@@ -163,6 +175,102 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent config set model <model>")
     Mix.shell().info("  mix nex.agent config set api_key <provider> <key>")
     Mix.shell().info("  mix nex.agent gateway")
+  end
+
+  defp run_evolve(scope, target) do
+    ensure_app_started()
+    config = Config.load()
+    scope_atom = String.to_existing_atom(scope)
+
+    Mix.shell().info("=== Evolution Cycle (#{scope}) ===")
+    Mix.shell().info("Workspace: #{target.workspace}")
+    Mix.shell().info("Provider: #{config.provider}")
+    Mix.shell().info("Model: #{config.model}")
+    Mix.shell().info("")
+
+    # Show pre-evolution state
+    signals = Nex.Agent.Evolution.read_signals(workspace: target.workspace)
+    Mix.shell().info("Pending signals: #{length(signals)}")
+
+    Enum.each(signals, fn s ->
+      Mix.shell().info("  [#{Map.get(s, "source", "?")}] #{Map.get(s, "signal", "")}")
+    end)
+
+    soul_path = Path.join(target.workspace, "SOUL.md")
+    memory_path = Path.join(target.workspace, "memory/MEMORY.md")
+
+    soul_before = file_size(soul_path)
+    memory_before = file_size(memory_path)
+
+    Mix.shell().info("")
+    Mix.shell().info("Running #{scope} evolution cycle...")
+    Mix.shell().info("")
+
+    api_key = Config.get_api_key(config, config.provider)
+    base_url = Config.get_base_url(config, config.provider)
+
+    provider =
+      if is_binary(config.provider), do: String.to_atom(config.provider), else: config.provider
+
+    case Nex.Agent.Evolution.run_evolution_cycle(
+           workspace: target.workspace,
+           scope: scope_atom,
+           provider: provider,
+           model: config.model,
+           api_key: api_key,
+           base_url: base_url
+         ) do
+      {:ok, result} ->
+        Mix.shell().info("Evolution cycle completed!")
+        Mix.shell().info("  Soul updates: #{result.soul_updates}")
+        Mix.shell().info("  Memory updates: #{result.memory_updates}")
+        Mix.shell().info("  Skill drafts: #{result.skill_candidates}")
+        Mix.shell().info("")
+
+        soul_after = file_size(soul_path)
+        memory_after = file_size(memory_path)
+
+        if soul_after > soul_before do
+          Mix.shell().info("SOUL.md changed (#{soul_before} → #{soul_after} bytes):")
+          Mix.shell().info(File.read!(soul_path))
+        else
+          Mix.shell().info("SOUL.md unchanged.")
+        end
+
+        Mix.shell().info("")
+
+        if memory_after > memory_before do
+          Mix.shell().info("MEMORY.md changed (#{memory_before} → #{memory_after} bytes):")
+          Mix.shell().info(File.read!(memory_path))
+        else
+          Mix.shell().info("MEMORY.md unchanged.")
+        end
+
+        Mix.shell().info("")
+
+        # Show latest audit events
+        events = Nex.Agent.Evolution.recent_events(workspace: target.workspace)
+
+        if events != [] do
+          Mix.shell().info("Recent evolution events:")
+
+          events
+          |> Enum.take(10)
+          |> Enum.each(fn e ->
+            Mix.shell().info("  [#{Map.get(e, "timestamp", "?")}] #{Map.get(e, "event", "?")}")
+          end)
+        end
+
+      {:error, reason} ->
+        Mix.shell().error("Evolution cycle failed: #{inspect(reason)}")
+    end
+  end
+
+  defp file_size(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} -> size
+      _ -> 0
+    end
   end
 
   defp run_status(target) do

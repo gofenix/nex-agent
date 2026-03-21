@@ -269,18 +269,14 @@ defmodule Nex.Agent.Onboarding do
     File.mkdir_p!(skills_dir)
     cleanup_legacy_bundled_skills(skills_dir)
 
-    bundled_skills = [
-      {"code-review", code_review_template()}
-    ]
+    bundled_skills_dir()
+    |> File.ls!()
+    |> Enum.each(fn skill_name ->
+      source_dir = Path.join(bundled_skills_dir(), skill_name)
+      target_dir = Path.join(skills_dir, skill_name)
 
-    Enum.each(bundled_skills, fn {skill_name, content} ->
-      skill_dir = Path.join(skills_dir, skill_name)
-      skill_file = Path.join(skill_dir, "SKILL.md")
-
-      unless File.exists?(skill_file) do
-        File.mkdir_p!(skill_dir)
-        File.write!(skill_file, content)
-        Logger.info("[Onboarding] Installed bundled skill: #{skill_name}")
+      if File.dir?(source_dir) and File.exists?(Path.join(source_dir, "SKILL.md")) do
+        install_bundled_skill(source_dir, target_dir)
       end
     end)
   end
@@ -297,35 +293,45 @@ defmodule Nex.Agent.Onboarding do
     end)
   end
 
-  defp code_review_template do
-    """
-    ---
-    name: code-review
-    description: Review code changes with a focus on bugs, regressions, and missing tests.
-    always: false
-    user-invocable: true
-    ---
+  defp bundled_skills_dir do
+    case :code.priv_dir(:nex_agent) do
+      path when is_list(path) ->
+        Path.join(to_string(path), "skills")
 
-    # Code Review
+      _ ->
+        Path.expand("priv/skills")
+    end
+  end
 
-    Use this skill when the user asks for a review of code, a diff, or a change set.
+  defp install_bundled_skill(source_dir, target_dir) do
+    skill_name = Path.basename(source_dir)
+    target_exists = File.exists?(target_dir)
 
-    ## Review Priorities
+    copy_missing_tree(source_dir, target_dir)
 
-    Focus on:
+    unless target_exists do
+      Logger.info("[Onboarding] Installed bundled skill: #{skill_name}")
+    end
+  end
 
-    - behavioral regressions
-    - correctness bugs
-    - missing validation or error handling
-    - test gaps
-    - migration or compatibility risks
+  defp copy_missing_tree(source, target) do
+    cond do
+      File.dir?(source) ->
+        File.mkdir_p!(target)
 
-    ## Output Format
+        source
+        |> File.ls!()
+        |> Enum.each(fn entry ->
+          copy_missing_tree(Path.join(source, entry), Path.join(target, entry))
+        end)
 
-    Present findings first, ordered by severity. Include file paths and line numbers when available. Keep summaries brief.
+      File.exists?(target) ->
+        :ok
 
-    If no issues are found, say that explicitly and note any residual testing gaps.
-    """
+      true ->
+        File.mkdir_p!(Path.dirname(target))
+        File.cp!(source, target)
+    end
   end
 
   defp agents_template do

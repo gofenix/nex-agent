@@ -34,6 +34,7 @@ defmodule Nex.Agent.Heartbeat do
     :running,
     last_executions: %{},
     last_maintenance: nil,
+    last_weekly_evolution: nil,
     maintenance_running: false,
     execution_history: []
   ]
@@ -45,6 +46,7 @@ defmodule Nex.Agent.Heartbeat do
           running: boolean(),
           last_executions: %{String.t() => integer()},
           last_maintenance: integer() | nil,
+          last_weekly_evolution: integer() | nil,
           maintenance_running: boolean(),
           execution_history: list()
         }
@@ -173,10 +175,13 @@ defmodule Nex.Agent.Heartbeat do
     # 1. Built-in maintenance (once per day)
     state = maybe_run_maintenance(state, now)
 
-    # 2. User-defined tasks from HEARTBEAT.md
+    # 2. Weekly evolution (deep analysis)
+    state = maybe_run_weekly_evolution(state, now)
+
+    # 3. User-defined tasks from HEARTBEAT.md
     state = run_heartbeat_tasks(state, now)
 
-    # 3. Health checks
+    # 4. Health checks
     health = check_services_health()
     dead = Enum.filter(health, fn {_svc, alive} -> not alive end) |> Enum.map(&elem(&1, 0))
 
@@ -204,7 +209,8 @@ defmodule Nex.Agent.Heartbeat do
           results = [
             {:session_gc, run_session_gc(workspace)},
             {:log_archive, run_log_archive(workspace)},
-            {:code_upgrade_cleanup, run_code_upgrade_cleanup()}
+            {:code_upgrade_cleanup, run_code_upgrade_cleanup()},
+            {:evolution_daily, run_daily_evolution(workspace)}
           ]
 
           send(heartbeat, {:maintenance_done, results})
@@ -339,6 +345,37 @@ defmodule Nex.Agent.Heartbeat do
       end,
       :desc
     )
+  end
+
+  # ── Evolution ──
+
+  defp run_daily_evolution(workspace) do
+    Nex.Agent.Evolution.run_evolution_cycle(workspace: workspace, scope: :daily)
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Heartbeat] Daily evolution error: #{Exception.message(e)}")
+      :error
+  end
+
+  @weekly_evolution_cooldown 7 * 86_400
+
+  defp maybe_run_weekly_evolution(state, now) do
+    last_weekly = state.last_weekly_evolution || 0
+
+    if now - last_weekly >= @weekly_evolution_cooldown do
+      Logger.info("[Heartbeat] Running weekly evolution (async)...")
+
+      workspace = state.workspace
+
+      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        Nex.Agent.Evolution.run_evolution_cycle(workspace: workspace, scope: :weekly)
+      end)
+
+      %{state | last_weekly_evolution: now}
+    else
+      state
+    end
   end
 
   # ── HEARTBEAT.md Tasks ──

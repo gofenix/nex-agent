@@ -240,4 +240,32 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     refute agents =~ "Identity"
     refute soul =~ "I am Nex Agent"
   end
+
+  test "bundled skills are installed into the workspace on onboarding", %{workspace: workspace} do
+    :ok = Onboarding.ensure_initialized()
+
+    code_review = Path.join(workspace, "skills/code-review/SKILL.md")
+    pulse = Path.join(workspace, "skills/pulse/SKILL.md")
+
+    assert File.exists?(code_review)
+    assert File.exists?(pulse)
+
+    assert File.read!(code_review) =~ "name: code-review"
+    assert File.read!(pulse) =~ "name: pulse"
+    assert File.read!(pulse) =~ "# Pulse"
+  end
+
+  test "existing bundled skill customizations are preserved", %{workspace: workspace} do
+    pulse_dir = Path.join(workspace, "skills/pulse")
+    pulse_skill = Path.join(pulse_dir, "SKILL.md")
+    custom_content = "# Custom Pulse\n\nDo not overwrite me.\n"
+
+    File.mkdir_p!(pulse_dir)
+    File.write!(pulse_skill, custom_content)
+
+    :ok = Onboarding.ensure_initialized()
+
+    assert File.read!(pulse_skill) == custom_content
+    assert File.exists?(Path.join(workspace, "skills/code-review/SKILL.md"))
+  end
 end

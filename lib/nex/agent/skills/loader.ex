@@ -239,6 +239,13 @@ defmodule Nex.Agent.Skills.Loader do
                 is_nil(next_line) or indentation(next_line) <= current_indent ->
                   {"", rest}
 
+                String.trim(next_line) in ["|", ">"] ->
+                  parse_yaml_multiline(
+                    tl(rest),
+                    indentation(next_line) + 2,
+                    block_scalar_style(String.trim(next_line))
+                  )
+
                 String.starts_with?(String.trim(next_line), "- ") ->
                   parse_yaml_list(rest, current_indent + 2)
 
@@ -249,7 +256,21 @@ defmodule Nex.Agent.Skills.Loader do
             do_parse_yaml_block(remaining, indent, Map.put(acc, key, value))
 
           [key, value] ->
-            do_parse_yaml_block(rest, indent, Map.put(acc, key, parse_scalar(String.trim(value))))
+            value = String.trim(value)
+
+            {parsed, remaining} =
+              case value do
+                "|" ->
+                  parse_yaml_multiline(rest, current_indent + 2, :literal)
+
+                ">" ->
+                  parse_yaml_multiline(rest, current_indent + 2, :folded)
+
+                _ ->
+                  {parse_scalar(value), rest}
+              end
+
+            do_parse_yaml_block(remaining, indent, Map.put(acc, key, parsed))
         end
     end
   end
@@ -279,6 +300,66 @@ defmodule Nex.Agent.Skills.Loader do
         do_parse_yaml_list(rest, indent, [item | acc])
     end
   end
+
+  defp parse_yaml_multiline(lines, indent, style) do
+    {block_lines, remaining} = take_yaml_multiline(lines, indent, [])
+
+    value =
+      case style do
+        :literal -> Enum.join(block_lines, "\n")
+        :folded -> fold_yaml_lines(block_lines)
+      end
+
+    {String.trim_trailing(value), remaining}
+  end
+
+  defp take_yaml_multiline([], _indent, acc), do: {Enum.reverse(acc), []}
+
+  defp take_yaml_multiline([line | rest], indent, acc) do
+    trimmed = String.trim(line)
+    current_indent = indentation(line)
+
+    cond do
+      trimmed == "" ->
+        take_yaml_multiline(rest, indent, ["" | acc])
+
+      current_indent < indent ->
+        {Enum.reverse(acc), [line | rest]}
+
+      true ->
+        content =
+          if String.length(line) >= indent do
+            String.slice(line, indent..-1//1)
+          else
+            trimmed
+          end
+
+        take_yaml_multiline(rest, indent, [String.trim_trailing(content) | acc])
+    end
+  end
+
+  defp fold_yaml_lines(lines) do
+    Enum.reduce(lines, "", fn
+      "", "" ->
+        ""
+
+      "", acc ->
+        acc <> "\n\n"
+
+      line, "" ->
+        line
+
+      line, acc ->
+        if String.ends_with?(acc, "\n\n") do
+          acc <> line
+        else
+          acc <> " " <> line
+        end
+    end)
+  end
+
+  defp block_scalar_style("|"), do: :literal
+  defp block_scalar_style(">"), do: :folded
 
   defp indentation(line) do
     line

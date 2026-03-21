@@ -266,6 +266,11 @@ defmodule Nex.Agent.Memory do
                 "type" => "string",
                 "description" =>
                   "Full updated long-term memory as markdown. Include all existing facts plus new ones. Return unchanged if nothing new."
+              },
+              "patterns_noticed" => %{
+                "type" => "string",
+                "description" =>
+                  "Any recurring patterns, repeated failures, user corrections, or notable behavioral trends in this conversation segment. Empty string if none."
               }
             },
             "required" => ["history_entry", "memory_update"]
@@ -325,6 +330,7 @@ defmodule Nex.Agent.Memory do
        ) do
     entry = stringify_result(Map.get(args, "history_entry"))
     update = stringify_result(Map.get(args, "memory_update"))
+    patterns = stringify_result(Map.get(args, "patterns_noticed"))
 
     if entry != nil do
       append_history(entry, memory_opts)
@@ -332,6 +338,18 @@ defmodule Nex.Agent.Memory do
 
     if update != nil and update != current_memory do
       write_long_term(update, memory_opts)
+    end
+
+    # Record patterns noticed during consolidation as evolution signals
+    if patterns != nil and String.trim(patterns) != "" do
+      Nex.Agent.Evolution.record_signal(
+        %{
+          source: "consolidation",
+          signal: patterns,
+          context: %{message_count: length(session.messages)}
+        },
+        memory_opts
+      )
     end
 
     updated_session = %{
@@ -346,6 +364,9 @@ defmodule Nex.Agent.Memory do
     Logger.info(
       "Memory consolidation done: #{length(session.messages)} messages, last_consolidated=#{updated_session.last_consolidated}"
     )
+
+    # Maybe trigger evolution cycle after N consolidations
+    Nex.Agent.Evolution.maybe_trigger_after_consolidation(memory_opts)
 
     {:ok, updated_session}
   end

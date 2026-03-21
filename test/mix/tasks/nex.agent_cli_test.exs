@@ -128,6 +128,42 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
     assert Config.gateway_port(updated) == 19_444
   end
 
+  test "single-message mode honors -m instead of falling through to the REPL" do
+    base_dir = temp_dir("cli-message")
+    config_path = Path.join(base_dir, "msg/config.json")
+    workspace = Path.join(base_dir, "msg-workspace")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+    end)
+
+    File.mkdir_p!(Path.dirname(config_path))
+
+    config =
+      Config.default()
+      |> Map.put(:provider, "openai")
+      |> Map.put(:model, "gpt-4o")
+      |> Map.put(:providers, %{
+        "openai" => %{
+          "api_key" => "test-key",
+          "base_url" => "http://127.0.0.1:1/v1"
+        }
+      })
+      |> Map.put(:defaults, %{"workspace" => Path.expand(workspace)})
+
+    :ok = Config.save(config, config_path: config_path)
+
+    output =
+      capture_io("exit\n", fn ->
+        assert_raise MatchError, fn ->
+          Mix.Tasks.Nex.Agent.run(["-c", config_path, "-w", workspace, "-m", "hello"])
+        end
+      end)
+
+    refute output =~ "Nex Agent (type 'exit' to quit)"
+    refute output =~ "Goodbye!"
+  end
+
   test "gateway stop only targets the selected instance pid file" do
     base_dir = temp_dir("cli-gateway")
     config_a = Path.join(base_dir, "a/config.json")
