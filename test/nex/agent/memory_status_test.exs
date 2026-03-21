@@ -40,12 +40,11 @@ defmodule Nex.Agent.MemoryStatusTest do
         "runtime_evolution" => %{"turns_since_memory_write" => 5}
       })
 
-    :ok = Session.save(session)
+    :ok = Session.save(session, workspace: workspace)
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
       File.rm_rf!(workspace)
-      File.rm_rf!(session_dir_for(key))
     end)
 
     {:ok, workspace: workspace, key: key}
@@ -97,7 +96,7 @@ defmodule Nex.Agent.MemoryStatusTest do
         "runtime_evolution" => %{"turns_since_memory_write" => 0}
       })
 
-    :ok = Session.save(stuck_session)
+    :ok = Session.save(stuck_session, workspace: workspace)
 
     assert {:ok, status} =
              MemoryStatus.execute(%{}, %{workspace: workspace, session_key: key})
@@ -116,9 +115,5 @@ defmodule Nex.Agent.MemoryStatusTest do
         "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
       }
     end)
-  end
-
-  defp session_dir_for(key) do
-    Session.session_dir(key)
   end
 end

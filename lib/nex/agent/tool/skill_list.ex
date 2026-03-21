@@ -9,11 +9,7 @@ defmodule Nex.Agent.Tool.SkillList do
 
   def description do
     """
-    List local Markdown skills or read a skill's SKILL.md content.
-
-    Parameters:
-    - scope=local: list installed skills
-    - detail=<name>: read full SKILL.md for that skill
+    List locally installed Markdown skills so the main agent loop can decide whether to load one.
     """
   end
 
@@ -31,31 +27,19 @@ defmodule Nex.Agent.Tool.SkillList do
             enum: ["local"],
             description: "List locally installed skills",
             default: "local"
-          },
-          detail: %{
-            type: "string",
-            description:
-              "Skill name to read full content (e.g. 'code-review'). Returns the complete SKILL.md file."
           }
         }
       }
     }
   end
 
-  def execute(%{"detail" => skill_name}, _ctx) when is_binary(skill_name) and skill_name != "" do
-    path = Path.join([skills_dir(), skill_name, "SKILL.md"])
-
-    case File.read(path) do
-      {:ok, content} ->
-        {:ok, %{name: skill_name, content: content, message: "Skill '#{skill_name}' content"}}
-
-      {:error, :enoent} ->
-        {:error, "Skill '#{skill_name}' not found at #{path}"}
-    end
+  # Backward-compatible read path; prefer the dedicated skill_read tool.
+  def execute(%{"detail" => skill_name}, ctx) when is_binary(skill_name) and skill_name != "" do
+    Nex.Agent.Tool.SkillRead.execute(%{"name" => skill_name}, ctx)
   end
 
-  def execute(%{"scope" => "local"}, _ctx) do
-    skills = Nex.Agent.Skills.list()
+  def execute(%{"scope" => "local"}, ctx) do
+    skills = Nex.Agent.Skills.list(workspace_opts(ctx))
 
     formatted =
       skills
@@ -75,14 +59,8 @@ defmodule Nex.Agent.Tool.SkillList do
     execute(%{"scope" => "local"}, ctx)
   end
 
-  defp skills_dir do
-    workspace =
-      Application.get_env(
-        :nex_agent,
-        :workspace_path,
-        Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
-      )
+  defp workspace_opts(%{workspace: workspace}) when is_binary(workspace),
+    do: [workspace: workspace]
 
-    Path.join(workspace, "skills")
-  end
+  defp workspace_opts(_ctx), do: []
 end

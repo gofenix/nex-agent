@@ -8,8 +8,7 @@ defmodule Nex.Agent.Runner do
     ContextBuilder,
     Memory,
     Session,
-    SessionManager,
-    Skills
+    SessionManager
   }
 
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
@@ -53,7 +52,7 @@ defmodule Nex.Agent.Runner do
         else: maybe_consolidate_memory(session, provider, model, api_key, base_url, opts)
 
     initial_message_count = length(session.messages)
-    {session, runtime_system_messages} = prepare_evolution_turn(session, prompt)
+    {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
 
     history_limit = Keyword.get(opts, :history_limit, @memory_window)
     history = Session.get_history(session, history_limit)
@@ -66,10 +65,12 @@ defmodule Nex.Agent.Runner do
       ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
         skip_skills: Keyword.get(opts, :skip_skills, false),
         workspace: workspace,
-        runtime_system_messages: runtime_system_messages
+        runtime_system_messages: runtime_system_messages,
+        cwd: Keyword.get(opts, :cwd)
       )
 
-    session = Session.add_message(session, "user", prompt)
+    session =
+      Session.add_message(session, "user", prompt, project: Keyword.get(opts, :project))
 
     Logger.info("[Runner] LLM request: history=#{length(history)} messages=#{length(messages)}")
 
@@ -88,7 +89,9 @@ defmodule Nex.Agent.Runner do
   end
 
   defp maybe_consolidate_memory(session, provider, model, api_key, base_url, opts) do
-    case SessionManager.start_consolidation(session.key, @memory_window) do
+    workspace_opts = workspace_opts(opts)
+
+    case SessionManager.start_consolidation(session.key, @memory_window, workspace_opts) do
       {:ok, consolidation_session, unconsolidated} ->
         Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
 
@@ -122,14 +125,14 @@ defmodule Nex.Agent.Runner do
 
           case result do
             {:ok, updated_session} ->
-              SessionManager.finish_consolidation(updated_session)
+              SessionManager.finish_consolidation(updated_session, workspace_opts)
 
               Logger.info(
                 "[Runner] Async memory consolidation saved last_consolidated=#{updated_session.last_consolidated}"
               )
 
             {:error, reason} ->
-              SessionManager.cancel_consolidation(consolidation_session.key)
+              SessionManager.cancel_consolidation(consolidation_session.key, workspace_opts)
               Logger.warning("[Runner] Async memory consolidation failed: #{inspect(reason)}")
           end
         end)
@@ -145,7 +148,7 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp prepare_evolution_turn(session, prompt) do
+  defp prepare_evolution_turn(session, prompt, _opts) do
     metadata = evolution_metadata(session)
     turns_since_memory = metadata["turns_since_memory_write"] || 0
     turns_for_this_request = turns_since_memory + 1
@@ -601,14 +604,6 @@ defmodule Nex.Agent.Runner do
     status = extract_error_status(reason)
 
     cond do
-      # 400: tool definition problem → retry without skill tools
-      status == 400 and tool_definition_error?(error_msg) ->
-        Logger.warning(
-          "[Runner] Tool definition error, retrying without skill tools: #{error_msg}"
-        )
-
-        {:retry, messages, Keyword.put(opts, :skip_skills, true)}
-
       # 400: context too long → trim older messages
       status == 400 and context_length_error?(error_msg) ->
         trimmed = trim_messages(messages)
@@ -636,15 +631,6 @@ defmodule Nex.Agent.Runner do
 
   defp extract_error_status(%{status: status}), do: status
   defp extract_error_status(_), do: nil
-
-  defp tool_definition_error?(msg) do
-    String.contains?(msg, "tool definition") or
-      String.contains?(msg, "tool name") or
-      String.contains?(msg, "function name") or
-      String.contains?(msg, "invalid_tool") or
-      String.contains?(msg, "tool_use_failed") or
-      String.contains?(msg, "schema")
-  end
 
   defp context_length_error?(msg) do
     String.contains?(msg, "context_length") or
@@ -676,13 +662,11 @@ defmodule Nex.Agent.Runner do
   defp transient_error?(_), do: false
 
   defp call_llm(messages, opts) do
-    skip_skills = Keyword.get(opts, :skip_skills, false)
-
     tools =
       case Keyword.get(opts, :tools_filter) do
-        :subagent -> registry_definitions(:subagent, skip_skills)
-        :cron -> registry_definitions(:cron, skip_skills)
-        _ -> registry_definitions(:all, skip_skills)
+        :subagent -> registry_definitions(:subagent)
+        :cron -> registry_definitions(:cron)
+        _ -> registry_definitions(:all)
       end
 
     opts = Keyword.put(opts, :tools, tools)
@@ -697,34 +681,9 @@ defmodule Nex.Agent.Runner do
   # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
   @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
 
-  defp registry_definitions(filter, skip_skills) do
+  defp registry_definitions(filter) do
     if Process.whereis(ToolRegistry) do
-      registry_defs = ToolRegistry.definitions(filter)
-
-      skill_tools =
-        if skip_skills do
-          []
-        else
-          Skills.for_llm()
-          |> Enum.map(fn skill ->
-            name = Map.get(skill, "name") || Map.get(skill, :name)
-            desc = Map.get(skill, "description") || Map.get(skill, :description)
-
-            %{
-              "name" => name,
-              "description" => desc,
-              "input_schema" => %{
-                "type" => "object",
-                "properties" => %{
-                  "input" => %{"type" => "string", "description" => "Input to skill"}
-                },
-                "required" => ["input"]
-              }
-            }
-          end)
-        end
-
-      (registry_defs ++ skill_tools)
+      ToolRegistry.definitions(filter)
       |> Enum.filter(fn tool ->
         name = tool["name"]
 
@@ -870,26 +829,11 @@ defmodule Nex.Agent.Runner do
         {:ok, result} ->
           render_text(result)
 
-        {:error, "Unknown tool: " <> _} when is_binary(tool_name) ->
-          # Tool not in Registry — try Skills system (handles skill_xxx pattern)
-          execute_tool_fallback(tool_name, args, ctx)
-
         {:error, reason} ->
           "Error: #{reason}"
       end
     else
-      execute_tool_fallback(tool_name, args, ctx)
-    end
-  end
-
-  # Fallback for skill tools (skill_xxx pattern)
-  defp execute_tool_fallback(name, args, _ctx) do
-    skill_name = String.replace_prefix(name, "skill_", "")
-
-    case Skills.execute(skill_name, args["input"] || args[:input] || "", invoked_by: :model) do
-      {:ok, %{result: result}} -> render_text(result)
-      {:ok, result} -> if(is_binary(result), do: result, else: inspect(result))
-      {:error, reason} -> "Error executing skill #{skill_name}: #{inspect(reason)}"
+      "Error: tool registry unavailable"
     end
   end
 
@@ -905,6 +849,7 @@ defmodule Nex.Agent.Runner do
       tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
+      project: Keyword.get(opts, :project),
       metadata: Keyword.get(opts, :metadata, %{})
     }
   end
@@ -1195,4 +1140,11 @@ defmodule Nex.Agent.Runner do
 
   defp tool_choice_for_memory_write(_provider),
     do: %{type: "function", function: %{name: "memory_write"}}
+
+  defp workspace_opts(opts) do
+    case Keyword.get(opts, :workspace) do
+      nil -> []
+      workspace -> [workspace: workspace]
+    end
+  end
 end

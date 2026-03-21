@@ -60,7 +60,7 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
         derive_session_key(ctx)
 
     with {:ok, session_key} <- validate_session_key(session_key),
-         {:ok, session} <- fetch_session(session_key),
+         {:ok, session} <- fetch_session(session_key, workspace),
          {:ok, updated_session} <-
            rebuild_session(
              session,
@@ -72,7 +72,7 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
              llm_call_fun,
              batch_messages
            ) do
-      persist_session(updated_session)
+      persist_session(updated_session, workspace)
 
       {:ok,
        %{
@@ -133,18 +133,21 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     end
   end
 
-  defp fetch_session(session_key) do
-    case SessionManager.get(session_key) || Session.load(session_key) do
+  defp fetch_session(session_key, workspace) do
+    session_opts = workspace_opts(workspace)
+
+    case SessionManager.get(session_key, session_opts) || Session.load(session_key, session_opts) do
       nil -> {:error, "Session not found: #{session_key}"}
       session -> {:ok, session}
     end
   end
 
-  defp persist_session(session) do
-    :ok = Session.save(session)
+  defp persist_session(session, workspace) do
+    session_opts = workspace_opts(workspace)
+    :ok = Session.save(session, session_opts)
 
     if Process.whereis(SessionManager) do
-      SessionManager.invalidate(session.key)
+      SessionManager.invalidate(session.key, session_opts)
     end
   end
 
@@ -185,4 +188,7 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp workspace_opts(nil), do: []
+  defp workspace_opts(workspace), do: [workspace: workspace]
 end

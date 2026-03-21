@@ -8,7 +8,7 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{Bus, Config, Workspace}
 
   defstruct [
     :config,
@@ -41,9 +41,9 @@ defmodule Nex.Agent.InboundWorker do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @spec reset_session(String.t(), String.t()) :: :ok
-  def reset_session(channel, chat_id) do
-    GenServer.call(__MODULE__, {:reset_session, channel, chat_id})
+  @spec reset_session(String.t(), String.t(), keyword()) :: :ok
+  def reset_session(channel, chat_id, opts \\ []) do
+    GenServer.call(__MODULE__, {:reset_session, channel, chat_id, opts})
   end
 
   @impl true
@@ -64,8 +64,11 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
-  def handle_call({:reset_session, channel, chat_id}, _from, state) do
-    key = session_key(channel, chat_id)
+  def handle_call({:reset_session, channel, chat_id, opts}, _from, state) do
+    session_key = session_key(channel, chat_id)
+    workspace = Keyword.get(opts, :workspace, Workspace.root())
+    key = runtime_key(workspace, session_key)
+    Nex.Agent.reset_session(channel, chat_id, workspace: workspace)
     {:reply, :ok, %{state | agents: Map.delete(state.agents, key)}}
   end
 
@@ -168,13 +171,15 @@ defmodule Nex.Agent.InboundWorker do
   defp dispatch_inbound(payload, state) do
     channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
     chat_id = payload_chat_id(payload)
+    session_key = session_key(channel, chat_id)
+    workspace = payload_workspace(payload)
     content = Map.get(payload, :content) || Map.get(payload, "content") || ""
     content = normalize_inbound_content(content)
     cmd = String.trim(content)
-    key = session_key(channel, chat_id)
+    key = runtime_key(workspace, session_key)
 
     Logger.info(
-      "InboundWorker received channel=#{channel} chat_id=#{chat_id} cmd=#{inspect(cmd)}"
+      "InboundWorker received channel=#{channel} chat_id=#{chat_id} workspace=#{workspace} cmd=#{inspect(cmd)}"
     )
 
     cond do
@@ -187,21 +192,22 @@ defmodule Nex.Agent.InboundWorker do
         %{state | agents: Map.delete(state.agents, key)}
 
       cmd == "/stop" ->
-        {count, state} = stop_session(state, key)
+        {count, state} = stop_session(state, key, session_key, workspace)
         publish_outbound(payload, "Stopped #{count} task(s).")
         state
 
       true ->
-        dispatch_async(state, key, content, payload)
+        dispatch_async(state, key, session_key, workspace, content, payload)
     end
   end
 
-  defp dispatch_async(state, key, content, payload) do
-    {channel, chat_id} = parse_session_key(key)
+  defp dispatch_async(state, key, session_key, workspace, content, payload) do
+    {channel, chat_id} = parse_session_key(session_key)
 
-    {:ok, agent, state} = ensure_agent(state, key)
+    {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
     on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
     media = extract_media(payload)
 
@@ -216,6 +222,15 @@ defmodule Nex.Agent.InboundWorker do
         ],
         else: []
 
+    unless from_cron or from_subagent do
+      Nex.Agent.PersonalSummary.ensure_default_jobs(
+        channel,
+        chat_id,
+        metadata: extract_metadata(payload),
+        workspace: workspace
+      )
+    end
+
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
         try do
@@ -223,7 +238,7 @@ defmodule Nex.Agent.InboundWorker do
             state.agent_prompt_fun.(
               agent,
               content,
-              [channel: channel, chat_id: chat_id, on_progress: on_progress]
+              [channel: channel, chat_id: chat_id, on_progress: on_progress, workspace: workspace]
               |> maybe_put_opt(:media, media)
               |> Kernel.++(cron_opts)
             )
@@ -277,7 +292,7 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp stop_session(state, key) do
+  defp stop_session(state, key, session_key, workspace) do
     count =
       case Map.get(state.active_tasks, key) do
         nil ->
@@ -290,7 +305,7 @@ defmodule Nex.Agent.InboundWorker do
 
     subagent_count =
       if Process.whereis(Nex.Agent.Subagent) do
-        {:ok, n} = Nex.Agent.Subagent.cancel_by_session(key)
+        {:ok, n} = Nex.Agent.Subagent.cancel_by_session(session_key, workspace: workspace)
         n
       else
         0
@@ -301,19 +316,22 @@ defmodule Nex.Agent.InboundWorker do
     {count + subagent_count, state}
   end
 
-  defp ensure_agent(state, key) do
+  defp ensure_agent(state, key, session_key, workspace) do
     case Map.fetch(state.agents, key) do
       {:ok, agent} ->
         # Reload session from SessionManager to get latest state
-        session = Nex.Agent.SessionManager.get_or_create(key)
-        updated_agent = %{agent | session: session}
+        session = Nex.Agent.SessionManager.get_or_create(session_key, workspace: workspace)
+        updated_agent = %{agent | session: session, workspace: workspace}
         {:ok, updated_agent, put_in(state.agents[key], updated_agent)}
 
       :error ->
-        opts = agent_start_opts(key)
+        opts = agent_start_opts(session_key, workspace)
 
-        session = Nex.Agent.SessionManager.get_or_create(key)
-        Logger.info("InboundWorker creating new agent session=#{session.key} for key=#{key}")
+        session = Nex.Agent.SessionManager.get_or_create(session_key, workspace: workspace)
+
+        Logger.info(
+          "InboundWorker creating new agent session=#{session.key} for key=#{inspect(key)}"
+        )
 
         provider = Keyword.get(opts, :provider, :openai)
         model = Keyword.get(opts, :model, "gpt-4o")
@@ -323,12 +341,13 @@ defmodule Nex.Agent.InboundWorker do
         max_iterations = Keyword.get(opts, :max_iterations, 40)
 
         agent = %Nex.Agent{
-          session_key: key,
+          session_key: session_key,
           session: session,
           provider: provider,
           model: model,
           api_key: api_key,
           base_url: base_url,
+          workspace: workspace,
           cwd: cwd,
           max_iterations: max_iterations
         }
@@ -337,7 +356,7 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp agent_start_opts(session_key) do
+  defp agent_start_opts(session_key, workspace) do
     config = Config.load()
     [channel, chat_id] = String.split(session_key, ":", parts: 2)
     provider = Config.provider_to_atom(config.provider)
@@ -349,7 +368,7 @@ defmodule Nex.Agent.InboundWorker do
       api_key: Config.get_current_api_key(config),
       base_url: Config.get_current_base_url(config),
       tools: config.tools,
-      project: session_key,
+      workspace: workspace,
       cwd: home,
       max_iterations: Config.get_max_iterations(config),
       channel: channel,
@@ -466,6 +485,16 @@ defmodule Nex.Agent.InboundWorker do
     |> to_string()
   end
 
+  defp payload_workspace(payload) do
+    workspace = Map.get(payload, :workspace) || Map.get(payload, "workspace")
+
+    if is_binary(workspace) and String.trim(workspace) != "" do
+      Path.expand(workspace)
+    else
+      Workspace.root() |> Path.expand()
+    end
+  end
+
   defp parse_session_key(key) do
     key_str = to_string(key)
 
@@ -477,6 +506,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp session_key(channel, chat_id), do: "#{channel}:#{chat_id}"
+  defp runtime_key(workspace, session_key), do: {Path.expand(workspace), session_key}
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)

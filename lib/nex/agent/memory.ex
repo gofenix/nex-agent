@@ -9,14 +9,14 @@ defmodule Nex.Agent.Memory do
 
   require Logger
 
-  @default_workspace_path Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
+  alias Nex.Agent.{Config, Workspace}
 
   @doc """
   Get the memory workspace path.
   """
   @spec workspace_path() :: String.t()
   def workspace_path do
-    Application.get_env(:nex_agent, :workspace_path, @default_workspace_path)
+    Application.get_env(:nex_agent, :workspace_path) || inferred_workspace_from_config()
   end
 
   @doc """
@@ -445,4 +445,17 @@ defmodule Nex.Agent.Memory do
 
   defp maybe_put_llm_opt(opts, _key, nil), do: opts
   defp maybe_put_llm_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp inferred_workspace_from_config do
+    config_path =
+      Application.get_env(:nex_agent, :config_path, Config.default_config_path()) |> Path.expand()
+
+    default_config_path = Config.default_config_path() |> Path.expand()
+
+    if config_path != default_config_path do
+      Path.expand(Path.join(Path.dirname(config_path), "workspace"))
+    else
+      Workspace.default_root()
+    end
+  end
 end

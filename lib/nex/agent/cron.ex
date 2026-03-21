@@ -6,7 +6,9 @@ defmodule Nex.Agent.Cron do
   use GenServer
   require Logger
 
-  @jobs_file Path.join(System.get_env("HOME", "~"), ".nex/agent/cron/jobs.json")
+  alias Nex.Agent.Workspace
+
+  @jobs_file "cron_jobs.json"
 
   defstruct [
     :id,
@@ -46,88 +48,144 @@ defmodule Nex.Agent.Cron do
           updated_at: integer() | nil
         }
 
+  @type workspace_state :: %{
+          jobs: [t()],
+          timer_ref: reference() | nil,
+          jobs_file: String.t()
+        }
+
   # ── Client API ──
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, nil, name: name)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @spec add_job(map()) :: {:ok, t()} | {:error, term()}
-  def add_job(attrs) when is_map(attrs) do
-    GenServer.call(__MODULE__, {:add_job, attrs})
+  @spec add_job(map(), keyword()) :: {:ok, t()} | {:error, term()}
+  def add_job(attrs, opts \\ []) when is_map(attrs) do
+    GenServer.call(__MODULE__, {:add_job, attrs, opts})
   end
 
-  @spec remove_job(String.t()) :: :ok | {:error, :not_found}
-  def remove_job(job_id) do
-    GenServer.call(__MODULE__, {:remove_job, job_id})
+  @spec upsert_job(map(), keyword()) :: {:ok, t()} | {:error, term()}
+  def upsert_job(attrs, opts \\ []) when is_map(attrs) do
+    GenServer.call(__MODULE__, {:upsert_job, attrs, opts})
   end
 
-  @spec list_jobs() :: [t()]
-  def list_jobs do
-    GenServer.call(__MODULE__, :list_jobs)
+  @spec remove_job(String.t(), keyword()) :: :ok | {:error, :not_found}
+  def remove_job(job_id, opts \\ []) do
+    GenServer.call(__MODULE__, {:remove_job, job_id, opts})
   end
 
-  @spec enable_job(String.t(), boolean()) :: {:ok, t()} | {:error, :not_found}
-  def enable_job(job_id, enabled) do
-    GenServer.call(__MODULE__, {:enable_job, job_id, enabled})
+  @spec list_jobs(keyword()) :: [t()]
+  def list_jobs(opts \\ []) do
+    GenServer.call(__MODULE__, {:list_jobs, opts})
   end
 
-  @spec run_job(String.t()) :: {:ok, t()} | {:error, :not_found}
-  def run_job(job_id) do
-    GenServer.call(__MODULE__, {:run_job, job_id})
+  @spec enable_job(String.t(), boolean(), keyword()) :: {:ok, t()} | {:error, :not_found}
+  def enable_job(job_id, enabled, opts \\ []) do
+    GenServer.call(__MODULE__, {:enable_job, job_id, enabled, opts})
   end
 
-  @spec status() :: map()
-  def status do
-    GenServer.call(__MODULE__, :status)
+  @spec run_job(String.t(), keyword()) :: {:ok, t()} | {:error, :not_found}
+  def run_job(job_id, opts \\ []) do
+    GenServer.call(__MODULE__, {:run_job, job_id, opts})
+  end
+
+  @spec status(keyword()) :: map()
+  def status(opts \\ []) do
+    GenServer.call(__MODULE__, {:status, opts})
   end
 
   # ── GenServer callbacks ──
 
   @impl true
-  def init(_) do
-    jobs = load_jobs()
-    timer_ref = arm_timer(jobs)
-    {:ok, %{jobs: jobs, timer_ref: timer_ref}}
+  def init(opts) do
+    workspace = normalize_workspace(opts)
+    {:ok, ensure_workspace_loaded(%{workspaces: %{}}, workspace)}
   end
 
   @impl true
-  def handle_call({:add_job, attrs}, _from, state) do
-    now = System.system_time(:second)
+  def handle_call({:add_job, attrs, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
+    {job, jobs} = build_new_job(attrs, current.jobs)
+    save_jobs(current.jobs_file, jobs)
 
+    {:reply, {:ok, job},
+     put_workspace_state(state, workspace, rearm_workspace(%{current | jobs: jobs}, workspace))}
+  end
+
+  @impl true
+  def handle_call({:upsert_job, attrs, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
+    now = System.system_time(:second)
+    name = Map.get(attrs, :name, "unnamed")
     schedule = Map.get(attrs, :schedule)
     delete_after_run = Map.get(attrs, :delete_after_run, schedule[:type] == :at)
 
-    job = %__MODULE__{
-      id: generate_id(),
-      name: Map.get(attrs, :name, "unnamed"),
-      schedule: schedule,
-      message: Map.get(attrs, :message),
-      enabled: true,
-      channel: Map.get(attrs, :channel),
-      chat_id: Map.get(attrs, :chat_id),
-      delete_after_run: delete_after_run,
-      last_run: nil,
-      next_run: calculate_next_run(schedule, now),
-      last_status: nil,
-      last_error: nil,
-      created_at: now,
-      updated_at: now
-    }
+    case Enum.split_with(current.jobs, &(&1.name == name)) do
+      {[%__MODULE__{} = existing | duplicates], remaining} ->
+        Enum.each(duplicates, fn duplicate ->
+          Logger.warning("[Cron] Removing duplicate job for name=#{name} id=#{duplicate.id}")
+        end)
 
-    jobs = [job | state.jobs]
-    save_jobs(jobs)
-    {:reply, {:ok, job}, rearm(%{state | jobs: jobs})}
+        enabled = Map.get(attrs, :enabled, existing.enabled)
+
+        updated = %__MODULE__{
+          existing
+          | schedule: schedule,
+            message: Map.get(attrs, :message, existing.message),
+            enabled: enabled,
+            channel: Map.get(attrs, :channel, existing.channel),
+            chat_id: Map.get(attrs, :chat_id, existing.chat_id),
+            delete_after_run: delete_after_run,
+            next_run: if(enabled, do: calculate_next_run(schedule, now), else: existing.next_run),
+            updated_at: now
+        }
+
+        jobs = [updated | remaining]
+        save_jobs(current.jobs_file, jobs)
+
+        {:reply, {:ok, updated},
+         put_workspace_state(
+           state,
+           workspace,
+           rearm_workspace(%{current | jobs: jobs}, workspace)
+         )}
+
+      {[], _remaining} ->
+        {job, jobs} = build_new_job(attrs, current.jobs)
+        save_jobs(current.jobs_file, jobs)
+
+        {:reply, {:ok, job},
+         put_workspace_state(
+           state,
+           workspace,
+           rearm_workspace(%{current | jobs: jobs}, workspace)
+         )}
+    end
   end
 
   @impl true
-  def handle_call({:remove_job, job_id}, _from, state) do
-    case Enum.split_with(state.jobs, &(&1.id == job_id)) do
+  def handle_call({:remove_job, job_id, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
+
+    case Enum.split_with(current.jobs, &(&1.id == job_id)) do
       {[_], remaining} ->
-        save_jobs(remaining)
-        {:reply, :ok, rearm(%{state | jobs: remaining})}
+        save_jobs(current.jobs_file, remaining)
+
+        {:reply, :ok,
+         put_workspace_state(
+           state,
+           workspace,
+           rearm_workspace(%{current | jobs: remaining}, workspace)
+         )}
 
       {[], _} ->
         {:reply, {:error, :not_found}, state}
@@ -135,21 +193,32 @@ defmodule Nex.Agent.Cron do
   end
 
   @impl true
-  def handle_call(:list_jobs, _from, state) do
-    {:reply, state.jobs, state}
+  def handle_call({:list_jobs, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    {:reply, workspace_state(state, workspace).jobs, state}
   end
 
   @impl true
-  def handle_call({:enable_job, job_id, enabled}, _from, state) do
+  def handle_call({:enable_job, job_id, enabled, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
     now = System.system_time(:second)
 
-    case Enum.split_with(state.jobs, &(&1.id == job_id)) do
+    case Enum.split_with(current.jobs, &(&1.id == job_id)) do
       {[job], remaining} ->
         next = if enabled, do: calculate_next_run(job.schedule, now), else: job.next_run
         updated = %{job | enabled: enabled, next_run: next, updated_at: now}
         jobs = [updated | remaining]
-        save_jobs(jobs)
-        {:reply, {:ok, updated}, rearm(%{state | jobs: jobs})}
+        save_jobs(current.jobs_file, jobs)
+
+        {:reply, {:ok, updated},
+         put_workspace_state(
+           state,
+           workspace,
+           rearm_workspace(%{current | jobs: jobs}, workspace)
+         )}
 
       {[], _} ->
         {:reply, {:error, :not_found}, state}
@@ -157,41 +226,58 @@ defmodule Nex.Agent.Cron do
   end
 
   @impl true
-  def handle_call({:run_job, job_id}, _from, state) do
-    case Enum.find(state.jobs, &(&1.id == job_id)) do
+  def handle_call({:run_job, job_id, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
+
+    case Enum.find(current.jobs, &(&1.id == job_id)) do
       nil ->
         {:reply, {:error, :not_found}, state}
 
       job ->
-        execute_job(job)
+        execute_job(job, workspace)
         now = System.system_time(:second)
-        {jobs, deleted?} = update_job_after_run(state.jobs, job.id, now, :ok, nil)
-        save_jobs(jobs)
+        {jobs, deleted?} = update_job_after_run(current.jobs, job.id, now, :ok, nil)
+        save_jobs(current.jobs_file, jobs)
 
         updated = Enum.find(jobs, &(&1.id == job_id))
 
         if deleted? do
-          {:reply, {:ok, %{job | last_status: "ok", last_run: now}}, rearm(%{state | jobs: jobs})}
+          {:reply, {:ok, %{job | last_status: "ok", last_run: now}},
+           put_workspace_state(
+             state,
+             workspace,
+             rearm_workspace(%{current | jobs: jobs}, workspace)
+           )}
         else
-          {:reply, {:ok, updated}, rearm(%{state | jobs: jobs})}
+          {:reply, {:ok, updated},
+           put_workspace_state(
+             state,
+             workspace,
+             rearm_workspace(%{current | jobs: jobs}, workspace)
+           )}
         end
     end
   end
 
   @impl true
-  def handle_call(:status, _from, state) do
+  def handle_call({:status, opts}, _from, state) do
+    workspace = normalize_workspace(opts)
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
     now = System.system_time(:second)
 
     next_wakeup =
-      state.jobs
+      current.jobs
       |> Enum.filter(&(&1.enabled and &1.next_run != nil))
       |> Enum.map(& &1.next_run)
       |> Enum.min(fn -> nil end)
 
     status = %{
-      total: length(state.jobs),
-      enabled: Enum.count(state.jobs, & &1.enabled),
-      disabled: Enum.count(state.jobs, &(not &1.enabled)),
+      total: length(current.jobs),
+      enabled: Enum.count(current.jobs, & &1.enabled),
+      disabled: Enum.count(current.jobs, &(not &1.enabled)),
       next_wakeup: next_wakeup,
       next_wakeup_in: if(next_wakeup, do: max(0, next_wakeup - now), else: nil)
     }
@@ -200,19 +286,21 @@ defmodule Nex.Agent.Cron do
   end
 
   @impl true
-  def handle_info(:tick, state) do
+  def handle_info({:tick, workspace}, state) do
+    state = ensure_workspace_loaded(state, workspace)
+    current = workspace_state(state, workspace)
     now = System.system_time(:second)
 
     {to_run, _rest} =
-      Enum.split_with(state.jobs, fn job ->
+      Enum.split_with(current.jobs, fn job ->
         job.enabled and job.next_run != nil and job.next_run <= now
       end)
 
     run_ids = MapSet.new(to_run, & &1.id)
-    Enum.each(to_run, &execute_job/1)
+    Enum.each(to_run, &execute_job(&1, workspace))
 
     jobs =
-      state.jobs
+      current.jobs
       |> Enum.reduce([], fn job, acc ->
         if MapSet.member?(run_ids, job.id) do
           {updated, _deleted?} = update_job_after_run_single(job, now, :ok, nil)
@@ -223,8 +311,10 @@ defmodule Nex.Agent.Cron do
       end)
       |> Enum.reverse()
 
-    save_jobs(jobs)
-    {:noreply, rearm(%{state | jobs: jobs})}
+    save_jobs(current.jobs_file, jobs)
+
+    {:noreply,
+     put_workspace_state(state, workspace, rearm_workspace(%{current | jobs: jobs}, workspace))}
   end
 
   @impl true
@@ -232,7 +322,7 @@ defmodule Nex.Agent.Cron do
 
   # ── Smart Timer ──
 
-  defp arm_timer(jobs) do
+  defp arm_timer(jobs, workspace) do
     now = System.system_time(:second)
 
     next =
@@ -248,18 +338,43 @@ defmodule Nex.Agent.Cron do
       ts ->
         # Cap at ~49 days to avoid Process.send_after overflow (max 2^32-1 ms)
         delay_ms = min(max((ts - now) * 1000, 0), 4_294_967_295)
-        Process.send_after(self(), :tick, delay_ms)
+        Process.send_after(self(), {:tick, workspace}, delay_ms)
     end
   end
 
-  defp rearm(state) do
+  defp rearm_workspace(state, workspace) do
     if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-    %{state | timer_ref: arm_timer(state.jobs)}
+    %{state | timer_ref: arm_timer(state.jobs, workspace)}
+  end
+
+  defp build_new_job(attrs, existing_jobs) do
+    now = System.system_time(:second)
+    schedule = Map.get(attrs, :schedule)
+    delete_after_run = Map.get(attrs, :delete_after_run, schedule[:type] == :at)
+
+    job = %__MODULE__{
+      id: generate_id(),
+      name: Map.get(attrs, :name, "unnamed"),
+      schedule: schedule,
+      message: Map.get(attrs, :message),
+      enabled: Map.get(attrs, :enabled, true),
+      channel: Map.get(attrs, :channel),
+      chat_id: Map.get(attrs, :chat_id),
+      delete_after_run: delete_after_run,
+      last_run: nil,
+      next_run: calculate_next_run(schedule, now),
+      last_status: nil,
+      last_error: nil,
+      created_at: now,
+      updated_at: now
+    }
+
+    {job, [job | existing_jobs]}
   end
 
   # ── Job Execution ──
 
-  defp execute_job(job) do
+  defp execute_job(job, workspace) do
     Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
       content =
         job.message <>
@@ -269,8 +384,14 @@ defmodule Nex.Agent.Cron do
       payload = %{
         channel: job.channel || "cron",
         chat_id: job.chat_id || "",
+        workspace: workspace,
         content: content,
-        metadata: %{"_from_cron" => true, "job_id" => job.id, "job_name" => job.name}
+        metadata: %{
+          "_from_cron" => true,
+          "job_id" => job.id,
+          "job_name" => job.name,
+          "workspace" => workspace
+        }
       }
 
       Nex.Agent.Bus.publish(:inbound, payload)
@@ -531,9 +652,9 @@ defmodule Nex.Agent.Cron do
 
   # ── Persistence ──
 
-  defp load_jobs do
-    if File.exists?(@jobs_file) do
-      case File.read!(@jobs_file) |> Jason.decode() do
+  defp load_jobs(path) do
+    if File.exists?(path) do
+      case File.read!(path) |> Jason.decode() do
         {:ok, jobs} when is_list(jobs) ->
           Enum.map(jobs, &deserialize_job/1)
 
@@ -571,18 +692,18 @@ defmodule Nex.Agent.Cron do
   defp deserialize_schedule(%{"type" => "cron", "expr" => expr}), do: %{type: :cron, expr: expr}
   defp deserialize_schedule(other), do: other
 
-  defp save_jobs(jobs) do
+  defp save_jobs(path, jobs) do
     data = Enum.map(jobs, &serialize_job/1)
     encoded = Jason.encode!(data, pretty: true)
 
-    dir = Path.dirname(@jobs_file)
+    dir = Path.dirname(path)
     File.mkdir_p!(dir)
     suffix = :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
-    tmp_path = @jobs_file <> ".tmp.#{suffix}"
+    tmp_path = path <> ".tmp.#{suffix}"
 
     case File.write(tmp_path, encoded) do
       :ok ->
-        case File.rename(tmp_path, @jobs_file) do
+        case File.rename(tmp_path, path) do
           :ok -> :ok
           {:error, reason} -> {:error, "Failed to rename jobs file: #{reason}"}
         end
@@ -618,5 +739,41 @@ defmodule Nex.Agent.Cron do
 
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  defp ensure_workspace_loaded(%{workspaces: workspaces} = state, workspace) do
+    workspace = Path.expand(workspace)
+
+    case Map.has_key?(workspaces, workspace) do
+      true ->
+        state
+
+      false ->
+        jobs_file = jobs_file(workspace: workspace)
+        jobs = load_jobs(jobs_file)
+
+        workspace_state =
+          rearm_workspace(%{jobs: jobs, timer_ref: nil, jobs_file: jobs_file}, workspace)
+
+        %{state | workspaces: Map.put(workspaces, workspace, workspace_state)}
+    end
+  end
+
+  defp workspace_state(state, workspace) do
+    Map.fetch!(state.workspaces, Path.expand(workspace))
+  end
+
+  defp put_workspace_state(%{workspaces: workspaces} = state, workspace, workspace_state) do
+    %{state | workspaces: Map.put(workspaces, Path.expand(workspace), workspace_state)}
+  end
+
+  defp normalize_workspace(opts) do
+    Workspace.root(opts) |> Path.expand()
+  end
+
+  defp jobs_file(opts) do
+    opts
+    |> Workspace.tasks_dir()
+    |> Path.join(@jobs_file)
   end
 end

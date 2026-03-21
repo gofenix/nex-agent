@@ -41,7 +41,7 @@ defmodule Nex.Agent.Tool.MemoryStatus do
         Map.get(ctx, "session_key") ||
         derive_session_key(ctx)
 
-    session = load_session(session_key)
+    session = load_session(session_key, workspace)
     memory_content = Memory.read_long_term(workspace: workspace)
     history_content = read_history(workspace)
     runtime_evolution = session_metadata(session, "runtime_evolution") || %{}
@@ -84,14 +84,16 @@ defmodule Nex.Agent.Tool.MemoryStatus do
      }}
   end
 
-  defp load_session(nil), do: nil
-  defp load_session(""), do: nil
+  defp load_session(nil, _workspace), do: nil
+  defp load_session("", _workspace), do: nil
 
-  defp load_session(session_key) do
+  defp load_session(session_key, workspace) do
+    session_opts = workspace_opts(workspace)
+
     if Process.whereis(SessionManager) do
-      SessionManager.get(session_key) || Session.load(session_key)
+      SessionManager.get(session_key, session_opts) || Session.load(session_key, session_opts)
     else
-      Session.load(session_key)
+      Session.load(session_key, session_opts)
     end
   end
 
@@ -102,6 +104,9 @@ defmodule Nex.Agent.Tool.MemoryStatus do
 
   defp memory_dir(nil), do: Path.join(Memory.workspace_path(), "memory")
   defp memory_dir(workspace), do: Path.join(workspace, "memory")
+
+  defp workspace_opts(nil), do: []
+  defp workspace_opts(workspace), do: [workspace: workspace]
 
   defp session_metadata(nil, _key), do: nil
   defp session_metadata(session, key), do: Map.get(session.metadata || %{}, key)

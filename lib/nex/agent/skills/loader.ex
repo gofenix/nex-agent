@@ -3,6 +3,8 @@ defmodule Nex.Agent.Skills.Loader do
   Skills loader - parses Markdown SKILL.md files.
   """
 
+  alias Nex.Agent.Workspace
+
   @spec load_from_dir(String.t(), keyword()) :: list(map())
   def load_from_dir(dir, opts \\ []) do
     path = Path.expand(dir)
@@ -29,7 +31,7 @@ defmodule Nex.Agent.Skills.Loader do
 
   @spec load_all(keyword()) :: list(map())
   def load_all(opts \\ []) do
-    global = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
+    global = Workspace.skills_dir(opts)
     project = ".nex/skills"
 
     filter_unavailable = Keyword.get(opts, :filter_unavailable, true)

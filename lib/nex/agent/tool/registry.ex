@@ -16,11 +16,16 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
+    Nex.Agent.Tool.Task,
+    Nex.Agent.Tool.KnowledgeCapture,
+    Nex.Agent.Tool.ExecutorDispatch,
+    Nex.Agent.Tool.ExecutorStatus,
     Nex.Agent.Tool.MemoryStatus,
     Nex.Agent.Tool.MemoryRebuild,
     Nex.Agent.Tool.MemoryWrite,
     Nex.Agent.Tool.UserUpdate,
     Nex.Agent.Tool.SkillCreate,
+    Nex.Agent.Tool.SkillRead,
     Nex.Agent.Tool.ToolCreate,
     Nex.Agent.Tool.ToolList,
     Nex.Agent.Tool.ToolDelete,
@@ -416,7 +421,21 @@ defmodule Nex.Agent.Tool.Registry do
   defp normalize_definition(%{"function" => inner}) when is_map(inner), do: inner
   defp normalize_definition(def_map), do: def_map
 
-  @cron_tools ~w(bash read message web_search web_fetch)
+  @cron_tools ~w(bash read message web_search web_fetch task)
+  @subagent_tools ~w(
+    bash
+    edit
+    executor_dispatch
+    executor_status
+    list_dir
+    memory_status
+    read
+    skill_list
+    skill_read
+    web_fetch
+    web_search
+    write
+  )
 
   defp filter_tools(tools, :all), do: tools
 
@@ -435,6 +454,6 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   defp filter_tools(tools, :subagent) do
-    filter_tools(tools, :base)
+    Enum.filter(tools, fn {name, _module} -> name in @subagent_tools end)
   end
 end

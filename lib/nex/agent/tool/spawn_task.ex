@@ -32,6 +32,10 @@ defmodule Nex.Agent.Tool.SpawnTask do
       model: Map.get(ctx, :model),
       api_key: Map.get(ctx, :api_key),
       base_url: Map.get(ctx, :base_url),
+      workspace: Map.get(ctx, :workspace),
+      cwd: Map.get(ctx, :cwd),
+      project: Map.get(ctx, :project),
+      metadata: Map.get(ctx, :metadata, %{}),
       channel: Map.get(ctx, :channel),
       chat_id: Map.get(ctx, :chat_id)
     ]

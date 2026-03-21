@@ -3,8 +3,7 @@ defmodule Nex.Agent.ContextBuilder do
   Builds context for LLM calls - system prompt + messages.
   """
 
-  alias Nex.Agent.ContextDiagnostics
-  alias Nex.Agent.Skills
+  alias Nex.Agent.{ContextDiagnostics, Workspace}
 
   @bootstrap_layer_order [
     {"AGENTS.md", :agents},
@@ -17,7 +16,7 @@ defmodule Nex.Agent.ContextBuilder do
   @type message :: %{required(String.t()) => any()}
 
   @doc """
-  Build system prompt from identity, bootstrap files, memory, and skills.
+  Build system prompt from identity, bootstrap files, and memory.
   """
   @spec build_system_prompt(keyword()) :: String.t()
   def build_system_prompt(opts \\ []) do
@@ -32,7 +31,6 @@ defmodule Nex.Agent.ContextBuilder do
           {String.t(), [ContextDiagnostics.diagnostic()]}
   def build_system_prompt_with_diagnostics(opts \\ []) do
     workspace = Keyword.get(opts, :workspace) || default_workspace()
-    skip_skills = Keyword.get(opts, :skip_skills, false)
 
     parts =
       []
@@ -42,13 +40,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     {parts, bootstrap_diagnostics} = load_bootstrap_files_with_diagnostics(parts, workspace)
     {parts, memory_diagnostics} = add_memory_with_diagnostics(parts, workspace)
-
-    parts =
-      if skip_skills do
-        parts
-      else
-        add_skills(parts)
-      end
+    parts = add_always_skills(parts, workspace, opts)
 
     diagnostics = bootstrap_diagnostics ++ memory_diagnostics
 
@@ -65,7 +57,7 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp default_workspace do
-    Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
+    Workspace.root()
   end
 
   defp add_authoritative_identity(parts) do
@@ -88,9 +80,14 @@ defmodule Nex.Agent.ContextBuilder do
     - History log: #{workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
     - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
     - Workspace tools: #{Path.join(workspace_path, "tools")}/{tool-name}/
+    - Notes and raw captures: #{workspace_path}/notes/
+    - Personal task state: #{workspace_path}/tasks/tasks.json
+    - Project memory: #{workspace_path}/projects/{project}/PROJECT.md
+    - Executor configs and run logs: #{workspace_path}/executors/
+    - Audit trail: #{workspace_path}/audit/events.jsonl
 
     ## Guidelines
-    - State intent before tool calls, but NEVER predict or claim results before receiving them.
+    - State the next action before tool calls, but NEVER predict or claim results before receiving them.
     - Before modifying a file, read it first. Do not assume files or directories exist.
     - After writing or editing a file, re-read it if accuracy matters.
     - If a tool call fails, analyze the error before retrying with a different approach.
@@ -98,6 +95,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
     - Do not infer restarts from process age or uptime.
     - Caveat: the current call may still run old code. Expect the next call to observe the new version.
+    - Skills are discoverable resources, not preloaded instructions. Use `skill_list` to discover them and `skill_read` to load one before following it.
 
     Reply directly with text for normal conversations.
     Never expose tool calls, progress updates, chain-of-thought, or "I sent it" status messages to the end user.
@@ -201,6 +199,20 @@ defmodule Nex.Agent.ContextBuilder do
     {parts, diagnostics}
   end
 
+  defp add_always_skills(parts, _workspace, opts) do
+    if Keyword.get(opts, :skip_skills, false) do
+      parts
+    else
+      content = Nex.Agent.Skills.always_instructions(workspace: Keyword.get(opts, :workspace))
+
+      if String.trim(content) == "" do
+        parts
+      else
+        parts ++ [content]
+      end
+    end
+  end
+
   defp layer_label(:agents), do: "AGENTS"
   defp layer_label(:soul), do: "SOUL"
   defp layer_label(:user), do: "USER"
@@ -230,58 +242,40 @@ defmodule Nex.Agent.ContextBuilder do
   defp layer_boundary(_),
     do: "Legacy content is tolerated but interpreted under layer boundaries with diagnostics."
 
-  defp add_skills(parts) do
-    skills = Skills.list()
-
-    if skills == [] do
-      parts
-    else
-      always = Enum.filter(skills, &(&1[:always] == true))
-
-      always_content =
-        if always != [] do
-          Enum.map_join(always, "\n\n", fn skill ->
-            name = skill[:name]
-            content = (skill[:content] || skill[:code] || "") |> to_string()
-            "## Skill: #{name}\n\n#{content}"
-          end)
-        else
-          ""
-        end
-
-      summary =
-        Enum.map_join(skills, "\n", fn skill ->
-          "- #{skill[:name]}: #{skill[:description]}"
-        end)
-
-      parts =
-        if always_content != "" do
-          parts ++ ["# Active Skills\n\n" <> always_content]
-        else
-          parts
-        end
-
-      parts ++
-        [
-          "# Skills\n\nSkills are Markdown workflow instructions exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code).\n\n" <>
-            summary
-        ]
-    end
-  end
-
   @doc """
   Build runtime context block with only essential metadata.
   """
   @spec build_runtime_context(String.t() | nil, String.t() | nil) :: String.t()
   def build_runtime_context(channel, chat_id) do
+    build_runtime_context(channel, chat_id, [])
+  end
+
+  @spec build_runtime_context(String.t() | nil, String.t() | nil, keyword()) :: String.t()
+  def build_runtime_context(channel, chat_id, opts) do
     now = DateTime.utc_now()
     time_str = Calendar.strftime(now, "%Y-%m-%d %H:%M (%A)")
+    cwd = Keyword.get(opts, :cwd)
+    repo_root = git_root(cwd)
 
     lines =
       [@runtime_context_tag, "Current Time: #{time_str}"]
       |> then(fn lines ->
         if channel && chat_id do
           lines ++ ["Channel: #{channel}", "Chat ID: #{chat_id}"]
+        else
+          lines
+        end
+      end)
+      |> then(fn lines ->
+        if is_binary(cwd) and cwd != "" do
+          lines ++ ["Working Directory: #{Path.expand(cwd)}"]
+        else
+          lines
+        end
+      end)
+      |> then(fn lines ->
+        if is_binary(repo_root) and repo_root != "" do
+          lines ++ ["Git Repository Root: #{repo_root}"]
         else
           lines
         end
@@ -309,7 +303,7 @@ defmodule Nex.Agent.ContextBuilder do
         media \\ nil,
         opts \\ []
       ) do
-    runtime_ctx = build_runtime_context(channel, chat_id)
+    runtime_ctx = build_runtime_context(channel, chat_id, opts)
     user_content = build_user_content(current_message, media)
     runtime_system_messages = Keyword.get(opts, :runtime_system_messages, [])
 
@@ -398,6 +392,20 @@ defmodule Nex.Agent.ContextBuilder do
 
     text_part = %{"type" => "text", "text" => text}
     content_parts ++ [text_part]
+  end
+
+  defp git_root(nil), do: nil
+  defp git_root(""), do: nil
+
+  defp git_root(cwd) when is_binary(cwd) do
+    cwd = Path.expand(cwd)
+
+    case System.cmd("git", ["rev-parse", "--show-toplevel"], stderr_to_stdout: true, cd: cwd) do
+      {path, 0} -> String.trim(path)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   @doc """

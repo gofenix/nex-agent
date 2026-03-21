@@ -24,6 +24,7 @@ defmodule Nex.Agent.Subagent do
           status: :running | :completed | :failed | :cancelled,
           pid: pid() | nil,
           session_key: String.t() | nil,
+          workspace: String.t() | nil,
           started_at: integer(),
           completed_at: integer() | nil,
           result: String.t() | nil,
@@ -55,6 +56,9 @@ defmodule Nex.Agent.Subagent do
   * `:base_url` - API base URL
   * `:channel` - Origin channel
   * `:chat_id` - Origin chat ID
+  * `:workspace` - Parent workspace
+  * `:cwd` - Parent working directory
+  * `:project` - Parent project context
   """
   @spec spawn_task(String.t(), keyword()) :: {:ok, String.t()}
   def spawn_task(task_description, opts \\ []) do
@@ -88,9 +92,9 @@ defmodule Nex.Agent.Subagent do
   @doc """
   Cancel all running tasks for a session key. Returns count cancelled.
   """
-  @spec cancel_by_session(String.t()) :: {:ok, non_neg_integer()}
-  def cancel_by_session(session_key) do
-    GenServer.call(__MODULE__, {:cancel_by_session, session_key})
+  @spec cancel_by_session(String.t(), keyword()) :: {:ok, non_neg_integer()}
+  def cancel_by_session(session_key, opts \\ []) do
+    GenServer.call(__MODULE__, {:cancel_by_session, session_key, opts})
   end
 
   # GenServer callbacks
@@ -121,6 +125,7 @@ defmodule Nex.Agent.Subagent do
       status: :running,
       pid: pid,
       session_key: session_key,
+      workspace: opts[:workspace],
       started_at: System.system_time(:second),
       completed_at: nil,
       result: nil,
@@ -158,10 +163,13 @@ defmodule Nex.Agent.Subagent do
   end
 
   @impl true
-  def handle_call({:cancel_by_session, session_key}, _from, state) do
+  def handle_call({:cancel_by_session, session_key, opts}, _from, state) do
+    workspace = Keyword.get(opts, :workspace)
+
     {cancelled, new_tasks} =
       Enum.reduce(state.tasks, {0, state.tasks}, fn {id, task}, {count, tasks} ->
-        if task.session_key == session_key and task.status == :running do
+        if task.session_key == session_key and workspace_match?(task.workspace, workspace) and
+             task.status == :running do
           if task.pid, do: Process.exit(task.pid, :kill)
           updated = %{task | status: :cancelled, completed_at: System.system_time(:second)}
           {count + 1, Map.put(tasks, id, updated)}
@@ -215,6 +223,10 @@ defmodule Nex.Agent.Subagent do
     base_url = Keyword.get(opts, :base_url)
     channel = Keyword.get(opts, :channel)
     chat_id = Keyword.get(opts, :chat_id)
+    workspace = Keyword.get(opts, :workspace)
+    cwd = Keyword.get(opts, :cwd)
+    project = Keyword.get(opts, :project)
+    session_key = Keyword.get(opts, :session_key)
 
     # Determine SubAgent module from label (if it contains module info)
     subagent_module = Keyword.get(opts, :subagent_module, Nex.Agent.Subagent)
@@ -229,7 +241,17 @@ defmodule Nex.Agent.Subagent do
       max_iterations: @max_subagent_iterations,
       channel: "system",
       chat_id: task_id,
-      tools_filter: :subagent
+      session_key: "subagent:#{task_id}",
+      workspace: workspace,
+      cwd: cwd,
+      project: project,
+      tools_filter: :subagent,
+      metadata: %{
+        "_subagent" => true,
+        "parent_session_key" => session_key,
+        "subagent_task_id" => task_id,
+        "subagent_label" => label
+      }
     ]
 
     prompt = """
@@ -238,58 +260,94 @@ defmodule Nex.Agent.Subagent do
     Task: #{task_description}
     """
 
-    case Nex.Agent.Runner.run(session, prompt, runner_opts) do
-      {:ok, result, final_session} ->
-        duration = System.monotonic_time(:millisecond) - start_time
+    try do
+      case Nex.Agent.Runner.run(session, prompt, runner_opts) do
+        {:ok, result, final_session} ->
+          duration = System.monotonic_time(:millisecond) - start_time
 
-        # Record performance metrics
-        Review.record_performance(subagent_module, %{
-          task_type: label,
-          success: true,
-          duration_ms: duration,
-          tool_calls: extract_tool_calls(final_session),
-          user_feedback: nil
-        })
+          # Record performance metrics
+          Review.record_performance(subagent_module, %{
+            task_type: label,
+            success: true,
+            duration_ms: duration,
+            tool_calls: extract_tool_calls(final_session),
+            user_feedback: nil
+          })
 
-        send(server, {:task_complete, task_id, result})
-        announce_result(task_id, label, task_description, result, channel, chat_id, :ok)
+          send(server, {:task_complete, task_id, result})
 
-      {:error, reason, final_session} ->
-        duration = System.monotonic_time(:millisecond) - start_time
-        error_msg = inspect(reason)
+          announce_result(
+            task_id,
+            label,
+            task_description,
+            result,
+            channel,
+            chat_id,
+            workspace,
+            :ok
+          )
 
-        # Record failure metrics
-        Review.record_performance(subagent_module, %{
-          task_type: label,
-          success: false,
-          duration_ms: duration,
-          tool_calls: extract_tool_calls(final_session),
-          user_feedback: nil
-        })
+        {:error, reason, final_session} ->
+          duration = System.monotonic_time(:millisecond) - start_time
+          error_msg = inspect(reason)
 
+          # Record failure metrics
+          Review.record_performance(subagent_module, %{
+            task_type: label,
+            success: false,
+            duration_ms: duration,
+            tool_calls: extract_tool_calls(final_session),
+            user_feedback: nil
+          })
+
+          send(server, {:task_failed, task_id, error_msg})
+
+          announce_result(
+            task_id,
+            label,
+            task_description,
+            error_msg,
+            channel,
+            chat_id,
+            workspace,
+            :error
+          )
+      end
+    rescue
+      e ->
+        error_msg = Exception.message(e)
         send(server, {:task_failed, task_id, error_msg})
-        announce_result(task_id, label, task_description, error_msg, channel, chat_id, :error)
+
+        announce_result(
+          task_id,
+          label,
+          task_description,
+          error_msg,
+          channel,
+          chat_id,
+          workspace,
+          :error
+        )
     end
-  rescue
-    e ->
-      error_msg = Exception.message(e)
-      send(server, {:task_failed, task_id, error_msg})
   end
 
-  defp announce_result(task_id, label, _task, result, channel, chat_id, status) do
+  defp announce_result(task_id, label, _task, result, channel, chat_id, workspace, status) do
     if Process.whereis(Bus) do
       status_emoji = if status == :ok, do: "\u2705", else: "\u274c"
       content = "#{status_emoji} Subagent [#{label}] finished:\n#{result}"
 
       Bus.publish(:inbound, %{
-        channel: "system",
+        channel: channel || "system",
         chat_id: chat_id || "default",
+        workspace: workspace,
         content: content,
         metadata: %{
+          "_from_subagent" => true,
           "subagent_task_id" => task_id,
           "subagent_label" => label,
           "origin_channel" => channel,
-          "origin_chat_id" => chat_id
+          "origin_chat_id" => chat_id,
+          "workspace" => workspace
         }
       })
     end
@@ -342,6 +400,11 @@ defmodule Nex.Agent.Subagent do
   defp generate_id do
     :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
   end
+
+  defp workspace_match?(_task_workspace, nil), do: true
+
+  defp workspace_match?(task_workspace, workspace),
+    do: Path.expand(task_workspace || "") == Path.expand(workspace)
 
   defp extract_tool_calls(session) do
     session.messages

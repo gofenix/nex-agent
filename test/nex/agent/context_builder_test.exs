@@ -284,4 +284,86 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert List.last(messages)["content"] =~ "Channel: telegram"
     assert List.last(messages)["content"] =~ "Chat ID: 1"
   end
+
+  test "system prompt keeps skills discoverable but does not preload their content", %{
+    workspace: workspace
+  } do
+    skill_dir = Path.join(workspace, "skills/debug-playbook")
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      """
+      ---
+      name: debug-playbook
+      description: Debug production issues carefully.
+      ---
+
+      Never show stack traces to the user.
+      """
+    )
+
+    prompt = ContextBuilder.build_system_prompt(workspace: workspace)
+
+    assert prompt =~ "skill_list"
+    assert prompt =~ "skill_read"
+    refute prompt =~ "debug-playbook"
+    refute prompt =~ "Never show stack traces to the user."
+  end
+
+  test "always skills remain loaded for compatibility while normal skills stay on-demand", %{
+    workspace: workspace
+  } do
+    always_dir = Path.join(workspace, "skills/always-guide")
+    normal_dir = Path.join(workspace, "skills/normal-guide")
+    File.mkdir_p!(always_dir)
+    File.mkdir_p!(normal_dir)
+
+    File.write!(
+      Path.join(always_dir, "SKILL.md"),
+      """
+      ---
+      name: always-guide
+      description: Keep this instruction loaded.
+      always: true
+      ---
+
+      Always verify migrations before rollout.
+      """
+    )
+
+    File.write!(
+      Path.join(normal_dir, "SKILL.md"),
+      """
+      ---
+      name: normal-guide
+      description: Read this only when requested.
+      ---
+
+      This should stay out of the prompt by default.
+      """
+    )
+
+    prompt = ContextBuilder.build_system_prompt(workspace: workspace)
+
+    assert prompt =~ "Always-On Skill (Compatibility): always-guide"
+    assert prompt =~ "Always verify migrations before rollout."
+    refute prompt =~ "normal-guide"
+    refute prompt =~ "This should stay out of the prompt by default."
+  end
+
+  test "runtime context exposes cwd and git root without mode labels", %{workspace: workspace} do
+    {_output, 0} = System.cmd("git", ["init"], stderr_to_stdout: true, cd: workspace)
+
+    {expected_repo_root, 0} =
+      System.cmd("git", ["rev-parse", "--show-toplevel"], stderr_to_stdout: true, cd: workspace)
+
+    runtime_context =
+      ContextBuilder.build_runtime_context("telegram", "1", cwd: workspace)
+
+    assert runtime_context =~ "Working Directory: #{Path.expand(workspace)}"
+    assert runtime_context =~ "Git Repository Root: #{String.trim(expected_repo_root)}"
+    refute runtime_context =~ "Mode:"
+    refute runtime_context =~ "Secondary Modes:"
+  end
 end

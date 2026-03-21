@@ -28,13 +28,12 @@ defmodule Nex.Agent.MemoryRebuildTest do
       |> Map.put(:messages, build_messages())
       |> Map.put(:last_consolidated, 1)
 
-    :ok = Session.save(session)
+    :ok = Session.save(session, workspace: workspace)
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
-      SessionManager.invalidate(key)
+      SessionManager.invalidate(key, workspace: workspace)
       File.rm_rf!(workspace)
-      File.rm_rf!(session_dir_for(key))
     end)
 
     {:ok, workspace: workspace, key: key}
@@ -81,7 +80,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
     assert result["last_consolidated_before"] == 1
     assert result["last_consolidated_after"] == 4
 
-    reloaded = Session.load(key)
+    reloaded = Session.load(key, workspace: workspace)
     assert reloaded.last_consolidated == 4
     assert Memory.read_long_term(workspace: workspace) =~ "full-session rebuilds"
 
@@ -98,9 +97,5 @@ defmodule Nex.Agent.MemoryRebuildTest do
       %{"role" => "user", "content" => "third", "timestamp" => now},
       %{"role" => "assistant", "content" => "fourth", "timestamp" => now}
     ]
-  end
-
-  defp session_dir_for(key) do
-    Session.session_dir(key)
   end
 end

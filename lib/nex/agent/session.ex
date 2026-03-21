@@ -3,6 +3,8 @@ defmodule Nex.Agent.Session do
   Simple session management - stores messages as list, persists to JSONL.
   """
 
+  alias Nex.Agent.Workspace
+
   defstruct [
     :key,
     :created_at,
@@ -21,30 +23,28 @@ defmodule Nex.Agent.Session do
           last_consolidated: non_neg_integer()
         }
 
-  @default_workspace_path Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
-
   @doc false
-  @spec workspace_path() :: String.t()
-  def workspace_path do
-    Application.get_env(:nex_agent, :workspace_path, @default_workspace_path)
+  @spec workspace_path(keyword()) :: String.t()
+  def workspace_path(opts \\ []) do
+    Workspace.root(opts)
   end
 
   @doc false
-  @spec sessions_dir() :: String.t()
-  def sessions_dir do
-    Path.join(workspace_path(), "sessions")
+  @spec sessions_dir(keyword()) :: String.t()
+  def sessions_dir(opts \\ []) do
+    Path.join(workspace_path(opts), "sessions")
   end
 
   @doc false
-  @spec session_dir(String.t()) :: String.t()
-  def session_dir(key) do
-    Path.join([sessions_dir(), safe_filename(key)])
+  @spec session_dir(String.t(), keyword()) :: String.t()
+  def session_dir(key, opts \\ []) do
+    Path.join([sessions_dir(opts), safe_filename(key)])
   end
 
   @doc false
-  @spec messages_path(String.t()) :: String.t()
-  def messages_path(key) do
-    Path.join(session_dir(key), "messages.jsonl")
+  @spec messages_path(String.t(), keyword()) :: String.t()
+  def messages_path(key, opts \\ []) do
+    Path.join(session_dir(key, opts), "messages.jsonl")
   end
 
   @doc """
@@ -154,12 +154,12 @@ defmodule Nex.Agent.Session do
   @doc """
   Save session to disk as JSONL.
   """
-  @spec save(t()) :: :ok | {:error, term()}
-  def save(%__MODULE__{} = session) do
-    dir = session_dir(session.key)
+  @spec save(t(), keyword()) :: :ok | {:error, term()}
+  def save(%__MODULE__{} = session, opts \\ []) do
+    dir = session_dir(session.key, opts)
     File.mkdir_p!(dir)
 
-    path = messages_path(session.key)
+    path = messages_path(session.key, opts)
 
     lines =
       [
@@ -181,9 +181,9 @@ defmodule Nex.Agent.Session do
   @doc """
   Load session from disk.
   """
-  @spec load(String.t()) :: t() | nil
-  def load(key) do
-    path = messages_path(key)
+  @spec load(String.t(), keyword()) :: t() | nil
+  def load(key, opts \\ []) do
+    path = messages_path(key, opts)
 
     if File.exists?(path) do
       load_from_path(path, key)

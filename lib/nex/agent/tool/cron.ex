@@ -66,22 +66,22 @@ defmodule Nex.Agent.Tool.Cron do
         do_add(args, ctx)
 
       "list" ->
-        do_list()
+        do_list(ctx)
 
       "remove" ->
-        do_remove(args)
+        do_remove(args, ctx)
 
       "enable" ->
-        do_enable(args, true)
+        do_enable(args, true, ctx)
 
       "disable" ->
-        do_enable(args, false)
+        do_enable(args, false, ctx)
 
       "run" ->
-        do_run(args)
+        do_run(args, ctx)
 
       "status" ->
-        do_status()
+        do_status(ctx)
 
       _ ->
         {:error,
@@ -116,7 +116,7 @@ defmodule Nex.Agent.Tool.Cron do
               chat_id: to_string(chat_id || "")
             }
 
-            case Cron.add_job(attrs) do
+            case Cron.add_job(attrs, workspace_opts(ctx)) do
               {:ok, job} ->
                 {:ok,
                  %{
@@ -140,8 +140,8 @@ defmodule Nex.Agent.Tool.Cron do
     end
   end
 
-  defp do_list do
-    jobs = Cron.list_jobs()
+  defp do_list(ctx) do
+    jobs = Cron.list_jobs(workspace_opts(ctx))
 
     formatted =
       Enum.map(jobs, fn j ->
@@ -161,50 +161,55 @@ defmodule Nex.Agent.Tool.Cron do
     {:ok, %{jobs: formatted, total: length(formatted)}}
   end
 
-  defp do_remove(args) do
+  defp do_remove(args, ctx) do
     case Map.get(args, "job_id") do
       nil ->
         {:error, "job_id is required for remove"}
 
       job_id ->
-        case Cron.remove_job(job_id) do
+        case Cron.remove_job(job_id, workspace_opts(ctx)) do
           :ok -> {:ok, %{removed: true, job_id: job_id}}
           {:error, :not_found} -> {:error, "Job not found: #{job_id}"}
         end
     end
   end
 
-  defp do_enable(args, enabled) do
+  defp do_enable(args, enabled, ctx) do
     case Map.get(args, "job_id") do
       nil ->
         {:error, "job_id is required"}
 
       job_id ->
-        case Cron.enable_job(job_id, enabled) do
+        case Cron.enable_job(job_id, enabled, workspace_opts(ctx)) do
           {:ok, job} -> {:ok, %{job_id: job.id, enabled: job.enabled}}
           {:error, :not_found} -> {:error, "Job not found: #{job_id}"}
         end
     end
   end
 
-  defp do_run(args) do
+  defp do_run(args, ctx) do
     case Map.get(args, "job_id") do
       nil ->
         {:error, "job_id is required for run"}
 
       job_id ->
-        case Cron.run_job(job_id) do
+        case Cron.run_job(job_id, workspace_opts(ctx)) do
           {:ok, job} -> {:ok, %{triggered: true, job_id: job.id, name: job.name}}
           {:error, :not_found} -> {:error, "Job not found: #{job_id}"}
         end
     end
   end
 
-  defp do_status do
-    case Cron.status() do
+  defp do_status(ctx) do
+    case Cron.status(workspace_opts(ctx)) do
       status when is_map(status) ->
         {:ok, Map.put(status, :next_wakeup_formatted, format_timestamp(status.next_wakeup))}
     end
+  end
+
+  defp workspace_opts(ctx) do
+    workspace = Map.get(ctx, :workspace) || Map.get(ctx, "workspace")
+    if workspace, do: [workspace: workspace], else: []
   end
 
   # ── Helpers ──

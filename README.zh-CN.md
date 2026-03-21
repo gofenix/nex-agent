@@ -125,7 +125,13 @@ mix deps.get
 mix nex.agent onboard
 ```
 
-首次运行会创建默认配置和工作区:
+也可以显式指定某个实例的配置和工作区:
+
+```bash
+mix nex.agent -c /path/to/config.json -w /path/to/workspace onboard
+```
+
+首次运行会为该实例创建配置和工作区:
 
 ```text
 ~/.nex/agent/
@@ -176,7 +182,13 @@ mix nex.agent config set model llama3.1
 ~/.nex/agent/config.json
 ```
 
+如果传了 `--config` 但没有设置 `defaults.workspace`，该实例的工作区默认会落到
+`config.json` 所在目录下的 `workspace/`。
+
 ### 3. Chat
+
+CLI 是 agent runtime 的宿主壳，不是任务/知识/执行器的独立产品入口。具体能力仍由
+agent loop 在会话中通过 tools 和 skills 自主调用。
 
 单轮调用:
 
@@ -200,6 +212,13 @@ mix nex.agent gateway
 
 ```bash
 mix nex.agent status
+```
+
+指定实例运行:
+
+```bash
+mix nex.agent -c /path/to/config.json status
+mix nex.agent -c /path/to/config.json -w /path/to/workspace gateway
 ```
 
 停止网关:

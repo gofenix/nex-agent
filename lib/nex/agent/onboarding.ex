@@ -3,7 +3,7 @@ defmodule Nex.Agent.Onboarding do
   Automatically initializes the system by creating directories and workspace templates on first run.
   """
 
-  alias Nex.Agent.Config
+  alias Nex.Agent.{Config, Workspace}
 
   require Logger
 
@@ -22,11 +22,22 @@ defmodule Nex.Agent.Onboarding do
   def ensure_initialized do
     unless File.exists?(Config.config_path()) do
       init_directories()
-      Config.save(Config.default())
+      Config.save(Config.set(Config.default(), :default_workspace, Workspace.root()))
     end
 
     maybe_migrate_legacy()
     init_workspace_templates()
+    :ok
+  end
+
+  @doc """
+  Ensure an arbitrary workspace has the runtime directories and template files.
+  """
+  @spec ensure_workspace_initialized(String.t()) :: :ok
+  def ensure_workspace_initialized(workspace) when is_binary(workspace) do
+    Workspace.ensure!(workspace: workspace)
+    File.mkdir_p!(Path.join(workspace, "sessions"))
+    init_workspace_templates(workspace)
     :ok
   end
 
@@ -47,37 +58,37 @@ defmodule Nex.Agent.Onboarding do
     ensure_initialized()
   end
 
-  defp workspace_dir do
-    Path.join(base_dir(), "workspace")
-  end
-
   defp init_directories do
-    w = workspace_dir()
+    w = Workspace.root()
 
     dirs = [
       base_dir(),
-      Path.join(w, "tools"),
-      Path.join(w, "skills"),
-      Path.join(w, "sessions"),
-      Path.join(w, "memory")
+      Path.join(w, "sessions")
     ]
 
     Enum.each(dirs, &File.mkdir_p!/1)
-    init_workspace_templates()
+    Workspace.ensure!(workspace: w)
+    init_workspace_templates(w)
   end
 
   defp maybe_migrate_legacy do
     b = base_dir()
-    w = workspace_dir()
+    w = Workspace.root()
 
     migrate_legacy_dir(Path.join(b, "skills"), Path.join(w, "skills"), "skills")
     migrate_legacy_dir(Path.join(b, "sessions"), Path.join(w, "sessions"), "sessions")
     migrate_legacy_dir(Path.join(b, "tools"), Path.join(w, "tools"), "tools")
 
+    migrate_legacy_cron_jobs(
+      Path.join([b, "cron", "jobs.json"]),
+      Path.join([w, "tasks", "cron_jobs.json"])
+    )
+
     # Clean up legacy artifacts
     legacy_paths = [
       Path.join(b, "evolution"),
-      Path.join(b, ".initialized")
+      Path.join(b, ".initialized"),
+      Path.join(b, "cron")
     ]
 
     Enum.each(legacy_paths, fn path ->
@@ -108,8 +119,72 @@ defmodule Nex.Agent.Onboarding do
     end
   end
 
+  defp migrate_legacy_cron_jobs(old_file, new_file) do
+    cond do
+      not File.exists?(old_file) ->
+        :ok
+
+      not File.exists?(new_file) ->
+        File.mkdir_p!(Path.dirname(new_file))
+        File.rename(old_file, new_file)
+        Logger.info("[Onboarding] Migrated cron jobs to workspace/tasks/cron_jobs.json")
+
+      true ->
+        case merge_json_arrays(old_file, new_file, &cron_job_merge_key/1) do
+          :ok ->
+            File.rm_rf!(old_file)
+
+            Logger.info(
+              "[Onboarding] Merged legacy cron jobs into workspace/tasks/cron_jobs.json"
+            )
+
+          {:error, reason} ->
+            Logger.warning("[Onboarding] Failed to migrate legacy cron jobs: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp merge_json_arrays(source_file, target_file, key_fun) do
+    with {:ok, source_entries} <- read_json_array(source_file),
+         {:ok, target_entries} <- read_json_array(target_file) do
+      merged =
+        target_entries ++
+          Enum.reject(source_entries, fn entry ->
+            source_key = key_fun.(entry)
+            Enum.any?(target_entries, &(key_fun.(&1) == source_key))
+          end)
+
+      File.write!(target_file, Jason.encode!(merged, pretty: true))
+      :ok
+    end
+  end
+
+  defp read_json_array(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, entries} when is_list(entries) -> {:ok, entries}
+          {:ok, _} -> {:error, :invalid_json_array}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp cron_job_merge_key(entry) when is_map(entry) do
+    Map.get(entry, "name") || Map.get(entry, :name) || Map.get(entry, "id") || Map.get(entry, :id)
+  end
+
   defp init_workspace_templates do
-    w = workspace_dir()
+    init_workspace_templates(Workspace.root())
+  end
+
+  defp init_workspace_templates(workspace) do
+    w = workspace
+    Workspace.ensure!(workspace: w)
+    File.mkdir_p!(Path.join(w, "sessions"))
 
     managed_templates = [
       {Path.join(w, "AGENTS.md"), @agents_managed_key, agents_template()},
@@ -133,7 +208,38 @@ defmodule Nex.Agent.Onboarding do
       end
     end)
 
+    init_executor_templates(w)
     init_bundled_skills(w)
+  end
+
+  defp init_executor_templates(workspace) do
+    executors_dir = Path.join(workspace, "executors")
+    File.mkdir_p!(executors_dir)
+
+    templates = [
+      {Path.join(executors_dir, "codex_cli.json"),
+       %{
+         "enabled" => false,
+         "command" => "codex",
+         "args" => [],
+         "prompt_mode" => "stdin",
+         "timeout" => 300
+       }},
+      {Path.join(executors_dir, "claude_code_cli.json"),
+       %{
+         "enabled" => false,
+         "command" => "claude",
+         "args" => [],
+         "prompt_mode" => "stdin",
+         "timeout" => 300
+       }}
+    ]
+
+    Enum.each(templates, fn {path, content} ->
+      unless File.exists?(path) do
+        File.write!(path, Jason.encode!(content, pretty: true))
+      end
+    end)
   end
 
   defp merge_managed_template(path, key, content) do
@@ -235,6 +341,11 @@ defmodule Nex.Agent.Onboarding do
     - History: `workspace/memory/HISTORY.md` (grep-friendly, each entry starts with `[YYYY-MM-DD HH:MM]`)
     - Skills: `workspace/skills/<name>/SKILL.md`
     - Workspace tools: `workspace/tools/<name>/`
+    - Notes and captures: `workspace/notes/`
+    - Personal tasks: `workspace/tasks/tasks.json`
+    - Project memory: `workspace/projects/<project>/PROJECT.md`
+    - Executor configs and logs: `workspace/executors/`
+    - Audit events: `workspace/audit/events.jsonl`
     - Sessions: `workspace/sessions/`
 
     ## Prompt Composition
@@ -244,13 +355,13 @@ defmodule Nex.Agent.Onboarding do
     1. Core identity and runtime guidance (code-owned, authoritative)
     2. Bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`)
     3. Long-term memory context
-    4. Active skills
+    4. On-demand skill discovery guidance
 
     Keep this file concise, stable, and system-level.
 
     ## Operating Rules
 
-    - State intent before tool calls.
+    - State the next action before tool calls.
     - Never claim tool results before receiving actual outputs.
     - Read before edit; do not assume file existence.
     - After write/edit, re-read critical files when accuracy matters.
@@ -268,8 +379,10 @@ defmodule Nex.Agent.Onboarding do
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
-    - Scheduling and background work: `cron`, `spawn_task`
-    - Evolution layers: `soul_update`, `user_update`, `memory_write`, `skill_list`, `skill_create`
+    - Scheduling and background work: `cron`, `spawn_task`, `task`
+    - Knowledge capture: `knowledge_capture`
+    - Coding executor orchestration: `executor_dispatch`, `executor_status`
+    - Evolution layers: `soul_update`, `user_update`, `memory_write`, `skill_list`, `skill_read`, `skill_create`
     - Tool management: `tool_list`, `tool_create`, `tool_delete`
     - Code evolution: `reflect`, `upgrade_code`
 
@@ -316,11 +429,13 @@ defmodule Nex.Agent.Onboarding do
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
-    - Scheduling and background work: `cron`, `spawn_task`
+    - Scheduling and background work: `cron`, `spawn_task`, `task`
+    - Knowledge capture: `knowledge_capture`
+    - Coding executor orchestration: `executor_dispatch`, `executor_status`
     - SOUL layer: `soul_update`
     - USER layer: `user_update`
     - MEMORY layer: `memory_write`
-    - SKILL layer: `skill_list`, `skill_create`
+    - SKILL layer: `skill_list`, `skill_read`, `skill_create`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `upgrade_code`
 
@@ -335,6 +450,7 @@ defmodule Nex.Agent.Onboarding do
 
     - Workspace tools are Elixir modules under `workspace/tools/<name>/`.
     - Skills are Markdown workflows under `workspace/skills/<name>/SKILL.md`.
+    - Use `skill_list` to discover skills and `skill_read` to load one when needed.
     - Use tools for executable capabilities; use skills for reusable guidance.
     """
   end

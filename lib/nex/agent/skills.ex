@@ -17,6 +17,8 @@ defmodule Nex.Agent.Skills do
 
   use Agent
 
+  alias Nex.Agent.{Skills.Loader, Workspace}
+
   @name __MODULE__
   def start_link(opts \\ []) do
     Agent.start_link(fn -> %{} end, opts ++ [name: @name])
@@ -26,7 +28,7 @@ defmodule Nex.Agent.Skills do
   def load do
     unless Process.whereis(@name), do: start_link()
 
-    skills = Nex.Agent.Skills.Loader.load_all()
+    skills = Loader.load_all()
 
     Agent.update(@name, fn _state ->
       Enum.into(skills, %{}, fn skill -> {skill.name, skill} end)
@@ -38,20 +40,34 @@ defmodule Nex.Agent.Skills do
   @spec reload() :: :ok
   def reload, do: load()
 
-  @spec list() :: list(map())
-  def list do
+  @spec list(keyword()) :: list(map())
+  def list(opts \\ []) do
+    if Keyword.has_key?(opts, :workspace) do
+      opts
+      |> Loader.load_all()
+      |> Enum.sort_by(&to_string(skill_name(&1)))
+    else
+      list_cached()
+    end
+  end
+
+  defp list_cached do
     unless Process.whereis(@name), do: start_link()
     Agent.get(@name, &Map.values/1)
   end
 
-  @spec get(String.t()) :: map() | nil
-  def get(name) do
-    unless Process.whereis(@name), do: start_link()
-    Agent.get(@name, &Map.get(&1, name))
+  @spec get(String.t(), keyword()) :: map() | nil
+  def get(name, opts \\ []) do
+    if Keyword.has_key?(opts, :workspace) do
+      Enum.find(list(opts), &(to_string(skill_name(&1)) == name))
+    else
+      unless Process.whereis(@name), do: start_link()
+      Agent.get(@name, &Map.get(&1, name))
+    end
   end
 
-  @spec create(map()) :: {:ok, map()} | {:error, String.t()}
-  def create(attrs) do
+  @spec create(map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def create(attrs, opts \\ []) do
     name = attrs["name"] || attrs[:name]
     description = attrs["description"] || attrs[:description] || ""
     content = attrs["content"] || attrs[:content] || attrs["code"] || attrs[:code] || ""
@@ -68,24 +84,26 @@ defmodule Nex.Agent.Skills do
          "Unsupported skill type. Skills are Markdown-only; implement code-based capabilities as tools."}
 
       true ->
-        save_markdown_skill(name, description, content, parameters, allowed_tools)
+        save_markdown_skill(name, description, content, parameters, allowed_tools, opts)
     end
   end
 
-  @spec delete(String.t()) :: :ok | {:error, String.t()}
-  def delete(name) do
-    skill_dir = Path.join(skills_dir(), name)
+  @spec delete(String.t(), keyword()) :: :ok | {:error, String.t()}
+  def delete(name, opts \\ []) do
+    with :ok <- validate_skill_name(name) do
+      skill_dir = Path.join(skills_dir(opts), name)
 
-    if File.exists?(skill_dir) do
-      File.rm_rf!(skill_dir)
+      if File.exists?(skill_dir) do
+        File.rm_rf!(skill_dir)
 
-      if Process.whereis(@name) do
-        Agent.update(@name, &Map.delete(&1, name))
+        if Process.whereis(@name) and not Keyword.has_key?(opts, :workspace) do
+          Agent.update(@name, &Map.delete(&1, name))
+        end
+
+        :ok
+      else
+        {:error, "Skill not found: #{name}"}
       end
-
-      :ok
-    else
-      {:error, "Skill not found: #{name}"}
     end
   end
 
@@ -98,7 +116,7 @@ defmodule Nex.Agent.Skills do
         arguments
       end
 
-    case get(name) do
+    case get(name, opts) do
       nil ->
         {:error, "Skill not found: #{name}"}
 
@@ -111,40 +129,25 @@ defmodule Nex.Agent.Skills do
     end
   end
 
-  @spec for_llm() :: list(map())
-  def for_llm do
-    unless Process.whereis(@name), do: start_link()
-
-    list()
+  @spec for_llm(keyword()) :: list(map())
+  def for_llm(opts \\ []) do
+    list(opts)
     |> Enum.filter(& &1.user_invocable)
     |> Enum.map(fn skill ->
-      sanitized = skill.name |> String.replace(~r/[^a-zA-Z0-9_-]/, "_")
-
-      input_schema =
-        case skill.parameters do
-          params when is_map(params) and map_size(params) > 0 ->
-            %{
-              "type" => "object",
-              "properties" => params,
-              "required" => Map.keys(params)
-            }
-
-          _ ->
-            %{
-              "type" => "object",
-              "properties" => %{
-                "input" => %{"type" => "string", "description" => "Input to skill"}
-              },
-              "required" => ["input"]
-            }
-        end
-
       %{
-        "name" => "skill_#{sanitized}",
+        "name" => skill.name,
         "description" => skill.description,
-        "input_schema" => input_schema
+        "path" => skill.path
       }
     end)
+  end
+
+  @spec always_instructions(keyword()) :: String.t()
+  def always_instructions(opts \\ []) do
+    opts
+    |> list()
+    |> Enum.filter(&truthy_skill_field?(&1, :always))
+    |> Enum.map_join("\n\n---\n\n", &format_always_skill/1)
   end
 
   defp execute_markdown_skill(skill, arguments, opts) do
@@ -178,27 +181,33 @@ defmodule Nex.Agent.Skills do
     |> String.replace("$0", arguments)
   end
 
-  defp save_markdown_skill(name, description, content, parameters, allowed_tools) do
-    skill_dir = Path.join(skills_dir(), name)
-    skill_file = Path.join(skill_dir, "SKILL.md")
+  defp save_markdown_skill(name, description, content, parameters, allowed_tools, opts) do
+    with :ok <- validate_skill_name(name) do
+      skill_dir = Path.join(skills_dir(opts), name)
+      skill_file = Path.join(skill_dir, "SKILL.md")
 
-    File.mkdir_p!(skill_dir)
+      File.mkdir_p!(skill_dir)
 
-    frontmatter_lines =
-      [
-        "---",
-        "name: #{yaml_scalar(name)}",
-        "description: #{yaml_scalar(description)}",
-        "user-invocable: true"
-      ]
-      |> maybe_put_frontmatter("parameters", parameters)
-      |> maybe_put_frontmatter("allowed-tools", allowed_tools)
-      |> Kernel.++(["---", "", content])
+      frontmatter_lines =
+        [
+          "---",
+          "name: #{yaml_scalar(name)}",
+          "description: #{yaml_scalar(description)}",
+          "user-invocable: true"
+        ]
+        |> maybe_put_frontmatter("parameters", parameters)
+        |> maybe_put_frontmatter("allowed-tools", allowed_tools)
+        |> Kernel.++(["---", "", content])
 
-    File.write!(skill_file, Enum.join(frontmatter_lines, "\n"))
+      File.write!(skill_file, Enum.join(frontmatter_lines, "\n"))
 
-    load()
-    {:ok, get(name)}
+      if Keyword.has_key?(opts, :workspace) do
+        {:ok, get(name, opts)}
+      else
+        load()
+        {:ok, get(name)}
+      end
+    end
   end
 
   defp maybe_put_frontmatter(lines, _key, value) when value in [%{}, [], nil], do: lines
@@ -234,15 +243,53 @@ defmodule Nex.Agent.Skills do
   defp yaml_scalar(nil), do: "null"
   defp yaml_scalar(value), do: inspect(value)
 
-  defp skills_dir do
-    workspace =
-      Application.get_env(
-        :nex_agent,
-        :workspace_path,
-        Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
-      )
+  defp skill_name(skill), do: Map.get(skill, :name) || Map.get(skill, "name")
 
-    Path.join(workspace, "skills")
+  defp truthy_skill_field?(skill, key) do
+    value = Map.get(skill, key) || Map.get(skill, to_string(key))
+    value in [true, "true"]
+  end
+
+  defp format_always_skill(skill) do
+    name = skill_name(skill)
+    description = Map.get(skill, :description) || Map.get(skill, "description") || ""
+    content = Map.get(skill, :content) || Map.get(skill, "content") || ""
+
+    """
+    ## Always-On Skill (Compatibility): #{name}
+
+    This skill is marked `always: true` in the workspace, so it remains loaded for backward compatibility.
+    Prefer on-demand discovery for new skills.
+
+    Description: #{description}
+
+    #{String.trim(content)}
+    """
+    |> String.trim()
+  end
+
+  defp validate_skill_name(name) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    cond do
+      trimmed == "" ->
+        {:error, "Skill name is required"}
+
+      String.contains?(trimmed, ["/", "\\"]) ->
+        {:error, "Skill name must not contain path separators"}
+
+      trimmed in [".", ".."] or String.contains?(trimmed, "..") ->
+        {:error, "Skill name must not contain path traversal segments"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_skill_name(_), do: {:error, "Skill name is required"}
+
+  defp skills_dir(opts) do
+    Workspace.skills_dir(opts)
   end
 
   defp escape_yaml_string(value),

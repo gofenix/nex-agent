@@ -42,12 +42,18 @@ defmodule Nex.Agent.Tool.SkillCreate do
     }
   end
 
-  def execute(%{"name" => name, "description" => description, "content" => content} = args, _ctx) do
+  def execute(%{"name" => name, "description" => description, "content" => content} = args, ctx) do
     if Map.has_key?(args, "type") do
       {:error,
        "skill_create only supports Markdown skills. Implement code-based capabilities as tools."}
     else
-      case Skills.create(%{name: name, description: description, content: content}) do
+      workspace =
+        case ctx do
+          %{workspace: workspace} when is_binary(workspace) -> [workspace: workspace]
+          _ -> []
+        end
+
+      case Skills.create(%{name: name, description: description, content: content}, workspace) do
         {:ok, _} -> {:ok, "Skill '#{name}' created."}
         {:error, reason} -> {:error, "Error creating skill: #{inspect(reason)}"}
       end

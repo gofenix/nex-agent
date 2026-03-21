@@ -123,7 +123,13 @@ mix deps.get
 mix nex.agent onboard
 ```
 
-On first run, NexAgent creates the default config and workspace:
+You can also point the CLI at a specific instance:
+
+```bash
+mix nex.agent -c /path/to/config.json -w /path/to/workspace onboard
+```
+
+On first run, NexAgent creates the config and workspace for that instance:
 
 ```text
 ~/.nex/agent/
@@ -174,7 +180,13 @@ Config file location:
 ~/.nex/agent/config.json
 ```
 
+If you pass `--config` and do not set `defaults.workspace`, the workspace defaults to
+`Path.dirname(config.json)/workspace` for that instance.
+
 ### 3. Chat
+
+The CLI is a host shell for the agent runtime. Capability-specific actions stay inside the
+agent loop through tools and skills; the CLI itself only manages sessions and runtime state.
 
 Single message:
 
@@ -198,6 +210,13 @@ Check status:
 
 ```bash
 mix nex.agent status
+```
+
+Target a specific instance:
+
+```bash
+mix nex.agent -c /path/to/config.json status
+mix nex.agent -c /path/to/config.json -w /path/to/workspace gateway
 ```
 
 Stop the gateway:

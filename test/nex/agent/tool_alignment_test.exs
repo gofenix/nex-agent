@@ -24,7 +24,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Runner, Session, Skills}
-  alias Nex.Agent.Tool.{Registry, SoulUpdate, ToolList}
+  alias Nex.Agent.Tool.{Registry, SkillList, SkillRead, SoulUpdate, ToolList}
 
   setup do
     workspace =
@@ -75,6 +75,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
+    skill_read = Enum.find(builtins, &(&1["name"] == "skill_read"))
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
@@ -82,11 +83,14 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
     assert reflect["layers"] == ["code"]
+    assert skill_read["layers"] == ["skill"]
     assert upgrade["layers"] == ["code"]
     assert tool_create["layers"] == ["tool"]
   end
 
-  test "duplicate tool name is submitted once with registry precedence", %{workspace: workspace} do
+  test "skills stay discoverable resources instead of expanding into synthetic tools", %{
+    workspace: workspace
+  } do
     Agent.update(Skills, fn skills ->
       Map.put(skills, "message", %{
         name: "message",
@@ -118,7 +122,108 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     names = Enum.map(tools, & &1["name"])
 
+    assert "skill_list" in names
+    assert "skill_read" in names
     assert Enum.count(names, fn name -> name == "skill_message" end) == 1
+    refute "skill_code-review" in names
+  end
+
+  test "subagent tool surface excludes outward communication and recursive scheduling" do
+    names =
+      Registry.definitions(:subagent)
+      |> Enum.map(& &1["name"])
+
+    assert "read" in names
+    assert "edit" in names
+    assert "list_dir" in names
+    assert "executor_dispatch" in names
+    assert "executor_status" in names
+    assert "skill_list" in names
+    assert "skill_read" in names
+
+    refute "message" in names
+    refute "cron" in names
+    refute "task" in names
+    refute "spawn_task" in names
+    refute "knowledge_capture" in names
+    refute "memory_write" in names
+  end
+
+  test "runner keeps raw slash-prefixed prompts and does not persist mode metadata", %{
+    workspace: workspace
+  } do
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", session} =
+             Runner.run(Session.new("raw-prefix"), "/code keep this literal",
+               llm_client: llm_client,
+               workspace: workspace,
+               cwd: workspace,
+               skip_consolidation: true
+             )
+
+    assert_receive {:messages, messages}
+    user_message = List.last(messages)
+
+    assert user_message["role"] == "user"
+    assert user_message["content"] =~ "/code keep this literal"
+
+    persisted_user =
+      Enum.find(session.messages, fn message ->
+        message["role"] == "user"
+      end)
+
+    assert persisted_user["content"] == "/code keep this literal"
+    refute Map.has_key?(persisted_user, "intent")
+    refute Map.has_key?(persisted_user, "secondary_intents")
+    refute Map.has_key?(persisted_user, "explicit_mode")
+    refute Map.has_key?(persisted_user, "raw_prompt")
+  end
+
+  test "skill tools follow the current turn workspace and support dotted skill names", %{
+    workspace: workspace
+  } do
+    other_workspace =
+      Path.join(System.tmp_dir!(), "nex-agent-skill-tool-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(Path.join(workspace, "skills/global-only"))
+    File.mkdir_p!(Path.join(other_workspace, "skills/ops.v2"))
+
+    File.write!(
+      Path.join(workspace, "skills/global-only/SKILL.md"),
+      """
+      ---
+      name: global-only
+      description: Only available in the app workspace.
+      ---
+      """
+    )
+
+    File.write!(
+      Path.join(other_workspace, "skills/ops.v2/SKILL.md"),
+      """
+      ---
+      name: ops.v2
+      description: Only available in the turn workspace.
+      ---
+
+      Use the v2 operations checklist.
+      """
+    )
+
+    on_exit(fn -> File.rm_rf!(other_workspace) end)
+
+    assert {:ok, result} = SkillList.execute(%{"scope" => "local"}, %{workspace: other_workspace})
+    assert result[:skills] =~ "ops.v2"
+    refute result[:skills] =~ "global-only"
+
+    assert {:ok, loaded} = SkillRead.execute(%{"name" => "ops.v2"}, %{workspace: other_workspace})
+    assert loaded["content"] =~ "Use the v2 operations checklist."
   end
 
   test "agent prompt passes session key into runner tool context", %{workspace: workspace} do

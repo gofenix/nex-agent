@@ -22,9 +22,34 @@ defmodule Nex.Agent.OnboardingMigrationTest do
       "defmodule LegacyTool do\nend\n"
     )
 
+    File.mkdir_p!(Path.join(base_dir, "cron"))
+
+    File.write!(
+      Path.join(base_dir, "cron/jobs.json"),
+      Jason.encode!([
+        %{
+          "id" => "legacy-cron-job",
+          "name" => "legacy-daily-summary",
+          "schedule" => %{"type" => "cron", "expr" => "0 21 * * *"},
+          "message" => "legacy summary",
+          "enabled" => true,
+          "channel" => "feishu",
+          "chat_id" => "ou_legacy",
+          "delete_after_run" => false,
+          "last_run" => nil,
+          "next_run" => 1_700_000_000,
+          "last_status" => nil,
+          "last_error" => nil,
+          "created_at" => 1_700_000_000,
+          "updated_at" => 1_700_000_000
+        }
+      ])
+    )
+
     File.mkdir_p!(Path.join(workspace, "skills/existing-skill"))
     File.mkdir_p!(Path.join(workspace, "sessions/existing-session"))
     File.mkdir_p!(Path.join(workspace, "tools/existing-tool"))
+    File.mkdir_p!(Path.join(workspace, "tasks"))
 
     File.write!(Path.join(workspace, "skills/existing-skill/SKILL.md"), "existing skill\n")
     File.write!(Path.join(workspace, "sessions/existing-session/messages.jsonl"), "{}\n")
@@ -32,6 +57,28 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     File.write!(
       Path.join(workspace, "tools/existing-tool/tool.ex"),
       "defmodule ExistingTool do\nend\n"
+    )
+
+    File.write!(
+      Path.join(workspace, "tasks/cron_jobs.json"),
+      Jason.encode!([
+        %{
+          "id" => "current-cron-job",
+          "name" => "current-weekly-summary",
+          "schedule" => %{"type" => "cron", "expr" => "0 9 * * 1"},
+          "message" => "current summary",
+          "enabled" => true,
+          "channel" => "feishu",
+          "chat_id" => "ou_current",
+          "delete_after_run" => false,
+          "last_run" => nil,
+          "next_run" => 1_700_100_000,
+          "last_status" => nil,
+          "last_error" => nil,
+          "created_at" => 1_700_100_000,
+          "updated_at" => 1_700_100_000
+        }
+      ])
     )
 
     Application.put_env(:nex_agent, :agent_base_dir, base_dir)
@@ -55,6 +102,7 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     refute File.exists?(Path.join(base_dir, "skills"))
     refute File.exists?(Path.join(base_dir, "sessions"))
     refute File.exists?(Path.join(base_dir, "tools"))
+    refute File.exists?(Path.join(base_dir, "cron"))
 
     assert File.exists?(Path.join(workspace, "skills/existing-skill/SKILL.md"))
     assert File.exists?(Path.join(workspace, "sessions/existing-session/messages.jsonl"))
@@ -63,6 +111,15 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert File.exists?(Path.join(workspace, "skills/legacy-skill/SKILL.md"))
     assert File.exists?(Path.join(workspace, "sessions/legacy-session/messages.jsonl"))
     assert File.exists?(Path.join(workspace, "tools/legacy-tool/tool.ex"))
+
+    cron_jobs =
+      workspace
+      |> Path.join("tasks/cron_jobs.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert Enum.any?(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
+    assert Enum.any?(cron_jobs, &(&1["name"] == "current-weekly-summary"))
 
     memory_template = File.read!(Path.join(workspace, "memory/MEMORY.md"))
     assert memory_template =~ "## Environment Facts"

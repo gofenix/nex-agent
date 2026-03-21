@@ -32,19 +32,26 @@ defmodule Nex.Agent.Config do
         }
 
   @doc """
+  Get the default configuration file path.
+  """
+  @spec default_config_path() :: String.t()
+  def default_config_path, do: @default_config_path
+
+  @doc """
   Get the configuration file path.
   """
-  @spec config_path() :: String.t()
-  def config_path do
-    Application.get_env(:nex_agent, :config_path, @default_config_path)
+  @spec config_path(keyword()) :: String.t()
+  def config_path(opts \\ []) when is_list(opts) do
+    Keyword.get(opts, :config_path) ||
+      Application.get_env(:nex_agent, :config_path, @default_config_path)
   end
 
   @doc """
   Load the configuration file.
   """
-  @spec load() :: t()
-  def load do
-    path = config_path()
+  @spec load(keyword()) :: t()
+  def load(opts \\ []) when is_list(opts) do
+    path = config_path(opts)
 
     if File.exists?(path) do
       case File.read!(path) |> Jason.decode() do
@@ -52,15 +59,15 @@ defmodule Nex.Agent.Config do
           %__MODULE__{
             provider: Map.get(data, "provider", "openai"),
             model: Map.get(data, "model", "gpt-4o"),
-            providers: Map.get(data, "providers", default_providers()),
+            providers: Map.merge(default_providers(), Map.get(data, "providers", %{})),
             tools: Map.get(data, "tools", %{}),
-            defaults: Map.get(data, "defaults", default_defaults()),
-            gateway: Map.get(data, "gateway", default_gateway()),
-            telegram: Map.get(data, "telegram", default_telegram()),
-            feishu: Map.get(data, "feishu", default_feishu()),
-            discord: Map.get(data, "discord", default_discord()),
-            slack: Map.get(data, "slack", default_slack()),
-            dingtalk: Map.get(data, "dingtalk", default_dingtalk())
+            defaults: Map.merge(default_defaults(), Map.get(data, "defaults", %{})),
+            gateway: Map.merge(default_gateway(), Map.get(data, "gateway", %{})),
+            telegram: Map.merge(default_telegram(), Map.get(data, "telegram", %{})),
+            feishu: Map.merge(default_feishu(), Map.get(data, "feishu", %{})),
+            discord: Map.merge(default_discord(), Map.get(data, "discord", %{})),
+            slack: Map.merge(default_slack(), Map.get(data, "slack", %{})),
+            dingtalk: Map.merge(default_dingtalk(), Map.get(data, "dingtalk", %{}))
           }
 
         _ ->
@@ -74,15 +81,16 @@ defmodule Nex.Agent.Config do
   @doc """
   Save the configuration file.
   """
-  @spec save(t()) :: :ok | {:error, term()}
-  def save(%__MODULE__{} = config) do
-    path = config_path()
+  @spec save(t(), keyword()) :: :ok | {:error, term()}
+  def save(%__MODULE__{} = config, opts \\ []) when is_list(opts) do
+    path = config_path(opts)
     File.mkdir_p!(Path.dirname(path))
 
     data = %{
       "provider" => config.provider,
       "model" => config.model,
       "providers" => config.providers,
+      "tools" => config.tools,
       "defaults" => config.defaults,
       "gateway" => config.gateway,
       "telegram" => config.telegram,
@@ -322,6 +330,16 @@ defmodule Nex.Agent.Config do
 
   def set(%__MODULE__{} = config, :model, value) when is_binary(value) do
     %{config | model: value}
+  end
+
+  def set(%__MODULE__{} = config, :default_workspace, value) when is_binary(value) do
+    defaults = Map.merge(default_defaults(), config.defaults || %{})
+    %{config | defaults: Map.put(defaults, "workspace", value)}
+  end
+
+  def set(%__MODULE__{} = config, :gateway_port, value) when is_integer(value) and value > 0 do
+    gateway = Map.merge(default_gateway(), config.gateway || %{})
+    %{config | gateway: Map.put(gateway, "port", value)}
   end
 
   def set(%__MODULE__{} = config, :api_key, {provider, key}) when is_binary(provider) do
@@ -583,6 +601,37 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
+  Get the configured default workspace, if any.
+  """
+  @spec configured_workspace(t()) :: String.t() | nil
+  def configured_workspace(%__MODULE__{} = config) do
+    case Map.get(config.defaults || %{}, "workspace") do
+      workspace when is_binary(workspace) and workspace != "" -> workspace
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Get the configured gateway port.
+  """
+  @spec gateway_port(t()) :: pos_integer()
+  def gateway_port(%__MODULE__{} = config) do
+    case Map.get(config.gateway || %{}, "port") do
+      port when is_integer(port) and port > 0 ->
+        port
+
+      port when is_binary(port) ->
+        case Integer.parse(port) do
+          {parsed, ""} when parsed > 0 -> parsed
+          _ -> 18_790
+        end
+
+      _ ->
+        18_790
+    end
+  end
+
+  @doc """
   Convert provider string to atom safely.
   Returns :openai for unknown providers to prevent atom leaks.
   """
@@ -677,7 +726,8 @@ defmodule Nex.Agent.Config do
 
   defp default_defaults do
     %{
-      "max_iterations" => 40
+      "max_iterations" => 40,
+      "workspace" => nil
     }
   end
 
