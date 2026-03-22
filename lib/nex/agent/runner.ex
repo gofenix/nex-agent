@@ -1188,10 +1188,7 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp tool_choice_for_memory_write(:anthropic), do: %{type: "tool", name: "memory_write"}
-
-  defp tool_choice_for_memory_write(_provider),
-    do: %{type: "function", function: %{name: "memory_write"}}
+  defp tool_choice_for_memory_write(_provider), do: nil
 
   defp workspace_opts(opts) do
     case Keyword.get(opts, :workspace) do

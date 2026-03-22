@@ -63,7 +63,7 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Captured fact"
   end
 
-  test "consolidation retries anthropic tool_choice match errors through runner wrapper", %{
+  test "consolidation works without tool_choice for anthropic provider", %{
     workspace: workspace
   } do
     parent = self()
@@ -72,29 +72,23 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     llm_generate_text_fun = fn _model_spec, _messages, opts ->
       send(parent, {:llm_opts, opts})
 
-      case Process.get(:memory_consolidation_retry_count, 0) do
-        0 ->
-          Process.put(:memory_consolidation_retry_count, 1)
-          raise %MatchError{term: {:error, :not_implemented}}
-
-        _ ->
-          {:ok,
+      # No retry needed - tool_choice is nil
+      {:ok,
+       %{
+         tool_calls: [
            %{
-             tool_calls: [
-               %{
-                 function: %{
-                   name: "save_memory",
-                   arguments: %{
-                     "history_entry" =>
-                       "[2026-03-18 12:00] Retried after Anthropic tool-choice fallback.",
-                     "memory_update" =>
-                       "# Long-term Memory\n\nAnthropic fallback retry succeeded.\n"
-                   }
-                 }
+             function: %{
+               name: "save_memory",
+               arguments: %{
+                 "history_entry" =>
+                   "[2026-03-18 12:00] Consolidated without tool_choice.",
+                 "memory_update" =>
+                   "# Long-term Memory\n\nConsolidation succeeded.\n"
                }
-             ]
-           }}
-      end
+             }
+           }
+         ]
+       }}
     end
 
     assert {:ok, updated_session} =
@@ -105,16 +99,15 @@ defmodule Nex.Agent.MemoryConsolidationTest do
                req_llm_generate_text_fun: llm_generate_text_fun
              )
 
-    assert_receive {:llm_opts, first_opts}
-    assert_receive {:llm_opts, second_opts}
-    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
-    refute Keyword.has_key?(second_opts, :tool_choice)
+    assert_receive {:llm_opts, opts}
+    # tool_choice is now nil for all providers
+    refute opts[:tool_choice]
     assert updated_session.last_consolidated == length(session.messages)
 
     assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~
-             "Retried after Anthropic tool-choice fallback"
+             "Consolidated without tool_choice"
 
-    assert Memory.read_long_term(workspace: workspace) =~ "Anthropic fallback retry succeeded"
+    assert Memory.read_long_term(workspace: workspace) =~ "Consolidation succeeded"
   end
 
   defp build_session do

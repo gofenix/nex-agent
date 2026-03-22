@@ -485,8 +485,7 @@ defmodule Nex.Agent.Evolution do
     |> Enum.join("\n\n")
   end
 
-  defp tool_choice_for(:anthropic, name), do: %{type: "tool", name: name}
-  defp tool_choice_for(_provider, name), do: %{type: "function", function: %{name: name}}
+  defp tool_choice_for(_provider, _name), do: nil
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)

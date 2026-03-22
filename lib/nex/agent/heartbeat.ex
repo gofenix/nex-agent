@@ -350,7 +350,17 @@ defmodule Nex.Agent.Heartbeat do
   # ── Evolution ──
 
   defp run_daily_evolution(workspace) do
-    Nex.Agent.Evolution.run_evolution_cycle(workspace: workspace, scope: :daily)
+    config = Nex.Agent.Config.load()
+
+    Nex.Agent.Evolution.run_evolution_cycle(
+      workspace: workspace,
+      scope: :daily,
+      provider: Nex.Agent.Config.provider_to_atom(config.provider),
+      model: config.model,
+      api_key: Nex.Agent.Config.get_current_api_key(config),
+      base_url: Nex.Agent.Config.get_current_base_url(config)
+    )
+
     :ok
   rescue
     e ->
@@ -368,8 +378,17 @@ defmodule Nex.Agent.Heartbeat do
 
       workspace = state.workspace
 
+      config = Nex.Agent.Config.load()
+
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        Nex.Agent.Evolution.run_evolution_cycle(workspace: workspace, scope: :weekly)
+        Nex.Agent.Evolution.run_evolution_cycle(
+          workspace: workspace,
+          scope: :weekly,
+          provider: Nex.Agent.Config.provider_to_atom(config.provider),
+          model: config.model,
+          api_key: Nex.Agent.Config.get_current_api_key(config),
+          base_url: Nex.Agent.Config.get_current_base_url(config)
+        )
       end)
 
       %{state | last_weekly_evolution: now}
