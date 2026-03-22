@@ -71,6 +71,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert {:ok, result} = ToolList.execute(%{"scope" => "builtin"}, %{})
 
     builtins = result[:builtin]
+    memory_consolidate = Enum.find(builtins, &(&1["name"] == "memory_consolidate"))
     memory_rebuild = Enum.find(builtins, &(&1["name"] == "memory_rebuild"))
     memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
@@ -79,6 +80,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
+    assert memory_consolidate["layers"] == ["memory"]
     assert memory_rebuild["layers"] == ["memory"]
     assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
@@ -146,7 +148,31 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "task" in names
     refute "spawn_task" in names
     refute "knowledge_capture" in names
+    refute "memory_consolidate" in names
     refute "memory_write" in names
+  end
+
+  test "memory tool descriptions clearly separate consolidate status and rebuild intents" do
+    definitions = Registry.definitions(:all)
+
+    tools =
+      definitions
+      |> Map.new(&{&1["name"], &1})
+
+    names = Enum.map(definitions, & &1["name"])
+
+    assert tools["memory_consolidate"]["description"] =~ "trigger memory consolidation"
+    assert tools["memory_consolidate"]["description"] =~ "触发记忆整理"
+    assert tools["memory_status"]["description"] =~ "check memory status"
+    assert tools["memory_status"]["description"] =~ "检查记忆状态"
+    assert tools["memory_rebuild"]["description"] =~ "full rebuild"
+    assert tools["memory_rebuild"]["description"] =~ "重建记忆"
+
+    assert Enum.find_index(names, &(&1 == "memory_consolidate")) <
+             Enum.find_index(names, &(&1 == "memory_status"))
+
+    assert Enum.find_index(names, &(&1 == "memory_status")) <
+             Enum.find_index(names, &(&1 == "memory_rebuild"))
   end
 
   test "runner keeps raw slash-prefixed prompts and does not persist mode metadata", %{

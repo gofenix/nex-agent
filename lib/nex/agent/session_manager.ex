@@ -63,6 +63,15 @@ defmodule Nex.Agent.SessionManager do
   end
 
   @doc """
+  Atomically mark a session as running an explicit memory consolidation request.
+  """
+  @spec start_explicit_consolidation(String.t(), keyword()) ::
+          {:ok, Session.t(), non_neg_integer()} | :already_running
+  def start_explicit_consolidation(key, opts \\ []) do
+    GenServer.call(__MODULE__, {:start_explicit_consolidation, key, opts})
+  end
+
+  @doc """
   Clear the memory consolidation in-progress flag and persist the session.
   """
   @spec finish_consolidation(Session.t(), keyword()) :: :ok
@@ -136,6 +145,27 @@ defmodule Nex.Agent.SessionManager do
 
         {:reply, {:ok, marked_session, unconsolidated},
          %{state | cache: Map.put(cache, cache_key, marked_session)}}
+    end
+  end
+
+  def handle_call({:start_explicit_consolidation, key, opts}, _from, %{cache: cache} = state) do
+    cache_key = cache_key(key, opts)
+
+    session =
+      cache
+      |> load_session(key, opts)
+      |> maybe_recover_stale_consolidation(opts)
+
+    unconsolidated = max(length(session.messages) - session.last_consolidated, 0)
+
+    if consolidation_in_progress?(session) do
+      {:reply, :already_running, %{state | cache: Map.put(cache, cache_key, session)}}
+    else
+      marked_session = put_consolidation_flag(session, true)
+      Session.save(marked_session, opts)
+
+      {:reply, {:ok, marked_session, unconsolidated},
+       %{state | cache: Map.put(cache, cache_key, marked_session)}}
     end
   end
 

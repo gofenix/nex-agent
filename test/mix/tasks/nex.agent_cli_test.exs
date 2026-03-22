@@ -31,6 +31,8 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
 
     assert output =~ "mix nex.agent [--config PATH] [--workspace PATH]"
     assert output =~ "mix nex.agent gateway restart [--config PATH] [--workspace PATH]"
+    assert output =~ "mix nex.agent evolve"
+    refute output =~ "mix nex.agent evolve [daily|weekly|consolidation]"
     assert output =~ "-c, --config PATH"
     assert output =~ "-w, --workspace PATH"
     refute output =~ "mix nex.agent tasks"
@@ -50,6 +52,14 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
     assert output =~ "Nex Agent CLI"
     assert output =~ "mix nex.agent gateway"
     refute output =~ "Nex Agent (type 'exit' to quit)"
+  end
+
+  test "legacy evolve scopes are rejected with a migration hint" do
+    assert_raise Mix.Error,
+                 "mix nex.agent evolve no longer accepts a scope. Use `mix nex.agent evolve`.",
+                 fn ->
+                   Mix.Tasks.Nex.Agent.run(["evolve", "daily"])
+                 end
   end
 
   test "onboard with explicit config and workspace persists instance targeting" do

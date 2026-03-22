@@ -83,8 +83,79 @@ defmodule Nex.Agent.HeartbeatTest do
     assert count_version_files(module_dir) == 10
   end
 
+  test "heartbeat records daily evolution failures in execution history", %{
+    workspace: workspace,
+    heartbeat_name: heartbeat_name
+  } do
+    config_path = Path.join(workspace, "heartbeat-config.json")
+    write_test_config(config_path)
+    Application.put_env(:nex_agent, :config_path, config_path)
+
+    on_exit(fn ->
+      Application.delete_env(:nex_agent, :config_path)
+    end)
+
+    trigger_maintenance(heartbeat_name)
+
+    assert wait_until(fn ->
+             status = GenServer.call(heartbeat_name, :status)
+
+             Enum.any?(status.recent_history, fn
+               {"evolution", _timestamp, %{trigger: "scheduled_daily", result: {:error, _reason}}} ->
+                 true
+
+               _ ->
+                 false
+             end)
+           end)
+  end
+
+  test "heartbeat does not advance weekly cooldown when weekly evolution fails", %{
+    workspace: workspace,
+    heartbeat_name: heartbeat_name
+  } do
+    config_path = Path.join(workspace, "heartbeat-config.json")
+    write_test_config(config_path)
+    Application.put_env(:nex_agent, :config_path, config_path)
+
+    on_exit(fn ->
+      Application.delete_env(:nex_agent, :config_path)
+    end)
+
+    trigger_maintenance(heartbeat_name)
+
+    assert wait_until(fn ->
+             state = :sys.get_state(heartbeat_name)
+
+             Enum.any?(state.execution_history, fn
+               {"evolution", _timestamp,
+                %{trigger: "scheduled_weekly", result: {:error, _reason}}} ->
+                 true
+
+               _ ->
+                 false
+             end) and is_nil(state.last_weekly_evolution)
+           end)
+  end
+
   defp trigger_maintenance(heartbeat_name) do
     send(Process.whereis(heartbeat_name), :tick)
+  end
+
+  defp write_test_config(path) do
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "provider" => "openai",
+        "model" => "gpt-4o",
+        "providers" => %{
+          "openai" => %{
+            "api_key" => "test-openai-key",
+            "base_url" => "http://127.0.0.1:1"
+          }
+        }
+      })
+    )
   end
 
   defp wait_until(fun, attempts \\ 40)

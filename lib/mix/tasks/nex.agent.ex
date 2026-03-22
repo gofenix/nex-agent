@@ -72,11 +72,12 @@ defmodule Mix.Tasks.Nex.Agent do
   end
 
   defp dispatch(["evolve"], opts) do
-    with_cli_targeting(opts, fn target -> run_evolve("daily", target) end)
+    with_cli_targeting(opts, &run_evolve/1)
   end
 
-  defp dispatch(["evolve", scope], opts) when scope in ~w(daily weekly consolidation) do
-    with_cli_targeting(opts, fn target -> run_evolve(scope, target) end)
+  defp dispatch(["evolve", legacy_scope], _opts)
+       when legacy_scope in ~w(daily weekly consolidation) do
+    Mix.raise("mix nex.agent evolve no longer accepts a scope. Use `mix nex.agent evolve`.")
   end
 
   defp dispatch(args, _opts) do
@@ -114,7 +115,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent gateway [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway stop [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway restart [--config PATH] [--workspace PATH]")
-    Mix.shell().info("  mix nex.agent evolve [daily|weekly|consolidation]")
+    Mix.shell().info("  mix nex.agent evolve")
     Mix.shell().info("  mix nex.agent config show [--config PATH]")
     Mix.shell().info("  mix nex.agent config set provider VALUE [--config PATH]")
     Mix.shell().info("  mix nex.agent config set model VALUE [--config PATH]")
@@ -177,12 +178,11 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent gateway")
   end
 
-  defp run_evolve(scope, target) do
+  defp run_evolve(target) do
     ensure_app_started()
-    config = Config.load()
-    scope_atom = String.to_existing_atom(scope)
+    config = Config.load(config_path: target.config_path)
 
-    Mix.shell().info("=== Evolution Cycle (#{scope}) ===")
+    Mix.shell().info("=== Evolution Cycle ===")
     Mix.shell().info("Workspace: #{target.workspace}")
     Mix.shell().info("Provider: #{config.provider}")
     Mix.shell().info("Model: #{config.model}")
@@ -203,22 +203,13 @@ defmodule Mix.Tasks.Nex.Agent do
     memory_before = file_size(memory_path)
 
     Mix.shell().info("")
-    Mix.shell().info("Running #{scope} evolution cycle...")
+    Mix.shell().info("Running evolution cycle...")
     Mix.shell().info("")
-
-    api_key = Config.get_api_key(config, config.provider)
-    base_url = Config.get_base_url(config, config.provider)
-
-    provider =
-      if is_binary(config.provider), do: String.to_atom(config.provider), else: config.provider
 
     case Nex.Agent.Evolution.run_evolution_cycle(
            workspace: target.workspace,
-           scope: scope_atom,
-           provider: provider,
-           model: config.model,
-           api_key: api_key,
-           base_url: base_url
+           trigger: :manual,
+           config_path: target.config_path
          ) do
       {:ok, result} ->
         Mix.shell().info("Evolution cycle completed!")

@@ -31,7 +31,9 @@ defmodule Nex.Agent.ContextBuilderTest do
              "- USER: user profile, preferences, timezone, communication style, collaboration expectations"
 
     assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
+    assert prompt =~ "use `memory_consolidate` directly"
     assert prompt =~ "inspect both long-term memory files and the current session state/history"
+    assert prompt =~ "do not inspect implementation with `read` or `bash` first"
 
     assert prompt =~
              "Empty `MEMORY.md` or `HISTORY.md` does not imply this is the first conversation"

@@ -330,6 +330,74 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     refute Enum.any?(discord_session.messages, &(&1["content"] == "hello from telegram"))
   end
 
+  test "runner preserves assistant tool calls when history window would otherwise start at tool result",
+       %{workspace: workspace} do
+    parent = self()
+    tool_call_id = "read_19"
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    session =
+      %{
+        Session.new("runner-tool-boundary")
+        | messages: [
+            %{"role" => "user", "content" => "开始", "timestamp" => now},
+            %{
+              "role" => "assistant",
+              "content" => "让我继续看错误处理部分：",
+              "timestamp" => now,
+              "tool_calls" => [
+                %{
+                  "id" => tool_call_id,
+                  "type" => "function",
+                  "function" => %{
+                    "name" => "read",
+                    "arguments" => Jason.encode!(%{"path" => "lib/nex/agent/runner.ex"})
+                  }
+                }
+              ]
+            },
+            %{
+              "role" => "tool",
+              "content" => "defmodule Nex.Agent.Runner do\n",
+              "timestamp" => now,
+              "tool_call_id" => tool_call_id,
+              "name" => "read"
+            }
+            | Enum.map(1..49, fn idx ->
+                %{
+                  "role" => "assistant",
+                  "content" => "后续分析 #{idx}",
+                  "timestamp" => now
+                }
+              end)
+          ]
+      }
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _updated_session} =
+             Runner.run(session, "继续",
+               llm_client: llm_client,
+               workspace: workspace,
+               skip_consolidation: true
+             )
+
+    assert_receive {:messages, messages}
+
+    history_messages =
+      messages
+      |> Enum.reject(&(&1["role"] == "system"))
+      |> Enum.drop(-1)
+
+    assert hd(history_messages)["role"] == "assistant"
+    assert get_in(hd(history_messages), ["tool_calls"]) |> hd() |> Map.get("id") == tool_call_id
+    assert Enum.at(history_messages, 1)["role"] == "tool"
+    assert Enum.at(history_messages, 1)["tool_call_id"] == tool_call_id
+  end
+
   test "message tool to current chat suppresses follow-up direct reply", %{workspace: workspace} do
     parent = self()
     Bus.subscribe(:feishu_outbound)

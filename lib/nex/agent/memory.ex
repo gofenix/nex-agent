@@ -11,6 +11,20 @@ defmodule Nex.Agent.Memory do
 
   alias Nex.Agent.{Config, Workspace}
 
+  @empty_memory_context "(empty)"
+  @memory_boilerplate_lines [
+    "# Long-term Memory",
+    "This file stores important facts that persist across conversations.",
+    "---",
+    "*This file is automatically updated when important information should be remembered.*"
+  ]
+  @template_section_placeholders %{
+    "Environment Facts" => "(Stable facts about runtime, infrastructure, and toolchain)",
+    "Project Conventions" => "(Important project-specific conventions and decisions)",
+    "Project Context" => "(Information about ongoing projects)",
+    "Workflow Lessons" => "(Reusable lessons learned from successful or failed execution paths)"
+  }
+
   @doc """
   Get the memory workspace path.
   """
@@ -186,25 +200,8 @@ defmodule Nex.Agent.Memory do
 
       memory_opts = workspace_opts(workspace)
       current_memory = read_long_term(memory_opts)
-
-      prompt = """
-      Process this conversation and call the save_memory tool with your consolidation.
-
-      ## Current Long-term Memory
-      #{if current_memory == "", do: "(empty)", else: current_memory}
-
-      ## Conversation to Process
-      #{Enum.join(lines, "\n")}
-      """
-
-      messages = [
-        %{
-          "role" => "system",
-          "content" =>
-            "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."
-        },
-        %{"role" => "user", "content" => prompt}
-      ]
+      prompt_memory = compact_consolidation_memory(current_memory)
+      messages = consolidation_messages(prompt_memory, lines)
 
       llm_opts =
         [
@@ -227,9 +224,18 @@ defmodule Nex.Agent.Memory do
         "[Memory] Consolidation LLM call: provider=#{provider} model=#{model} lines=#{length(lines)} tool_choice=#{inspect(llm_opts[:tool_choice])}"
       )
 
-      case llm_call_fun.(messages, llm_opts) do
+      case call_consolidation_llm(
+             messages,
+             llm_opts,
+             llm_call_fun,
+             provider,
+             prompt_memory,
+             lines
+           ) do
         {:ok, result} ->
-          Logger.info("[Memory] Consolidation LLM returned tool args: #{inspect(result, limit: 5, printable_limit: 200)}")
+          Logger.info(
+            "[Memory] Consolidation LLM returned tool args: #{inspect(result, limit: 5, printable_limit: 200)}"
+          )
 
           case normalize_consolidation_args(result) do
             {:ok, args} ->
@@ -239,7 +245,12 @@ defmodule Nex.Agent.Memory do
                 current_memory,
                 keep_count,
                 archive_all,
-                memory_opts
+                memory_opts,
+                provider,
+                model,
+                api_key,
+                base_url,
+                Keyword.get(opts, :req_llm_generate_text_fun)
               )
 
             {:error, reason} ->
@@ -251,13 +262,138 @@ defmodule Nex.Agent.Memory do
           end
 
         {:error, reason} ->
-          Logger.error(
-            "[Memory] Consolidation LLM call failed: #{inspect(reason, limit: 500)}"
-          )
+          Logger.error("[Memory] Consolidation LLM call failed: #{inspect(reason, limit: 500)}")
 
           {:error, reason}
       end
     end
+  end
+
+  defp consolidation_messages(prompt_memory, lines) do
+    prompt = """
+    Process this conversation and call the save_memory tool with your consolidation.
+
+    ## Current Long-term Memory
+    #{prompt_memory}
+
+    ## Conversation to Process
+    #{Enum.join(lines, "\n")}
+    """
+
+    [
+      %{
+        "role" => "system",
+        "content" =>
+          "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."
+      },
+      %{"role" => "user", "content" => prompt}
+    ]
+  end
+
+  defp call_consolidation_llm(messages, llm_opts, llm_call_fun, provider, prompt_memory, lines) do
+    case llm_call_fun.(messages, llm_opts) do
+      {:error, reason} = error ->
+        if should_retry_empty_memory_context?(provider, reason, prompt_memory) do
+          Logger.warning(
+            "[Memory] Consolidation compatibility fallback triggered after Anthropic empty/non-JSON success response, retrying with empty memory context"
+          )
+
+          llm_call_fun.(consolidation_messages(@empty_memory_context, lines), llm_opts)
+        else
+          error
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp should_retry_empty_memory_context?(provider, reason, prompt_memory) do
+    provider == :anthropic and prompt_memory != @empty_memory_context and
+      anthropic_decode_failure?(reason)
+  end
+
+  defp anthropic_decode_failure?(reason) do
+    reason
+    |> anthropic_decode_error_text()
+    |> String.downcase()
+    |> then(fn text ->
+      String.contains?(text, "anthropic response decode error") and
+        (String.contains?(text, "empty_body") or String.contains?(text, "non_json_body"))
+    end)
+  end
+
+  defp anthropic_decode_error_text(%{reason: reason}) when is_binary(reason), do: reason
+  defp anthropic_decode_error_text(reason) when is_binary(reason), do: reason
+  defp anthropic_decode_error_text(reason), do: inspect(reason)
+
+  defp compact_consolidation_memory(memory) do
+    memory
+    |> String.replace("\r\n", "\n")
+    |> split_memory_sections()
+    |> Enum.reject(&drop_template_section?/1)
+    |> Enum.map(&render_memory_section/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+    |> String.replace(~r/\n{3,}/, "\n\n")
+    |> String.trim()
+    |> case do
+      "" -> @empty_memory_context
+      compacted -> compacted
+    end
+  end
+
+  defp split_memory_sections(memory) do
+    {sections, current} =
+      memory
+      |> String.split("\n", trim: false)
+      |> Enum.reduce({[], %{heading: nil, lines: []}}, fn line, {sections, current} ->
+        if String.starts_with?(line, "## ") do
+          {push_memory_section(sections, current),
+           %{heading: String.trim_leading(line, "## ") |> String.trim(), lines: [line]}}
+        else
+          {sections, %{current | lines: [line | current.lines]}}
+        end
+      end)
+
+    sections
+    |> push_memory_section(current)
+    |> Enum.reverse()
+  end
+
+  defp push_memory_section(sections, %{lines: []}), do: sections
+
+  defp push_memory_section(sections, %{heading: heading, lines: lines}) do
+    [%{heading: heading, lines: Enum.reverse(lines)} | sections]
+  end
+
+  defp drop_template_section?(%{heading: heading, lines: [_heading | body_lines]}) do
+    case Map.get(@template_section_placeholders, heading) do
+      nil ->
+        false
+
+      placeholder ->
+        body =
+          body_lines
+          |> Enum.reject(&memory_boilerplate_line?/1)
+          |> Enum.join("\n")
+          |> String.trim()
+
+        body in ["", placeholder]
+    end
+  end
+
+  defp drop_template_section?(_section), do: false
+
+  defp render_memory_section(%{lines: lines}) do
+    lines
+    |> Enum.reject(&memory_boilerplate_line?/1)
+    |> Enum.join("\n")
+    |> String.trim()
+  end
+
+  defp memory_boilerplate_line?(line) do
+    String.trim(line) in @memory_boilerplate_lines
   end
 
   defp save_memory_tool do
@@ -339,7 +475,12 @@ defmodule Nex.Agent.Memory do
          current_memory,
          keep_count,
          archive_all,
-         memory_opts
+         memory_opts,
+         provider,
+         model,
+         api_key,
+         base_url,
+         req_llm_generate_text_fun
        ) do
     entry = stringify_result(Map.get(args, "history_entry"))
     update = stringify_result(Map.get(args, "memory_update"))
@@ -378,8 +519,16 @@ defmodule Nex.Agent.Memory do
       "Memory consolidation done: #{length(session.messages)} messages, last_consolidated=#{updated_session.last_consolidated}"
     )
 
-    # Maybe trigger evolution cycle after N consolidations
-    Nex.Agent.Evolution.maybe_trigger_after_consolidation(memory_opts)
+    # Maybe trigger evolution cycle after N consolidations.
+    evolution_opts =
+      memory_opts
+      |> Keyword.put(:provider, provider)
+      |> Keyword.put(:model, model)
+      |> maybe_put_llm_opt(:api_key, api_key)
+      |> maybe_put_llm_opt(:base_url, base_url)
+      |> maybe_put_llm_opt(:req_llm_generate_text_fun, req_llm_generate_text_fun)
+
+    Nex.Agent.Evolution.maybe_trigger_after_consolidation(evolution_opts)
 
     {:ok, updated_session}
   end

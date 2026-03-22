@@ -27,7 +27,7 @@ defmodule NexAgent.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:req_llm, "~> 1.6"},
+      {:req_llm, git: "https://github.com/gofenix/req_llm.git", branch: "nex-agent-moonshot-fix"},
       {:jason, "~> 1.4"},
       {:websockex, "~> 0.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

@@ -140,7 +140,7 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
     {:ok, result} =
       Evolution.run_evolution_cycle(
         workspace: workspace,
-        scope: :daily,
+        trigger: :manual,
         llm_call_fun: evolution_llm
       )
 
@@ -182,6 +182,10 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
     assert "evolution.skill_drafted" in event_types
     assert "evolution.code_hint" in event_types
 
+    completed_event = Enum.find(events, &(&1["event"] == "evolution.cycle_completed"))
+    assert completed_event["payload"]["trigger"] == "manual"
+    assert completed_event["payload"]["profile"] == "routine"
+
     # 3e. Signals were consumed (cleared after cycle)
     assert Evolution.read_signals(workspace: workspace) == []
 
@@ -193,7 +197,7 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
     {:ok, result2} =
       Evolution.run_evolution_cycle(
         workspace: workspace,
-        scope: :daily,
+        trigger: :manual,
         llm_call_fun: evolution_llm
       )
 
@@ -283,7 +287,7 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
 
     Evolution.run_evolution_cycle(
       workspace: workspace,
-      scope: :daily,
+      trigger: :manual,
       llm_call_fun: mock_llm
     )
 

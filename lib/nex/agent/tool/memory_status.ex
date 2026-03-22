@@ -11,7 +11,16 @@ defmodule Nex.Agent.Tool.MemoryStatus do
   def name, do: "memory_status"
 
   def description do
-    "Inspect memory consolidation status for the current session and workspace."
+    """
+    Inspect memory consolidation status for the current session and workspace.
+
+    Use this when the user wants to check memory status only:
+    - "check memory status" / "was memory consolidated?"
+    - "检查记忆状态" / "刚才整理过了吗"
+
+    This does not run consolidation. Use `memory_consolidate` to trigger normal consolidation now.
+    Use `memory_rebuild` only for a full rebuild of MEMORY.md and HISTORY.md.
+    """
   end
 
   def category, do: :base

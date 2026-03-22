@@ -144,8 +144,10 @@ defmodule Nex.Agent.ContextBuilder do
     - CODE: internal implementation upgrades
 
     Prefer the highest layer that solves the need. Do not persist one-off outputs, temporary state, or information that is easy to rediscover.
+    If the user explicitly asks to trigger or run memory consolidation now, use `memory_consolidate` directly.
     For deterministic inspection of memory/consolidation state, prefer the `memory_status` tool over free-form inference.
-    If long-term memory is clearly stale or incomplete and the user wants a full rebuild, use `memory_rebuild`.
+    If long-term memory is clearly stale or incomplete and the user explicitly wants a full rebuild, use `memory_rebuild`.
+    When a built-in memory tool directly matches the user's request, do not inspect implementation with `read` or `bash` first.
     When asked whether memory was updated, consolidated, or previously triggered, inspect both long-term memory files and the current session state/history before answering.
     Empty `MEMORY.md` or `HISTORY.md` does not imply this is the first conversation or that no prior session history exists.
     """

@@ -10,11 +10,13 @@ defmodule Nex.Agent.Evolution do
 
   require Logger
 
-  alias Nex.Agent.{Audit, Memory, Skills, Workspace}
+  alias Nex.Agent.{Audit, Config, Memory, Skills, Workspace}
 
   @evolution_counter_file ".evolution_counter"
   @patterns_file "patterns.jsonl"
   @consolidations_per_evolution 5
+  @quick_history_paragraphs 3
+  @routine_history_paragraphs 10
 
   # ── Public API ──
 
@@ -22,26 +24,34 @@ defmodule Nex.Agent.Evolution do
   Run a full evolution cycle.
 
   Options:
-  - `:scope` — `:daily`, `:weekly`, or `:consolidation` (controls analysis depth)
+  - `:trigger` — `:manual`, `:post_consolidation`, `:scheduled_daily`, or `:scheduled_weekly`
   - `:workspace` — workspace root
   - `:provider`, `:model`, `:api_key`, `:base_url` — LLM config
   - `:llm_call_fun` — override for testing
   """
   @spec run_evolution_cycle(keyword()) :: {:ok, map()} | {:error, term()}
   def run_evolution_cycle(opts \\ []) do
-    scope = Keyword.get(opts, :scope, :daily)
+    trigger = normalize_trigger(Keyword.get(opts, :trigger, :manual))
+    profile = profile_for_trigger(trigger)
     workspace_opts = workspace_opts(opts)
+    run_opts = Keyword.merge(opts, resolve_runtime_llm_opts(opts))
 
-    Logger.info("[Evolution] Starting #{scope} evolution cycle")
-    Audit.append("evolution.cycle_started", %{scope: scope}, workspace_opts)
+    Logger.info("[Evolution] Starting cycle trigger=#{trigger} profile=#{profile}")
 
-    with {:ok, context} <- gather_context(scope, workspace_opts),
-         {:ok, report} <- run_reflection(context, scope, opts),
+    Audit.append(
+      "evolution.cycle_started",
+      %{trigger: to_string(trigger), profile: to_string(profile)},
+      workspace_opts
+    )
+
+    with {:ok, context} <- gather_context(profile, workspace_opts),
+         {:ok, report} <- run_reflection(context, profile, run_opts),
          {:ok, applied} <- apply_updates(report, workspace_opts) do
       Audit.append(
         "evolution.cycle_completed",
         %{
-          scope: scope,
+          trigger: to_string(trigger),
+          profile: to_string(profile),
           soul_updates: length(Map.get(report, "soul_updates", [])),
           memory_updates: length(Map.get(report, "memory_updates", [])),
           skill_candidates: length(Map.get(report, "skill_candidates", [])),
@@ -50,11 +60,17 @@ defmodule Nex.Agent.Evolution do
         workspace_opts
       )
 
-      Logger.info("[Evolution] #{scope} cycle completed: #{inspect(applied)}")
+      Logger.info(
+        "[Evolution] trigger=#{trigger} profile=#{profile} completed: #{inspect(applied)}"
+      )
+
       {:ok, applied}
     else
       {:error, reason} = err ->
-        Logger.warning("[Evolution] #{scope} cycle failed: #{inspect(reason)}")
+        Logger.warning(
+          "[Evolution] trigger=#{trigger} profile=#{profile} failed: #{inspect(reason)}"
+        )
+
         err
     end
   end
@@ -148,7 +164,7 @@ defmodule Nex.Agent.Evolution do
       Logger.info("[Evolution] Triggering evolution after #{new_count} consolidations")
 
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        run_evolution_cycle(Keyword.put(opts, :scope, :consolidation))
+        run_evolution_cycle(Keyword.put(opts, :trigger, :post_consolidation))
       end)
 
       true
@@ -172,7 +188,7 @@ defmodule Nex.Agent.Evolution do
 
   # ── Stage 1: Gather Context ──
 
-  defp gather_context(scope, workspace_opts) do
+  defp gather_context(profile, workspace_opts) do
     history = read_file(Workspace.memory_dir(workspace_opts), "HISTORY.md")
     memory = Memory.read_long_term(workspace_opts)
     soul = read_file(Workspace.root(workspace_opts), "SOUL.md")
@@ -187,13 +203,7 @@ defmodule Nex.Agent.Evolution do
       end)
       |> Enum.join("\n")
 
-    # Scope-based history trimming
-    history_content =
-      case scope do
-        :consolidation -> last_n_paragraphs(history, 3)
-        :daily -> last_n_paragraphs(history, 10)
-        :weekly -> history
-      end
+    history_content = history_for_profile(history, profile)
 
     {:ok,
      %{
@@ -202,13 +212,13 @@ defmodule Nex.Agent.Evolution do
        soul: soul,
        skills: skills,
        signals: signals,
-       scope: scope
+       profile: profile
      }}
   end
 
   # ── Stage 2: LLM Reflection ──
 
-  defp run_reflection(context, scope, opts) do
+  defp run_reflection(context, profile, opts) do
     signals_text =
       context.signals
       |> Enum.map(fn s ->
@@ -216,22 +226,10 @@ defmodule Nex.Agent.Evolution do
       end)
       |> Enum.join("\n")
 
-    scope_instruction =
-      case scope do
-        :consolidation ->
-          "Focus on the most recent conversation segment only. Look for immediate patterns."
-
-        :daily ->
-          "Analyze the last day of activity. Look for emerging patterns and corrections."
-
-        :weekly ->
-          "Deep analysis of all history. Look for recurring patterns, skill synthesis opportunities, and soul refinement."
-      end
-
     prompt = """
     You are an evolution analyst for an AI agent. Analyze the agent's recent behavior and produce an evolution report.
 
-    #{scope_instruction}
+    #{instruction_for_profile(profile)}
 
     ## Current Soul (persona/principles)
     #{if context.soul == "", do: "(empty)", else: context.soul}
@@ -490,10 +488,74 @@ defmodule Nex.Agent.Evolution do
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
+  defp normalize_trigger(trigger)
+       when trigger in [:manual, :post_consolidation, :scheduled_daily, :scheduled_weekly],
+       do: trigger
+
+  defp normalize_trigger(trigger) when is_binary(trigger) do
+    case trigger do
+      "manual" -> :manual
+      "post_consolidation" -> :post_consolidation
+      "scheduled_daily" -> :scheduled_daily
+      "scheduled_weekly" -> :scheduled_weekly
+      _ -> :manual
+    end
+  end
+
+  defp normalize_trigger(_), do: :manual
+
+  defp profile_for_trigger(:manual), do: :routine
+  defp profile_for_trigger(:post_consolidation), do: :quick
+  defp profile_for_trigger(:scheduled_daily), do: :routine
+  defp profile_for_trigger(:scheduled_weekly), do: :deep
+
+  defp history_for_profile(history, :quick),
+    do: last_n_paragraphs(history, @quick_history_paragraphs)
+
+  defp history_for_profile(history, :routine),
+    do: last_n_paragraphs(history, @routine_history_paragraphs)
+
+  defp history_for_profile(history, :deep), do: history
+
+  defp instruction_for_profile(:quick) do
+    "Focus on the most recent conversation segment only. Look for immediate patterns."
+  end
+
+  defp instruction_for_profile(:routine) do
+    "Analyze the last day of activity. Look for emerging patterns and corrections."
+  end
+
+  defp instruction_for_profile(:deep) do
+    "Deep analysis of all history. Look for recurring patterns, skill synthesis opportunities, and soul refinement."
+  end
+
   defp workspace_opts(opts) do
     case Keyword.get(opts, :workspace) do
       nil -> []
       workspace -> [workspace: workspace]
+    end
+  end
+
+  defp resolve_runtime_llm_opts(opts) do
+    config = Config.load(config_opts(opts))
+    provider = Keyword.get(opts, :provider, config.provider)
+    provider_name = provider_name(provider)
+
+    [
+      provider: Config.provider_to_atom(provider),
+      model: Keyword.get(opts, :model, config.model),
+      api_key: Keyword.get(opts, :api_key) || Config.get_api_key(config, provider_name),
+      base_url: Keyword.get(opts, :base_url) || Config.get_base_url(config, provider_name)
+    ]
+  end
+
+  defp provider_name(provider) when is_binary(provider), do: provider
+  defp provider_name(provider) when is_atom(provider), do: Atom.to_string(provider)
+
+  defp config_opts(opts) do
+    case Keyword.get(opts, :config_path) do
+      nil -> []
+      config_path -> [config_path: config_path]
     end
   end
 end

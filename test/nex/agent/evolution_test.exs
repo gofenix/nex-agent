@@ -108,6 +108,38 @@ defmodule Nex.Agent.EvolutionTest do
 
       assert File.read!(counter_path) |> String.trim() == "3"
     end
+
+    test "triggered consolidation evolution preserves runtime llm opts", %{workspace: workspace} do
+      parent = self()
+
+      Enum.each(1..4, fn _ ->
+        refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
+      end)
+
+      assert Evolution.maybe_trigger_after_consolidation(
+               workspace: workspace,
+               provider: :anthropic,
+               model: "kimi-k2.5",
+               api_key: "test-api-key",
+               base_url: "https://moonshot.example.test/anthropic",
+               llm_call_fun: fn _messages, llm_opts ->
+                 send(parent, {:evolution_llm_opts, llm_opts})
+                 {:ok, %{"observations" => "ok"}}
+               end
+             )
+
+      assert_receive {:evolution_llm_opts, llm_opts}, 500
+      assert llm_opts[:provider] == :anthropic
+      assert llm_opts[:model] == "kimi-k2.5"
+      assert llm_opts[:api_key] == "test-api-key"
+      assert llm_opts[:base_url] == "https://moonshot.example.test/anthropic"
+
+      assert wait_until(fn ->
+               Enum.any?(Evolution.recent_events(workspace: workspace), fn event ->
+                 event["event"] == "evolution.cycle_completed"
+               end)
+             end)
+    end
   end
 
   describe "run_evolution_cycle/1" do
@@ -126,7 +158,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
 
@@ -150,7 +182,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
 
@@ -176,7 +208,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
 
@@ -207,7 +239,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :weekly,
+                 trigger: :scheduled_weekly,
                  llm_call_fun: llm_call_fun
                )
 
@@ -236,7 +268,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
 
@@ -255,7 +287,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:ok, _} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
 
@@ -270,15 +302,60 @@ defmodule Nex.Agent.EvolutionTest do
       assert {:error, {:llm_failed, "API unavailable"}} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 scope: :daily,
+                 trigger: :manual,
                  llm_call_fun: llm_call_fun
                )
+    end
+
+    test "trigger profiles select expected instructions and history windows", %{
+      workspace: workspace
+    } do
+      history =
+        1..12
+        |> Enum.map_join("\n\n", fn n ->
+          "[2026-03-20 #{String.pad_leading(Integer.to_string(n), 2, "0")}:00] Paragraph #{n}."
+        end)
+
+      File.write!(Path.join(workspace, "memory/HISTORY.md"), history)
+
+      manual_prompt = capture_prompt(workspace, :manual)
+      scheduled_daily_prompt = capture_prompt(workspace, :scheduled_daily)
+      post_consolidation_prompt = capture_prompt(workspace, :post_consolidation)
+      scheduled_weekly_prompt = capture_prompt(workspace, :scheduled_weekly)
+
+      assert manual_prompt =~ "Analyze the last day of activity"
+      assert manual_prompt =~ "Paragraph 3."
+      assert manual_prompt =~ "Paragraph 12."
+      refute manual_prompt =~ "Paragraph 1."
+      refute manual_prompt =~ "Paragraph 2."
+
+      assert scheduled_daily_prompt =~ "Analyze the last day of activity"
+      assert scheduled_daily_prompt =~ "Paragraph 3."
+      assert scheduled_daily_prompt =~ "Paragraph 12."
+      refute scheduled_daily_prompt =~ "Paragraph 1."
+      refute scheduled_daily_prompt =~ "Paragraph 2."
+
+      assert post_consolidation_prompt =~ "Focus on the most recent conversation segment only"
+      assert post_consolidation_prompt =~ "Paragraph 10."
+      assert post_consolidation_prompt =~ "Paragraph 12."
+      refute post_consolidation_prompt =~ "Paragraph 9."
+
+      assert scheduled_weekly_prompt =~
+               "Deep analysis of all history. Look for recurring patterns"
+
+      assert scheduled_weekly_prompt =~ "Paragraph 1."
+      assert scheduled_weekly_prompt =~ "Paragraph 12."
     end
   end
 
   describe "recent_events/1" do
     test "returns only evolution events", %{workspace: workspace} do
-      Nex.Agent.Audit.append("evolution.cycle_started", %{scope: "daily"}, workspace: workspace)
+      Nex.Agent.Audit.append(
+        "evolution.cycle_started",
+        %{trigger: "manual", profile: "routine"},
+        workspace: workspace
+      )
+
       Nex.Agent.Audit.append("other.event", %{data: "test"}, workspace: workspace)
 
       Nex.Agent.Audit.append("evolution.cycle_completed", %{soul_updates: 1},
@@ -288,6 +365,39 @@ defmodule Nex.Agent.EvolutionTest do
       events = Evolution.recent_events(workspace: workspace)
       assert length(events) == 2
       assert Enum.all?(events, fn e -> String.starts_with?(e["event"], "evolution.") end)
+    end
+  end
+
+  defp capture_prompt(workspace, trigger) do
+    parent = self()
+
+    llm_call_fun = fn messages, _opts ->
+      user_message = Enum.find(messages, &(&1["role"] == "user"))
+      send(parent, {:evolution_prompt, trigger, user_message["content"]})
+      {:ok, %{"observations" => "ok"}}
+    end
+
+    assert {:ok, _result} =
+             Evolution.run_evolution_cycle(
+               workspace: workspace,
+               trigger: trigger,
+               llm_call_fun: llm_call_fun
+             )
+
+    assert_receive {:evolution_prompt, ^trigger, prompt}, 500
+    prompt
+  end
+
+  defp wait_until(fun, attempts \\ 40)
+
+  defp wait_until(fun, 0), do: fun.()
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(50)
+      wait_until(fun, attempts - 1)
     end
   end
 end

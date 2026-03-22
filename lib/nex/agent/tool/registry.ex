@@ -20,6 +20,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.KnowledgeCapture,
     Nex.Agent.Tool.ExecutorDispatch,
     Nex.Agent.Tool.ExecutorStatus,
+    Nex.Agent.Tool.MemoryConsolidate,
     Nex.Agent.Tool.MemoryStatus,
     Nex.Agent.Tool.MemoryRebuild,
     Nex.Agent.Tool.MemoryWrite,
@@ -164,6 +165,7 @@ defmodule Nex.Agent.Tool.Registry do
     defs =
       tools
       |> filter_tools(filter)
+      |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
       |> Enum.map(fn {name, module} ->
         def_map = module.definition() |> normalize_definition()
 
@@ -420,6 +422,12 @@ defmodule Nex.Agent.Tool.Registry do
   defp normalize_definition(%{function: inner}) when is_map(inner), do: inner
   defp normalize_definition(%{"function" => inner}) when is_map(inner), do: inner
   defp normalize_definition(def_map), do: def_map
+
+  defp definition_priority("memory_consolidate"), do: 0
+  defp definition_priority("memory_status"), do: 1
+  defp definition_priority("memory_rebuild"), do: 2
+  defp definition_priority("memory_write"), do: 3
+  defp definition_priority(_name), do: 100
 
   @cron_tools ~w(bash read message web_search web_fetch task)
   @subagent_tools ~w(

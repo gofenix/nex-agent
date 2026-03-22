@@ -156,6 +156,9 @@ defmodule Nex.Agent.OnboardingMigrationTest do
 
     assert agents_content =~ "Six-Layer Evolution"
     assert agents_content =~ "SOUL: values, personality"
+    assert agents_content =~ "memory_consolidate"
+    assert agents_content =~ "trigger memory consolidation now"
+    assert agents_content =~ "重建记忆"
 
     refute soul_content =~ "all capabilities are skills"
     refute soul_content =~ "capabilities"
@@ -166,6 +169,10 @@ defmodule Nex.Agent.OnboardingMigrationTest do
 
     assert tools_content =~ "Tool reference"
     assert tools_content =~ "Built-in Tool Families"
+    assert tools_content =~ "memory_consolidate"
+    assert tools_content =~ "memory_status"
+    assert tools_content =~ "memory_rebuild"
+    assert tools_content =~ "触发记忆整理"
   end
 
   test "existing customized user files are preserved during initialization", %{

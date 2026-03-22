@@ -80,10 +80,8 @@ defmodule Nex.Agent.MemoryConsolidationTest do
              function: %{
                name: "save_memory",
                arguments: %{
-                 "history_entry" =>
-                   "[2026-03-18 12:00] Consolidated without tool_choice.",
-                 "memory_update" =>
-                   "# Long-term Memory\n\nConsolidation succeeded.\n"
+                 "history_entry" => "[2026-03-18 12:00] Consolidated without tool_choice.",
+                 "memory_update" => "# Long-term Memory\n\nConsolidation succeeded.\n"
                }
              }
            }
@@ -110,6 +108,110 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Consolidation succeeded"
   end
 
+  test "template-only memory compacts to empty prompt context without rewriting MEMORY.md", %{
+    workspace: workspace
+  } do
+    template = template_memory()
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), template)
+    parent = self()
+    session = build_session()
+
+    assert {:ok, _updated_session} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: fn messages, _opts ->
+                 send(parent, {:prompt_memory, prompt_memory_block(messages)})
+
+                 {:ok,
+                  %{
+                    "history_entry" => "[2026-03-22 10:00] Template-only memory stayed empty.",
+                    "memory_update" => template
+                  }}
+               end
+             )
+
+    assert_receive {:prompt_memory, "(empty)"}
+    assert Memory.read_long_term(workspace: workspace) == template
+  end
+
+  test "substantive memory survives prompt compaction while boilerplate is stripped", %{
+    workspace: workspace
+  } do
+    memory = substantive_memory()
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), memory)
+    parent = self()
+    session = build_session()
+
+    assert {:ok, _updated_session} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: fn messages, _opts ->
+                 send(parent, {:prompt_memory, prompt_memory_block(messages)})
+
+                 {:ok,
+                  %{
+                    "history_entry" => "[2026-03-22 10:05] Substantive memory was preserved.",
+                    "memory_update" => memory
+                  }}
+               end
+             )
+
+    assert_receive {:prompt_memory, prompt_memory}
+
+    assert prompt_memory =~
+             "Moonshot compatibility failures were traced to full MEMORY.md prompt echoing."
+
+    refute prompt_memory =~ "This file stores important facts that persist across conversations."
+    refute prompt_memory =~ "## Environment Facts"
+  end
+
+  test "consolidation retries once with empty memory context on anthropic decode errors", %{
+    workspace: workspace
+  } do
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), substantive_memory())
+    parent = self()
+    session = build_session()
+    Process.delete(:memory_consolidation_retry_count)
+
+    assert {:ok, updated_session} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: fn messages, _opts ->
+                 prompt_memory = prompt_memory_block(messages)
+                 send(parent, {:prompt_memory, prompt_memory})
+
+                 case Process.get(:memory_consolidation_retry_count, 0) do
+                   0 ->
+                     Process.put(:memory_consolidation_retry_count, 1)
+
+                     {:error,
+                      %{
+                        reason:
+                          "Anthropic response decode error (empty_body): reason=:not_implemented body_type=:binary body_bytes=0"
+                      }}
+
+                   _ ->
+                     {:ok,
+                      %{
+                        "history_entry" =>
+                          "[2026-03-22 10:10] Empty-memory fallback recovered Moonshot consolidation.",
+                        "memory_update" =>
+                          "# Long-term Memory\n\n## Recovered Facts\nFallback path succeeded.\n"
+                      }}
+                 end
+               end
+             )
+
+    assert_receive {:prompt_memory, first_prompt}
+    assert first_prompt =~ "Moonshot compatibility failures were traced"
+    assert_receive {:prompt_memory, "(empty)"}
+    assert updated_session.last_consolidated == length(session.messages)
+    assert Memory.read_long_term(workspace: workspace) =~ "Fallback path succeeded"
+  end
+
   defp build_session do
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -124,5 +226,67 @@ defmodule Nex.Agent.MemoryConsolidationTest do
         %{"role" => "assistant", "content" => "second", "timestamp" => now}
       ]
     }
+  end
+
+  defp prompt_memory_block(messages) do
+    prompt = List.last(messages)["content"]
+
+    [_, block] =
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
+
+    String.trim(block)
+  end
+
+  defp template_memory do
+    """
+    # Long-term Memory
+
+    This file stores important facts that persist across conversations.
+
+    ## Environment Facts
+
+    (Stable facts about runtime, infrastructure, and toolchain)
+
+    ## Project Conventions
+
+    (Important project-specific conventions and decisions)
+
+    ## Project Context
+
+    (Information about ongoing projects)
+
+    ## Workflow Lessons
+
+    (Reusable lessons learned from successful or failed execution paths)
+
+    ---
+
+    *This file is automatically updated when important information should be remembered.*
+    """
+  end
+
+  defp substantive_memory do
+    """
+    # Long-term Memory
+
+    This file stores important facts that persist across conversations.
+
+    ## Environment Facts
+
+    (Stable facts about runtime, infrastructure, and toolchain)
+
+    ## Project Conventions
+
+    (Important project-specific conventions and decisions)
+
+    ## Durable Facts
+
+    Moonshot compatibility failures were traced to full MEMORY.md prompt echoing.
+    Keeping only substantive memory reduces the risk of empty Anthropic-compatible responses.
+
+    ---
+
+    *This file is automatically updated when important information should be remembered.*
+    """
   end
 end

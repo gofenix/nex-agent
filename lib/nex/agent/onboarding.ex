@@ -388,9 +388,14 @@ defmodule Nex.Agent.Onboarding do
     - Scheduling and background work: `cron`, `spawn_task`, `task`
     - Knowledge capture: `knowledge_capture`
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
-    - Evolution layers: `soul_update`, `user_update`, `memory_write`, `skill_list`, `skill_read`, `skill_create`
+    - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_list`, `skill_read`, `skill_create`
     - Tool management: `tool_list`, `tool_create`, `tool_delete`
     - Code evolution: `reflect`, `upgrade_code`
+
+    Memory tool intent split:
+    - Use `memory_consolidate` for "trigger memory consolidation now" / "触发记忆整理"
+    - Use `memory_status` for "check memory status" / "检查记忆状态"
+    - Use `memory_rebuild` for "full rebuild" / "重建记忆"
 
     Prefer Markdown skills for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
@@ -440,7 +445,11 @@ defmodule Nex.Agent.Onboarding do
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
     - SOUL layer: `soul_update`
     - USER layer: `user_update`
-    - MEMORY layer: `memory_write`
+    - MEMORY layer:
+      - `memory_consolidate`: trigger memory consolidation now / 触发记忆整理
+      - `memory_status`: check memory status only / 检查记忆状态
+      - `memory_rebuild`: full rebuild from session history / 重建记忆
+      - `memory_write`: persist durable facts to MEMORY.md
     - SKILL layer: `skill_list`, `skill_read`, `skill_create`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `upgrade_code`
@@ -451,6 +460,7 @@ defmodule Nex.Agent.Onboarding do
     - Use the smallest tool that can solve the task.
     - Validate tool outputs before taking follow-up actions.
     - For code changes, pair tool execution with verification checks.
+    - If a built-in memory tool directly matches the user request, call it instead of reading source files first.
 
     ## Workspace Extension Model
 

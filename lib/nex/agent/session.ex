@@ -100,21 +100,76 @@ defmodule Nex.Agent.Session do
   def get_history(%__MODULE__{} = session, max_messages \\ 500) do
     unconsolidated = Enum.drop(session.messages, session.last_consolidated)
     sliced = Enum.take(unconsolidated, -max_messages)
+    slice_start = max(length(unconsolidated) - length(sliced), 0)
 
     # Align to start of a complete turn (user message).
     # Drop leading assistant/tool messages that are mid-turn fragments.
-    aligned =
+    {aligned, aligned_start} =
       case Enum.find_index(sliced, fn m -> Map.get(m, "role") == "user" end) do
         nil ->
-          sliced
+          {sliced, slice_start}
 
         idx ->
-          Enum.drop(sliced, idx)
+          {Enum.drop(sliced, idx), slice_start + idx}
       end
 
-    aligned
+    unconsolidated
+    |> repair_leading_tool_boundary(aligned, aligned_start)
     |> Enum.map(&sanitize_history_entry/1)
   end
+
+  defp repair_leading_tool_boundary(_messages, [], _start_idx), do: []
+
+  defp repair_leading_tool_boundary(messages, window, start_idx) do
+    if tool_message?(hd(window)) do
+      tool_ids = leading_tool_call_ids(window)
+
+      case find_matching_assistant_before(messages, start_idx, tool_ids) do
+        nil -> Enum.drop_while(window, &tool_message?/1)
+        assistant -> [assistant | window]
+      end
+    else
+      window
+    end
+  end
+
+  defp leading_tool_call_ids(window) do
+    window
+    |> Enum.take_while(&tool_message?/1)
+    |> Enum.map(&Map.get(&1, "tool_call_id"))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp find_matching_assistant_before(_messages, start_idx, _tool_ids) when start_idx <= 0,
+    do: nil
+
+  defp find_matching_assistant_before(messages, start_idx, tool_ids) do
+    candidate =
+      messages
+      |> Enum.take(start_idx)
+      |> Enum.reverse()
+      |> Enum.drop_while(&tool_message?/1)
+      |> List.first()
+
+    if assistant_message_with_tool_calls?(candidate, tool_ids), do: candidate, else: nil
+  end
+
+  defp assistant_message_with_tool_calls?(%{"role" => "assistant"} = message, tool_ids) do
+    message_tool_ids =
+      message
+      |> Map.get("tool_calls", [])
+      |> Enum.map(fn tool_call -> Map.get(tool_call, "id") || Map.get(tool_call, :id) end)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    tool_ids != [] and Enum.all?(tool_ids, &MapSet.member?(message_tool_ids, &1))
+  end
+
+  defp assistant_message_with_tool_calls?(_message, _tool_ids), do: false
+
+  defp tool_message?(%{"role" => "tool"}), do: true
+  defp tool_message?(_message), do: false
 
   defp sanitize_history_entry(m) do
     entry = %{

@@ -3,16 +3,26 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
+  @blank_memory "# Long-term Memory\n"
+  @blank_history "# Conversation History Log\n"
+
   alias Nex.Agent.{Memory, Session, SessionManager}
 
   def name, do: "memory_rebuild"
 
   def description do
     """
-    Run a full memory consolidation pass for the current session.
+    Run a full memory rebuild for the current session.
+
+    Use this only when the user explicitly wants a full rebuild:
+    - "rebuild memory" / "full memory rebuild"
+    - "重建记忆" / "全量重建记忆"
 
     This reprocesses the entire session history into MEMORY.md and HISTORY.md instead of waiting
-    for the normal incremental threshold. Use this when long-term memory is stale or clearly incomplete.
+    for the normal incremental threshold.
+
+    Do not use this for a normal "trigger memory consolidation now" request.
+    Use `memory_consolidate` for immediate normal consolidation, or `memory_status` for status-only checks.
     """
   end
 
@@ -48,10 +58,10 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     llm_call_fun = Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun")
 
     batch_messages =
-      Map.get(args, "batch_messages") ||
-        Map.get(ctx, :batch_messages) ||
-        Map.get(ctx, "batch_messages")
-        |> normalize_batch_size()
+      (Map.get(args, "batch_messages") ||
+         Map.get(ctx, :batch_messages) ||
+         Map.get(ctx, "batch_messages"))
+      |> normalize_batch_size()
 
     session_key =
       Map.get(args, "session_key") ||
@@ -100,6 +110,43 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
        ) do
     model = model || "claude-sonnet-4-20250514"
 
+    temp_workspace = rebuild_workspace_path()
+
+    try do
+      :ok = seed_rebuild_workspace(temp_workspace)
+
+      case rebuild_batches(
+             session,
+             provider,
+             model,
+             api_key,
+             base_url,
+             temp_workspace,
+             llm_call_fun,
+             batch_size
+           ) do
+        {:ok, _processed} ->
+          :ok = promote_rebuild_workspace(temp_workspace, workspace)
+          {:ok, %Session{session | last_consolidated: length(session.messages)}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    after
+      File.rm_rf(temp_workspace)
+    end
+  end
+
+  defp rebuild_batches(
+         %Session{} = session,
+         provider,
+         model,
+         api_key,
+         base_url,
+         temp_workspace,
+         llm_call_fun,
+         batch_size
+       ) do
     session.messages
     |> Enum.chunk_every(batch_size)
     |> Enum.with_index(1)
@@ -111,7 +158,7 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
           api_key: api_key,
           base_url: base_url,
           archive_all: true,
-          workspace: workspace
+          workspace: temp_workspace
         ]
         |> maybe_put(:llm_call_fun, llm_call_fun)
 
@@ -124,13 +171,6 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
           {:halt, {:error, reason}}
       end
     end)
-    |> case do
-      {:ok, _processed} ->
-        {:ok, %Session{session | last_consolidated: length(session.messages)}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
   end
 
   defp fetch_session(session_key, workspace) do
@@ -158,6 +198,38 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
   defp history_bytes(workspace) do
     path = Path.join(memory_dir(workspace), "HISTORY.md")
     if File.exists?(path), do: File.stat!(path).size, else: 0
+  end
+
+  defp rebuild_workspace_path do
+    Path.join(
+      System.tmp_dir!(),
+      "nex-agent-memory-rebuild-workspace-#{System.unique_integer([:positive])}"
+    )
+  end
+
+  defp seed_rebuild_workspace(workspace) do
+    memory_dir = memory_dir(workspace)
+    File.mkdir_p!(memory_dir)
+    File.write!(Path.join(memory_dir, "MEMORY.md"), @blank_memory)
+    File.write!(Path.join(memory_dir, "HISTORY.md"), @blank_history)
+    :ok
+  end
+
+  defp promote_rebuild_workspace(temp_workspace, workspace) do
+    destination_dir = memory_dir(workspace)
+    File.mkdir_p!(destination_dir)
+
+    File.cp!(
+      Path.join(memory_dir(temp_workspace), "MEMORY.md"),
+      Path.join(destination_dir, "MEMORY.md")
+    )
+
+    File.cp!(
+      Path.join(memory_dir(temp_workspace), "HISTORY.md"),
+      Path.join(destination_dir, "HISTORY.md")
+    )
+
+    :ok
   end
 
   defp memory_dir(nil), do: Path.join(Memory.workspace_path(), "memory")

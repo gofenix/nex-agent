@@ -98,7 +98,7 @@ defmodule Nex.Agent.Tool.Reflect do
 
     case Evolution.run_evolution_cycle(
            workspace: workspace,
-           scope: :daily,
+           trigger: :manual,
            provider: provider,
            model: model,
            api_key: api_key,
@@ -147,7 +147,15 @@ defmodule Nex.Agent.Tool.Reflect do
               "**[#{ts}] Code Hint**\n#{Map.get(payload, "hint", "?")}"
 
             "evolution.cycle_completed" ->
-              "**[#{ts}] Cycle Completed**\nSoul: #{Map.get(payload, "soul_updates", 0)}, Memory: #{Map.get(payload, "memory_updates", 0)}, Skills: #{Map.get(payload, "skill_candidates", 0)}"
+              details =
+                [
+                  "**[#{ts}] Cycle Completed**",
+                  "Soul: #{Map.get(payload, "soul_updates", 0)}, Memory: #{Map.get(payload, "memory_updates", 0)}, Skills: #{Map.get(payload, "skill_candidates", 0)}"
+                ]
+                |> maybe_append_line(payload["trigger"] && "Trigger: #{payload["trigger"]}")
+                |> maybe_append_line(payload["profile"] && "Profile: #{payload["profile"]}")
+
+              Enum.join(details, "\n")
 
             _ ->
               "**[#{ts}] #{event}**\n#{inspect(payload)}"
@@ -229,6 +237,9 @@ defmodule Nex.Agent.Tool.Reflect do
     do:
       {:error,
        "action is required (source, versions, diff, list_modules, evolution_status, trigger_evolution, evolution_history)"}
+
+  defp maybe_append_line(lines, nil), do: lines
+  defp maybe_append_line(lines, line), do: lines ++ [line]
 
   defp reject_custom_module(module_str) do
     if custom_tool_module?(module_str) do
