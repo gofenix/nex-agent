@@ -186,6 +186,18 @@ defmodule Nex.Automation.ServerTest do
     assert Agent.get(ctx.workspace_state, & &1.cleaned) == [34]
   end
 
+  test "start_link keeps default adapters when optional overrides are omitted", ctx do
+    {:ok, pid} = Server.start_link(workflow: ctx.workflow)
+
+    state = :sys.get_state(pid)
+
+    assert state.tracker == GitHub
+    assert state.workspace_manager == WorkspaceManager
+    assert state.worker_runner == Nex.Automation.WorkerRunner
+
+    GenServer.stop(pid)
+  end
+
   defmodule FakeTracker do
     def ready_issues(_workflow, opts) do
       state = Keyword.fetch!(opts, :state)

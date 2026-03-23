@@ -299,8 +299,8 @@ defmodule Nex.Automation.Server do
   defp resolve_adapter({module, opts}, _default) when is_atom(module) and is_list(opts),
     do: {module, opts}
 
-  defp resolve_adapter(module, _default) when is_atom(module), do: {module, []}
   defp resolve_adapter(nil, default), do: {default, []}
+  defp resolve_adapter(module, _default) when is_atom(module), do: {module, []}
 
   defp now_iso do
     DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
