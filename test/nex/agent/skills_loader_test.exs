@@ -88,9 +88,11 @@ defmodule Nex.Agent.SkillsLoaderTest do
     )
 
     skills =
-      File.cd!(repo_root, fn ->
-        Loader.load_all(workspace: workspace, filter_unavailable: false)
-      end)
+      Loader.load_all(
+        workspace: workspace,
+        project_root: repo_root,
+        filter_unavailable: false
+      )
 
     assert Enum.any?(skills, &(&1.name == "repo-policy"))
   end

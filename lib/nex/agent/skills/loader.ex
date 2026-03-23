@@ -32,7 +32,7 @@ defmodule Nex.Agent.Skills.Loader do
   @spec load_all(keyword()) :: list(map())
   def load_all(opts \\ []) do
     global = Workspace.skills_dir(opts)
-    project = ".nex/skills"
+    project = project_skills_dir(opts)
 
     filter_unavailable = Keyword.get(opts, :filter_unavailable, true)
     loader_opts = [filter_unavailable: filter_unavailable]
@@ -45,6 +45,13 @@ defmodule Nex.Agent.Skills.Loader do
 
   @spec list_all() :: list(map())
   def list_all, do: load_all(filter_unavailable: false)
+
+  defp project_skills_dir(opts) do
+    opts
+    |> Keyword.get(:project_root, File.cwd!())
+    |> Path.expand()
+    |> Path.join(".nex/skills")
+  end
 
   @spec check_requirements(map()) :: boolean()
   def check_requirements(skill) do
