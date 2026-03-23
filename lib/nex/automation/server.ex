@@ -138,27 +138,55 @@ defmodule Nex.Automation.Server do
   end
 
   defp start_issue_run(issue, state) do
-    with {:ok, running_issue} <-
-           state.tracker.mark_running(state.workflow, issue, state.tracker_opts),
-         {:ok, workspace} <-
-           state.workspace_manager.prepare(state.workflow, running_issue, state.workspace_opts),
-         {:ok, worker_pid} <-
-           state.worker_runner.start_link(
-             state.worker_opts ++
-               [
-                 id: running_issue.number,
-                 command: build_worker_command(state.workflow, workspace, running_issue),
-                 cwd: workspace.code_path,
-                 notify: self(),
-                 timeout_ms: state.workflow.worker.timeout_ms
-               ]
-           ) do
-      run = %{issue: running_issue, workspace: workspace, worker_pid: worker_pid}
-      put_in(state.runs[running_issue.number], run)
-    else
+    case state.tracker.mark_running(state.workflow, issue, state.tracker_opts) do
+      {:ok, running_issue} ->
+        start_claimed_issue(state, running_issue)
+
       {:error, _reason} ->
         state
     end
+  end
+
+  defp start_claimed_issue(state, running_issue) do
+    case state.workspace_manager.prepare(state.workflow, running_issue, state.workspace_opts) do
+      {:ok, workspace} ->
+        case state.worker_runner.start_link(
+               state.worker_opts ++
+                 [
+                   id: running_issue.number,
+                   command: build_worker_command(state.workflow, workspace, running_issue),
+                   cwd: workspace.code_path,
+                   notify: self(),
+                   timeout_ms: state.workflow.worker.timeout_ms
+                 ]
+             ) do
+          {:ok, worker_pid} ->
+            run = %{issue: running_issue, workspace: workspace, worker_pid: worker_pid}
+            put_in(state.runs[running_issue.number], run)
+
+          {:error, _reason} ->
+            fail_claimed_issue(state, running_issue, workspace)
+        end
+
+      {:error, _reason} ->
+        fail_claimed_issue(state, running_issue)
+    end
+  end
+
+  defp fail_claimed_issue(state, issue, workspace \\ nil) do
+    if workspace do
+      _ = state.workspace_manager.cleanup(workspace, state.workspace_opts)
+    end
+
+    latest_issue =
+      case state.tracker.issue(state.workflow, issue.number, state.tracker_opts) do
+        {:ok, refreshed_issue} -> refreshed_issue
+        _ -> issue
+      end
+
+    _ = state.tracker.mark_failed(state.workflow, latest_issue, state.tracker_opts)
+
+    Map.update!(state, :failed, &Enum.uniq([issue.number | &1]))
   end
 
   defp cancel_run(state, run) do

@@ -123,6 +123,69 @@ defmodule Nex.Automation.ServerTest do
     assert Agent.get(ctx.workspace_state, & &1.cleaned) == [13]
   end
 
+  test "poll marks an issue failed when workspace preparation fails after claiming it", ctx do
+    issue = %GitHub.Issue{
+      number: 21,
+      title: "Workspace setup fails",
+      body: "Please automate this",
+      html_url: "https://github.com/openai/symphony/issues/21",
+      state: "open",
+      labels: ["agent:ready"]
+    }
+
+    Agent.update(ctx.tracker_state, fn _ -> %{ready: [issue], issues: %{21 => issue}} end)
+
+    {:ok, pid} =
+      Server.start_link(
+        workflow: ctx.workflow,
+        tracker: {__MODULE__.FakeTracker, [state: ctx.tracker_state]},
+        workspace_manager: __MODULE__.FailingWorkspaceManager,
+        worker_runner: {__MODULE__.FakeWorkerRunner, [state: ctx.worker_state, mode: :manual]}
+      )
+
+    assert :ok = Server.poll_now(pid)
+
+    eventually(fn ->
+      {:ok, snapshot} = Server.status(pid)
+      assert snapshot.failed == [21]
+      assert snapshot.running == []
+    end)
+
+    assert Agent.get(ctx.tracker_state, fn state -> state.issues[21].labels end) == ["nex:failed"]
+  end
+
+  test "poll marks an issue failed and cleans the workspace when worker startup fails", ctx do
+    issue = %GitHub.Issue{
+      number: 34,
+      title: "Worker start fails",
+      body: "Please automate this",
+      html_url: "https://github.com/openai/symphony/issues/34",
+      state: "open",
+      labels: ["agent:ready"]
+    }
+
+    Agent.update(ctx.tracker_state, fn _ -> %{ready: [issue], issues: %{34 => issue}} end)
+
+    {:ok, pid} =
+      Server.start_link(
+        workflow: ctx.workflow,
+        tracker: {__MODULE__.FakeTracker, [state: ctx.tracker_state]},
+        workspace_manager: {__MODULE__.FakeWorkspaceManager, [state: ctx.workspace_state]},
+        worker_runner: __MODULE__.FailingWorkerRunner
+      )
+
+    assert :ok = Server.poll_now(pid)
+
+    eventually(fn ->
+      {:ok, snapshot} = Server.status(pid)
+      assert snapshot.failed == [34]
+      assert snapshot.running == []
+    end)
+
+    assert Agent.get(ctx.tracker_state, fn state -> state.issues[34].labels end) == ["nex:failed"]
+    assert Agent.get(ctx.workspace_state, & &1.cleaned) == [34]
+  end
+
   defmodule FakeTracker do
     def ready_issues(_workflow, opts) do
       state = Keyword.fetch!(opts, :state)
@@ -226,6 +289,16 @@ defmodule Nex.Automation.ServerTest do
         if worker_pid == pid, do: issue_number
       end)
     end
+  end
+
+  defmodule FailingWorkspaceManager do
+    def prepare(_workflow, _issue, _opts), do: {:error, :workspace_failed}
+    def cleanup(_workspace, _opts), do: :ok
+  end
+
+  defmodule FailingWorkerRunner do
+    def start_link(_opts), do: {:error, :worker_start_failed}
+    def cancel(_pid, _opts), do: :ok
   end
 
   defp eventually(fun, attempts \\ 20)
