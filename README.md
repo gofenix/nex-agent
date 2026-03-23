@@ -521,7 +521,7 @@ Another way to read the system is:
 - **Agent layer**: InboundWorker + Runner
 - **Capability layer**: Tools + Skills + Memory + Sessions
 - **Background layer**: Cron + Subagent
-- **Automation layer**: Workflow + Tracker + Workspace isolation + Orchestrator
+- **Automation layer**: Workflow + Tracker + Workspace isolation + Orchestrator, driven by repository-owned policy files like `WORKFLOW.md`
 - **Six-layer growth model**: Soul + User + Memory + Skill + Tool + Code
 
 Core roles in code:
