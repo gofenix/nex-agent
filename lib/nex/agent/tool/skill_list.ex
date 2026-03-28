@@ -1,6 +1,6 @@
 defmodule Nex.Agent.Tool.SkillList do
   @moduledoc """
-  Skill List Tool - list available local Markdown skills.
+  Skill List Tool - list locally installed Markdown skills for inventory and compatibility.
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
@@ -9,7 +9,7 @@ defmodule Nex.Agent.Tool.SkillList do
 
   def description do
     """
-    List locally installed Markdown skills so the main agent loop can decide whether to load one.
+    List locally installed Markdown skills for local inventory. Prefer `skill_discover` for skill discovery.
     """
   end
 

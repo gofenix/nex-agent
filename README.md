@@ -47,7 +47,7 @@ flowchart TD
 
 | Capability | What it means |
 | --- | --- |
-| **Self-evolving by design** | `soul_update`, `memory_write`, `skill_create`, `tool_create`, `reflect`, and `upgrade_code` keep the agent from staying static |
+| **Self-evolving by design** | `soul_update`, `memory_write`, `skill_capture`, `tool_create`, `reflect`, and `upgrade_code` keep the agent from staying static |
 | **Long-running sessions** | Sessions are scoped by `channel:chat_id` and keep memory, history, and isolation |
 | **Works in your chat apps** | Telegram, Feishu, Discord, Slack, and DingTalk are already supported |
 | **Tools, skills, and memory built in** | File access, shell, web, messaging, memory search, scheduling, and skills come built in |
@@ -294,8 +294,11 @@ Default built-in tools:
 - `memory_write`
 - `cron`
 - `spawn_task`
-- `skill_list`
-- `skill_create`
+- `skill_discover`
+- `skill_get`
+- `skill_capture`
+- `skill_import`
+- `skill_sync`
 - `tool_list`
 - `tool_create`
 - `tool_delete`
@@ -323,12 +326,19 @@ Skills are reusable workflow modules that help the agent:
 - standardize recurring tasks
 - create reusable instructions for itself
 
-Instance-local skills live in `workspace/skills/<name>/SKILL.md` and are exposed to the model as `skill_<name>` tools.
+Instance-local runtime skill packages live in `workspace/skills/<name>/`. Discover them through `skill_discover`, inspect them through `skill_get`, and capture new local knowledge packages through `skill_capture`.
 
 Repository-owned workflow policy can also live in `.nex/skills/<name>/SKILL.md`.
-Those repo-local skills are not part of the generic runtime defaults; they capture repository-specific collaboration policy for the current repository.
+When `skill_runtime.enabled` is turned on, repo-local Markdown skills are migrated into runtime-managed packages under `workspace/skills/rt__*`.
 
 Code-based capabilities belong in the tool system, where Elixir modules implement deterministic behavior through `Tool.Behaviour`.
+
+### SkillRuntime E2E testing
+
+- Hermetic end-to-end coverage runs through `Runner.run/3`, temp workspaces, real `Tool.Registry`, stubbed LLM calls, and stubbed GitHub responses. These tests run in the default `mix test` path and are tagged `:e2e`.
+- Live end-to-end coverage is tagged `:live_e2e` and is excluded from default test runs. Use `mix test --only live_e2e` when `OPENAI_API_KEY` is set. The GitHub live import path also requires `GH_TOKEN` or `GITHUB_TOKEN`.
+- The live GitHub fixture defaults to the repository under test via `SKILL_RUNTIME_LIVE_REPO`, `SKILL_RUNTIME_LIVE_COMMIT_SHA`, and `SKILL_RUNTIME_LIVE_PATH`. In GitHub Actions those default to `${GITHUB_REPOSITORY}`, `${GITHUB_SHA}`, and `test/support/fixtures/skill_runtime/live_packages/live_echo_playbook`.
+- Default CI runs the hermetic suite through `mix test`. Live E2E runs only in the dedicated manual/nightly workflow.
 
 ## Memory and Sessions
 
@@ -390,7 +400,7 @@ Through `MEMORY.md`, `HISTORY.md`, and daily logs, the agent can keep accumulati
 
 ### Skills
 
-Through `skill_create`, the agent can keep expanding reusable workflows and procedural knowledge.
+Through `skill_capture`, the agent can keep expanding reusable workflows and procedural knowledge. Discovery is unified through `skill_discover` and `skill_get`, while trusted package-style skills can be imported and refreshed through `skill_import` and `skill_sync`.
 
 ### Tools
 

@@ -192,13 +192,23 @@ defmodule Nex.Agent.InboundWorker do
       cmd == "/new" ->
         state = cancel_active_task(state, key)
         publish_outbound(payload, "New session started.")
-        %{state | agents: Map.delete(state.agents, key), pending_queue: Map.delete(state.pending_queue, key)}
+
+        %{
+          state
+          | agents: Map.delete(state.agents, key),
+            pending_queue: Map.delete(state.pending_queue, key)
+        }
 
       cmd == "/stop" ->
         {count, state} = stop_session(state, key, session_key, workspace)
         dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
         state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
-        publish_outbound(payload, "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}.")
+
+        publish_outbound(
+          payload,
+          "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}."
+        )
+
         state
 
       true ->
@@ -390,7 +400,11 @@ defmodule Nex.Agent.InboundWorker do
       queue ->
         case :queue.out(queue) do
           {{:value, {session_key, workspace, content, payload}}, rest} ->
-            remaining = if :queue.is_empty(rest), do: Map.delete(state.pending_queue, key), else: Map.put(state.pending_queue, key, rest)
+            remaining =
+              if :queue.is_empty(rest),
+                do: Map.delete(state.pending_queue, key),
+                else: Map.put(state.pending_queue, key, rest)
+
             state = %{state | pending_queue: remaining}
 
             Logger.info(

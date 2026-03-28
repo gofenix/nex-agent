@@ -179,7 +179,10 @@ defmodule Nex.Agent.RunnerEvolutionTest do
            %{id: "a", function: %{name: "list_dir", arguments: %{"path" => "."}}},
            %{id: "b", function: %{name: "read", arguments: %{"path" => "README.md"}}},
            %{id: "c", function: %{name: "read", arguments: %{"path" => "mix.exs"}}},
-           %{id: "d", function: %{name: "skill_list", arguments: %{}}}
+           %{
+             id: "d",
+             function: %{name: "skill_discover", arguments: %{"query" => "project inspection"}}
+           }
          ]
        }}
     end
@@ -188,6 +191,8 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       Runner.run(Session.new("skill-nudge"), "先分析一下项目",
         llm_client: llm_client_first,
         workspace: workspace,
+        cwd: workspace,
+        skill_runtime: %{"enabled" => true},
         skip_consolidation: true
       )
 
@@ -205,9 +210,9 @@ defmodule Nex.Agent.RunnerEvolutionTest do
          finish_reason: nil,
          tool_calls: [
            %{
-             id: "skill_create",
+             id: "skill_capture",
              function: %{
-               name: "skill_create",
+               name: "skill_capture",
                arguments: %{
                  "name" => "project-inspection",
                  "description" => "Inspect a project before changes",
@@ -223,6 +228,8 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       Runner.run(session_after_first, "把刚才的方法沉淀一下",
         llm_client: llm_client_second,
         workspace: workspace,
+        cwd: workspace,
+        skill_runtime: %{"enabled" => true},
         skip_consolidation: true
       )
 

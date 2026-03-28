@@ -1,0 +1,50 @@
+name: Live E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    name: OpenAI + GitHub live SkillRuntime E2E
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SKILL_RUNTIME_LIVE_REPO: ${{ github.repository }}
+      SKILL_RUNTIME_LIVE_COMMIT_SHA: ${{ github.sha }}
+      SKILL_RUNTIME_LIVE_PATH: test/support/fixtures/skill_runtime/live_packages/live_echo_playbook
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Elixir/OTP
+        uses: erlef/setup-beam@v1.23.0
+        with:
+          elixir-version: "1.19.4"
+          otp-version: "28.2"
+
+      - name: Cache deps and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ env.MIX_ENV }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ env.MIX_ENV }}-
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Run live SkillRuntime E2E
+        run: MIX_ENV=test mix test --only live_e2e

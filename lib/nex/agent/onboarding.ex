@@ -388,7 +388,7 @@ defmodule Nex.Agent.Onboarding do
     - Scheduling and background work: `cron`, `spawn_task`, `task`
     - Knowledge capture: `knowledge_capture`
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
-    - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_list`, `skill_read`, `skill_create`
+    - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
     - Tool management: `tool_list`, `tool_create`, `tool_delete`
     - Code evolution: `reflect`, `upgrade_code`
 
@@ -397,7 +397,7 @@ defmodule Nex.Agent.Onboarding do
     - Use `memory_status` for "check memory status" / "检查记忆状态"
     - Use `memory_rebuild` for "full rebuild" / "重建记忆"
 
-    Prefer Markdown skills for reusable instruction workflows.
+    Prefer runtime skill packages for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
 
     ## Six-Layer Evolution
@@ -450,7 +450,7 @@ defmodule Nex.Agent.Onboarding do
       - `memory_status`: check memory status only / 检查记忆状态
       - `memory_rebuild`: full rebuild from session history / 重建记忆
       - `memory_write`: persist durable facts to MEMORY.md
-    - SKILL layer: `skill_list`, `skill_read`, `skill_create`
+    - SKILL layer: `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `upgrade_code`
 
@@ -465,8 +465,11 @@ defmodule Nex.Agent.Onboarding do
     ## Workspace Extension Model
 
     - Workspace tools are Elixir modules under `workspace/tools/<name>/`.
-    - Skills are Markdown workflows under `workspace/skills/<name>/SKILL.md`.
-    - Use `skill_list` to discover skills and `skill_read` to load one when needed.
+    - Skills are runtime packages under `workspace/skills/<name>/`.
+    - Use `skill_discover` as the default way to discover skills.
+    - Use `skill_get` to inspect a selected runtime package with progressive disclosure.
+    - Use `skill_capture` to save a reusable local knowledge package.
+    - Use `skill_import` and `skill_sync` for trusted package skills managed by the runtime.
     - Use tools for executable capabilities; use skills for reusable guidance.
     """
   end

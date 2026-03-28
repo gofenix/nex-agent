@@ -10,6 +10,7 @@ defmodule Nex.Agent.Config do
             providers: %{},
             tools: %{},
             defaults: %{},
+            skill_runtime: %{},
             gateway: %{},
             telegram: %{},
             feishu: %{},
@@ -23,6 +24,7 @@ defmodule Nex.Agent.Config do
           providers: map(),
           tools: map(),
           defaults: map(),
+          skill_runtime: map(),
           gateway: map(),
           telegram: map(),
           feishu: map(),
@@ -62,6 +64,8 @@ defmodule Nex.Agent.Config do
             providers: Map.merge(default_providers(), Map.get(data, "providers", %{})),
             tools: Map.get(data, "tools", %{}),
             defaults: Map.merge(default_defaults(), Map.get(data, "defaults", %{})),
+            skill_runtime:
+              Map.merge(default_skill_runtime(), Map.get(data, "skill_runtime", %{})),
             gateway: Map.merge(default_gateway(), Map.get(data, "gateway", %{})),
             telegram: Map.merge(default_telegram(), Map.get(data, "telegram", %{})),
             feishu: Map.merge(default_feishu(), Map.get(data, "feishu", %{})),
@@ -92,6 +96,7 @@ defmodule Nex.Agent.Config do
       "providers" => config.providers,
       "tools" => config.tools,
       "defaults" => config.defaults,
+      "skill_runtime" => config.skill_runtime,
       "gateway" => config.gateway,
       "telegram" => config.telegram,
       "feishu" => config.feishu,
@@ -113,6 +118,7 @@ defmodule Nex.Agent.Config do
       model: "gpt-4o",
       providers: default_providers(),
       defaults: default_defaults(),
+      skill_runtime: default_skill_runtime(),
       gateway: default_gateway(),
       telegram: default_telegram(),
       feishu: default_feishu(),
@@ -318,6 +324,14 @@ defmodule Nex.Agent.Config do
       _ ->
         nil
     end
+  end
+
+  @doc """
+  Get the Skill Runtime configuration.
+  """
+  @spec skill_runtime(t()) :: map()
+  def skill_runtime(%__MODULE__{} = config) do
+    Map.merge(default_skill_runtime(), config.skill_runtime || %{})
   end
 
   @doc """
@@ -728,6 +742,20 @@ defmodule Nex.Agent.Config do
     %{
       "max_iterations" => 40,
       "workspace" => nil
+    }
+  end
+
+  defp default_skill_runtime do
+    %{
+      "enabled" => false,
+      "trace_dir" => "skill_runtime/runs",
+      "index_dir" => "skill_runtime/index",
+      "cache_dir" => "skill_runtime/cache",
+      "snapshots_dir" => "skill_runtime/snapshots",
+      "max_selected_skills" => 2,
+      "prefilter_limit" => 20,
+      "post_run_analysis" => true,
+      "github_indexes" => []
     }
   end
 

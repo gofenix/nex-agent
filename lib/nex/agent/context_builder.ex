@@ -95,7 +95,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
     - Do not infer restarts from process age or uptime.
     - Caveat: the current call may still run old code. Expect the next call to observe the new version.
-    - Skills are discoverable resources, not preloaded instructions. Use `skill_list` to discover them and `skill_read` to load one before following it.
+    - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
 
     Reply directly with text for normal conversations.
     Never expose tool calls, progress updates, chain-of-thought, or "I sent it" status messages to the end user.

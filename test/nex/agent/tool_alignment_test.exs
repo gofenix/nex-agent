@@ -24,7 +24,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Runner, Session, Skills}
-  alias Nex.Agent.Tool.{Registry, SkillList, SkillRead, SoulUpdate, ToolList}
+  alias Nex.Agent.Tool.{Registry, SkillDiscover, SkillGet, SoulUpdate, ToolList}
+  alias Nex.SkillRuntime
 
   setup do
     workspace =
@@ -76,7 +77,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
     memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
-    skill_read = Enum.find(builtins, &(&1["name"] == "skill_read"))
+    skill_get = Enum.find(builtins, &(&1["name"] == "skill_get"))
+    skill_capture = Enum.find(builtins, &(&1["name"] == "skill_capture"))
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
@@ -85,9 +87,13 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
     assert reflect["layers"] == ["code"]
-    assert skill_read["layers"] == ["skill"]
+    assert skill_get["layers"] == ["skill"]
+    assert skill_capture["layers"] == ["skill"]
     assert upgrade["layers"] == ["code"]
     assert tool_create["layers"] == ["tool"]
+    refute Enum.any?(builtins, &(&1["name"] == "skill_list"))
+    refute Enum.any?(builtins, &(&1["name"] == "skill_read"))
+    refute Enum.any?(builtins, &(&1["name"] == "skill_create"))
   end
 
   test "skills stay discoverable resources instead of expanding into synthetic tools", %{
@@ -124,8 +130,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     names = Enum.map(tools, & &1["name"])
 
-    assert "skill_list" in names
-    assert "skill_read" in names
+    assert "skill_discover" in names
+    assert "skill_get" in names
+    assert "skill_capture" in names
+    refute "skill_list" in names
+    refute "skill_read" in names
+    refute "skill_create" in names
     assert Enum.count(names, fn name -> name == "skill_message" end) == 1
     refute "skill_code-review" in names
   end
@@ -140,8 +150,11 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "list_dir" in names
     assert "executor_dispatch" in names
     assert "executor_status" in names
-    assert "skill_list" in names
-    assert "skill_read" in names
+    assert "skill_discover" in names
+    assert "skill_get" in names
+    refute "skill_list" in names
+    refute "skill_read" in names
+    refute "skill_create" in names
 
     refute "message" in names
     refute "cron" in names
@@ -211,45 +224,63 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute Map.has_key?(persisted_user, "raw_prompt")
   end
 
-  test "skill tools follow the current turn workspace and support dotted skill names", %{
+  test "runtime skill tools follow the current turn workspace", %{
     workspace: workspace
   } do
     other_workspace =
       Path.join(System.tmp_dir!(), "nex-agent-skill-tool-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "skills/global-only"))
-    File.mkdir_p!(Path.join(other_workspace, "skills/ops.v2"))
+    assert {:ok, _package} =
+             SkillRuntime.capture(
+               %{
+                 "name" => "global-only",
+                 "description" => "Only available in the app workspace.",
+                 "content" => "This package only lives in the app workspace."
+               },
+               workspace: workspace,
+               project_root: workspace,
+               skill_runtime: %{"enabled" => true}
+             )
 
-    File.write!(
-      Path.join(workspace, "skills/global-only/SKILL.md"),
-      """
-      ---
-      name: global-only
-      description: Only available in the app workspace.
-      ---
-      """
-    )
-
-    File.write!(
-      Path.join(other_workspace, "skills/ops.v2/SKILL.md"),
-      """
-      ---
-      name: ops.v2
-      description: Only available in the turn workspace.
-      ---
-
-      Use the v2 operations checklist.
-      """
-    )
+    assert {:ok, package} =
+             SkillRuntime.capture(
+               %{
+                 "name" => "ops.v2",
+                 "description" => "Only available in the turn workspace.",
+                 "content" => "Use the v2 operations checklist."
+               },
+               workspace: other_workspace,
+               project_root: other_workspace,
+               skill_runtime: %{"enabled" => true}
+             )
 
     on_exit(fn -> File.rm_rf!(other_workspace) end)
 
-    assert {:ok, result} = SkillList.execute(%{"scope" => "local"}, %{workspace: other_workspace})
-    assert result[:skills] =~ "ops.v2"
-    refute result[:skills] =~ "global-only"
+    assert {:ok, result} =
+             SkillDiscover.execute(
+               %{"query" => "operations checklist", "scope" => "local"},
+               %{
+                 workspace: other_workspace,
+                 cwd: other_workspace,
+                 skill_runtime: %{"enabled" => true}
+               }
+             )
 
-    assert {:ok, loaded} = SkillRead.execute(%{"name" => "ops.v2"}, %{workspace: other_workspace})
-    assert loaded["content"] =~ "Use the v2 operations checklist."
+    hits = result["hits"]
+    assert Enum.any?(hits, &(&1["name"] == "ops.v2"))
+    refute Enum.any?(hits, &(&1["name"] == "global-only"))
+
+    assert {:ok, loaded} =
+             SkillGet.execute(
+               %{"skill_id" => package.skill_id},
+               %{
+                 workspace: other_workspace,
+                 cwd: other_workspace,
+                 skill_runtime: %{"enabled" => true}
+               }
+             )
+
+    assert loaded["progressive_disclosure"]["content"] =~ "Use the v2 operations checklist."
   end
 
   test "agent prompt passes session key into runner tool context", %{workspace: workspace} do

@@ -12,6 +12,7 @@ defmodule Nex.Agent.Runner do
   }
 
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
+  alias Nex.SkillRuntime
 
   @default_max_iterations 10
   @max_iterations_hard_limit 50
@@ -55,6 +56,9 @@ defmodule Nex.Agent.Runner do
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
 
+    {session, runtime_system_messages, prepared_run} =
+      prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts)
+
     history_limit = Keyword.get(opts, :history_limit, @memory_window)
     history = Session.get_history(session, history_limit)
 
@@ -78,14 +82,37 @@ defmodule Nex.Agent.Runner do
     opts =
       opts
       |> Keyword.put(:workspace, workspace)
+      |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
+      |> Keyword.put(:skill_runtime_prepared_run, prepared_run)
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
 
     case run_loop(session, messages, 0, max_iterations, opts) do
       {:ok, result, final_session} ->
+        final_session =
+          finalize_skill_runtime_run(
+            final_session,
+            initial_message_count,
+            prompt,
+            result,
+            prepared_run,
+            opts
+          )
+
         {:ok, result,
          finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
 
       {:error, reason, final_session} ->
+        final_session =
+          finalize_skill_runtime_run(
+            final_session,
+            initial_message_count,
+            prompt,
+            reason,
+            prepared_run,
+            opts,
+            status: "failed"
+          )
+
         {:error, reason,
          finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
     end
@@ -242,11 +269,77 @@ defmodule Nex.Agent.Runner do
   defp maybe_add_skill_nudge(messages, true) do
     messages ++
       [
-        "[Runtime Evolution Nudge] The previous task was complex. If you discovered a reusable workflow, troubleshooting path, or corrected multi-step procedure, decide whether to save it with skill_create."
+        "[Runtime Evolution Nudge] The previous task was complex. If you discovered a reusable workflow, troubleshooting path, or corrected multi-step procedure, decide whether to save it with skill_capture."
       ]
   end
 
   defp maybe_add_skill_nudge(messages, _), do: messages
+
+  defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
+    case SkillRuntime.prepare_run(prompt, opts) do
+      {:ok, prepared_run} ->
+        metadata =
+          Map.put(session.metadata || %{}, "skill_runtime", %{
+            "selected_packages" => Enum.map(prepared_run.selected_packages, &package_metadata/1),
+            "ephemeral_tools" => Enum.map(prepared_run.ephemeral_tools, &Map.get(&1, "name"))
+          })
+
+        warnings =
+          case prepared_run.availability_warnings do
+            [] -> []
+            list -> ["[Skill Runtime] Warnings: " <> Enum.join(list, "; ")]
+          end
+
+        {%{session | metadata: metadata},
+         runtime_system_messages ++ prepared_run.prompt_fragments ++ warnings, prepared_run}
+
+      {:error, reason} ->
+        Logger.warning("[Runner] SkillRuntime prepare_run failed: #{reason}")
+        {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
+    end
+  end
+
+  defp package_metadata(package) do
+    %{
+      "skill_id" => package.skill_id,
+      "name" => package.name,
+      "execution_mode" => package.execution_mode,
+      "tool_name" => package.tool_name
+    }
+  end
+
+  defp finalize_skill_runtime_run(
+         session,
+         initial_message_count,
+         prompt,
+         result,
+         prepared_run,
+         opts,
+         extra \\ []
+       ) do
+    if Keyword.get(opts, :skill_runtime, %{})["enabled"] == true do
+      delta_messages = Enum.drop(session.messages, initial_message_count)
+      tool_messages = Enum.filter(delta_messages, &(Map.get(&1, "role") == "tool"))
+
+      trace = %{
+        run_id: "run_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)),
+        prompt: prompt,
+        selected_packages: Enum.map(prepared_run.selected_packages, &package_metadata/1),
+        tool_messages: tool_messages,
+        result: result,
+        status: Keyword.get(extra, :status, "completed"),
+        inserted_at: DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      _ = SkillRuntime.record_run(trace, opts)
+
+      if Keyword.get(opts, :skill_runtime, %{})["post_run_analysis"] == true do
+        _ = SkillRuntime.evolve(trace, opts)
+      end
+    end
+
+    session
+  end
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
     iter_start = System.monotonic_time(:millisecond)
@@ -752,9 +845,9 @@ defmodule Nex.Agent.Runner do
   defp call_llm(messages, opts) do
     tools =
       case Keyword.get(opts, :tools_filter) do
-        :subagent -> registry_definitions(:subagent)
-        :cron -> registry_definitions(:cron)
-        _ -> registry_definitions(:all)
+        :subagent -> registry_definitions(:subagent, opts)
+        :cron -> registry_definitions(:cron, opts)
+        _ -> registry_definitions(:all, opts)
       end
 
     opts = Keyword.put(opts, :tools, tools)
@@ -769,9 +862,14 @@ defmodule Nex.Agent.Runner do
   # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
   @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
 
-  defp registry_definitions(filter) do
+  defp registry_definitions(filter, opts) do
     if Process.whereis(ToolRegistry) do
-      ToolRegistry.definitions(filter)
+      runtime_tools =
+        opts
+        |> Keyword.get(:skill_runtime_prepared_run, %Nex.SkillRuntime.PreparedRun{})
+        |> Map.get(:ephemeral_tools, [])
+
+      (ToolRegistry.definitions(filter) ++ runtime_tools)
       |> Enum.filter(fn tool ->
         name = tool["name"]
 
@@ -900,56 +998,65 @@ defmodule Nex.Agent.Runner do
   def parse_tool_arguments(args), do: parse_args(args)
 
   defp execute_tool(tool_name, args, ctx) do
-    if Process.whereis(ToolRegistry) do
-      case ToolRegistry.execute(tool_name, args, ctx) do
-        {:ok, result} when is_binary(result) ->
-          result
-
-        {:ok, %{content: content}} when is_binary(content) ->
-          content
-
-        {:ok, %{error: error}} ->
-          "Error: #{error}"
-
-        {:ok, result} when is_map(result) ->
-          Jason.encode!(result, pretty: true)
-
-        {:ok, result} ->
-          render_text(result)
-
-        {:error, reason} ->
-          "Error: #{reason}"
-
-        %{content: content} when is_binary(content) ->
-          Logger.warning(
-            "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-          )
-
-          content
-
-        %{error: error} ->
-          Logger.warning(
-            "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
-          )
-
-          "Error: #{error}"
-
-        result when is_map(result) ->
-          Logger.warning(
-            "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-          )
-
-          Jason.encode!(result, pretty: true)
-
-        result ->
-          Logger.warning(
-            "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
-          )
-
-          render_text(result)
+    if String.starts_with?(tool_name, "skill_run__") do
+      case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
+        {:ok, result} when is_binary(result) -> result
+        {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
+        {:ok, result} -> render_text(result)
+        {:error, reason} -> "Error: #{reason}"
       end
     else
-      "Error: tool registry unavailable"
+      if Process.whereis(ToolRegistry) do
+        case ToolRegistry.execute(tool_name, args, ctx) do
+          {:ok, result} when is_binary(result) ->
+            result
+
+          {:ok, %{content: content}} when is_binary(content) ->
+            content
+
+          {:ok, %{error: error}} ->
+            "Error: #{error}"
+
+          {:ok, result} when is_map(result) ->
+            Jason.encode!(result, pretty: true)
+
+          {:ok, result} ->
+            render_text(result)
+
+          {:error, reason} ->
+            "Error: #{reason}"
+
+          %{content: content} when is_binary(content) ->
+            Logger.warning(
+              "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+            )
+
+            content
+
+          %{error: error} ->
+            Logger.warning(
+              "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
+            )
+
+            "Error: #{error}"
+
+          result when is_map(result) ->
+            Logger.warning(
+              "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+            )
+
+            Jason.encode!(result, pretty: true)
+
+          result ->
+            Logger.warning(
+              "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
+            )
+
+            render_text(result)
+        end
+      else
+        "Error: tool registry unavailable"
+      end
     end
   end
 
@@ -966,7 +1073,9 @@ defmodule Nex.Agent.Runner do
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
       project: Keyword.get(opts, :project),
-      metadata: Keyword.get(opts, :metadata, %{})
+      metadata: Keyword.get(opts, :metadata, %{}),
+      skill_runtime: Keyword.get(opts, :skill_runtime, %{}),
+      skill_runtime_prepared_run: Keyword.get(opts, :skill_runtime_prepared_run)
     }
   end
 
@@ -1144,7 +1253,7 @@ defmodule Nex.Agent.Runner do
 
     %{
       wrote_memory: "memory_write" in used_tools,
-      created_skill: "skill_create" in used_tools,
+      created_skill: "skill_capture" in used_tools,
       used_tools: used_tools,
       tool_call_count: tool_call_count,
       tool_rounds: tool_rounds,

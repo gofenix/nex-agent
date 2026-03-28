@@ -25,17 +25,24 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.MemoryRebuild,
     Nex.Agent.Tool.MemoryWrite,
     Nex.Agent.Tool.UserUpdate,
-    Nex.Agent.Tool.SkillCreate,
-    Nex.Agent.Tool.SkillRead,
+    Nex.Agent.Tool.SkillDiscover,
+    Nex.Agent.Tool.SkillGet,
+    Nex.Agent.Tool.SkillCapture,
+    Nex.Agent.Tool.SkillImport,
+    Nex.Agent.Tool.SkillSync,
     Nex.Agent.Tool.ToolCreate,
     Nex.Agent.Tool.ToolList,
     Nex.Agent.Tool.ToolDelete,
     Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
-    Nex.Agent.Tool.SkillList,
     Nex.Agent.Tool.UpgradeCode,
     Nex.Agent.Tool.Reflect,
     Nex.Agent.Tool.Cron
+  ]
+  @disabled_project_tools [
+    Nex.Agent.Tool.SkillList,
+    Nex.Agent.Tool.SkillRead,
+    Nex.Agent.Tool.SkillCreate
   ]
 
   # Client API
@@ -261,7 +268,8 @@ defmodule Nex.Agent.Tool.Registry do
         filepath = Path.join(tool_dir, file)
 
         case extract_module_name(filepath) do
-          {:ok, module} when module not in @default_tools ->
+          {:ok, module}
+          when module not in @default_tools and module not in @disabled_project_tools ->
             # Try loading compiled beam first; if missing, compile the source file
             case Code.ensure_loaded(module) do
               {:module, _} ->
@@ -438,8 +446,8 @@ defmodule Nex.Agent.Tool.Registry do
     list_dir
     memory_status
     read
-    skill_list
-    skill_read
+    skill_discover
+    skill_get
     web_fetch
     web_search
     write

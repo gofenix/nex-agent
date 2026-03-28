@@ -5,7 +5,7 @@ defmodule Nex.Agent.Workspace do
 
   @default_root Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
 
-  @known_dirs ~w(memory skills tools notes tasks projects executors audit)
+  @known_dirs ~w(memory skills tools notes tasks projects executors audit skill_runtime)
 
   @spec default_root() :: String.t()
   def default_root, do: @default_root
@@ -45,6 +45,9 @@ defmodule Nex.Agent.Workspace do
 
   @spec audit_dir(keyword()) :: String.t()
   def audit_dir(opts \\ []), do: dir("audit", opts)
+
+  @spec skill_runtime_dir(keyword()) :: String.t()
+  def skill_runtime_dir(opts \\ []), do: dir("skill_runtime", opts)
 
   @spec ensure!(keyword()) :: :ok
   def ensure!(opts \\ []) do

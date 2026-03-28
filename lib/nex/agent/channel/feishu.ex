@@ -216,9 +216,14 @@ defmodule Nex.Agent.Channel.Feishu do
       content = Map.get(payload, :content) || Map.get(payload, "content") || ""
 
       case do_patch_card(update_mid, content, state) do
-        {:ok, new_state} -> {:noreply, new_state}
+        {:ok, new_state} ->
+          {:noreply, new_state}
+
         {:error, reason, _new_state} ->
-          Logger.warning("[Feishu] Card PATCH failed (#{update_mid}): #{inspect(reason)}, falling back to new message")
+          Logger.warning(
+            "[Feishu] Card PATCH failed (#{update_mid}): #{inspect(reason)}, falling back to new message"
+          )
+
           case do_send(payload, state) do
             {:ok, s} -> {:noreply, s}
             {:error, _, s} -> {:noreply, s}
@@ -331,7 +336,9 @@ defmodule Nex.Agent.Channel.Feishu do
   @impl true
   def handle_cast({:update_card, message_id, content}, state) do
     case do_patch_card(message_id, content, state) do
-      {:ok, new_state} -> {:noreply, new_state}
+      {:ok, new_state} ->
+        {:noreply, new_state}
+
       {:error, reason, new_state} ->
         Logger.warning("[Feishu] Card update cast failed: #{inspect(reason)}")
         {:noreply, new_state}

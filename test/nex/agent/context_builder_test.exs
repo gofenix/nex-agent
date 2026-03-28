@@ -307,8 +307,9 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
-    assert prompt =~ "skill_list"
-    assert prompt =~ "skill_read"
+    assert prompt =~ "skill_discover"
+    assert prompt =~ "skill_get"
+    assert prompt =~ "skill_capture"
     refute prompt =~ "debug-playbook"
     refute prompt =~ "Never show stack traces to the user."
   end
