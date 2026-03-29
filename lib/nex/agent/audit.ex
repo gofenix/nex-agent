@@ -18,6 +18,7 @@ defmodule Nex.Agent.Audit do
       }
 
     File.write!(audit_file(opts), Jason.encode!(entry) <> "\n", [:append])
+    Nex.Agent.Admin.publish_audit_entry(entry)
     :ok
   end
 

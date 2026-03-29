@@ -114,6 +114,9 @@ defmodule Nex.Agent.ContextBuilder do
     - Use `share_user` with `{"user_id": "..."}`
     - Use `system` only when the user clearly needs a Feishu system message and you know the exact payload.
     - If you do not already have a valid `image_key` or `file_key`, do not guess one.
+    - Lark/Feishu business operations such as Docs, Sheets, Base, Calendar, Tasks, Drive, or search are not built-in tools anymore.
+    - If `lark-cli` is installed, use `bash` to call it for those operations.
+    - If `lark-cli` is missing, surface the shell error and give an installation hint instead of trying old `feishu_*` tool names.
     """
 
     parts ++ [runtime_guidance]

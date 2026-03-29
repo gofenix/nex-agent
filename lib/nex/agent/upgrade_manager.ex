@@ -10,7 +10,7 @@ defmodule Nex.Agent.UpgradeManager do
   use GenServer
   require Logger
 
-  alias Nex.Agent.CodeUpgrade
+  alias Nex.Agent.{Audit, CodeUpgrade}
 
   @core_modules [
     Nex.Agent.Runner,
@@ -39,6 +39,11 @@ defmodule Nex.Agent.UpgradeManager do
     GenServer.call(__MODULE__, {:upgrade, module, code, opts}, 30_000)
   end
 
+  @spec hot_upgrade(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def hot_upgrade(module, code, opts \\ []) do
+    upgrade(module, code, Keyword.put(opts, :persist_git, false))
+  end
+
   @doc """
   Check if a module is a core module.
   """
@@ -62,11 +67,28 @@ defmodule Nex.Agent.UpgradeManager do
 
   defp surgery(module, code, opts) do
     reason = Keyword.get(opts, :reason, "upgrade")
+    persist_git = Keyword.get(opts, :persist_git, true)
+    audit_opts = Keyword.take(opts, [:workspace])
 
     case CodeUpgrade.upgrade_module(module, code, validate: true) do
       {:ok, result} ->
         source_path = get_source_path(module)
-        persist_evolution(module, source_path, reason)
+        if persist_git do
+          persist_evolution(module, source_path, reason)
+        end
+
+        Audit.append(
+          "code.hot_upgraded",
+          %{
+            module: module |> Atom.to_string() |> String.replace_prefix("Elixir.", ""),
+            reason: reason,
+            persist_git: persist_git,
+            version_id: get_in(result, [:version, :id]),
+            restart_required: get_in(result, [:hot_reload, :restart_required]) == true
+          },
+          audit_opts
+        )
+
         {:ok, result}
 
       {:error, error} ->

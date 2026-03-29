@@ -94,6 +94,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute Enum.any?(builtins, &(&1["name"] == "skill_list"))
     refute Enum.any?(builtins, &(&1["name"] == "skill_read"))
     refute Enum.any?(builtins, &(&1["name"] == "skill_create"))
+    refute Enum.any?(builtins, &String.starts_with?(&1["name"], "feishu_"))
   end
 
   test "skills stay discoverable resources instead of expanding into synthetic tools", %{
@@ -136,6 +137,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "skill_list" in names
     refute "skill_read" in names
     refute "skill_create" in names
+    refute Enum.any?(names, &String.starts_with?(&1, "feishu_"))
     assert Enum.count(names, fn name -> name == "skill_message" end) == 1
     refute "skill_code-review" in names
   end
@@ -155,6 +157,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "skill_list" in names
     refute "skill_read" in names
     refute "skill_create" in names
+    refute Enum.any?(names, &String.starts_with?(&1, "feishu_"))
 
     refute "message" in names
     refute "cron" in names

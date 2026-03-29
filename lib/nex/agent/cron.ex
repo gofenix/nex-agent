@@ -6,7 +6,7 @@ defmodule Nex.Agent.Cron do
   use GenServer
   require Logger
 
-  alias Nex.Agent.Workspace
+  alias Nex.Agent.{Audit, Workspace}
 
   @jobs_file "cron_jobs.json"
 
@@ -112,6 +112,7 @@ defmodule Nex.Agent.Cron do
     current = workspace_state(state, workspace)
     {job, jobs} = build_new_job(attrs, current.jobs)
     save_jobs(current.jobs_file, jobs)
+    Audit.append("cron.add", audit_payload(job), workspace: workspace)
 
     {:reply, {:ok, job},
      put_workspace_state(state, workspace, rearm_workspace(%{current | jobs: jobs}, workspace))}
@@ -149,6 +150,7 @@ defmodule Nex.Agent.Cron do
 
         jobs = [updated | remaining]
         save_jobs(current.jobs_file, jobs)
+        Audit.append("cron.update", audit_payload(updated), workspace: workspace)
 
         {:reply, {:ok, updated},
          put_workspace_state(
@@ -160,6 +162,7 @@ defmodule Nex.Agent.Cron do
       {[], _remaining} ->
         {job, jobs} = build_new_job(attrs, current.jobs)
         save_jobs(current.jobs_file, jobs)
+        Audit.append("cron.add", audit_payload(job), workspace: workspace)
 
         {:reply, {:ok, job},
          put_workspace_state(
@@ -179,6 +182,7 @@ defmodule Nex.Agent.Cron do
     case Enum.split_with(current.jobs, &(&1.id == job_id)) do
       {[_], remaining} ->
         save_jobs(current.jobs_file, remaining)
+        Audit.append("cron.remove", %{"id" => job_id}, workspace: workspace)
 
         {:reply, :ok,
          put_workspace_state(
@@ -212,6 +216,11 @@ defmodule Nex.Agent.Cron do
         updated = %{job | enabled: enabled, next_run: next, updated_at: now}
         jobs = [updated | remaining]
         save_jobs(current.jobs_file, jobs)
+        Audit.append(
+          if(enabled, do: "cron.enable", else: "cron.disable"),
+          audit_payload(updated),
+          workspace: workspace
+        )
 
         {:reply, {:ok, updated},
          put_workspace_state(
@@ -240,6 +249,7 @@ defmodule Nex.Agent.Cron do
         now = System.system_time(:second)
         {jobs, deleted?} = update_job_after_run(current.jobs, job.id, now, :ok, nil)
         save_jobs(current.jobs_file, jobs)
+        Audit.append("cron.run", audit_payload(job), workspace: workspace)
 
         updated = Enum.find(jobs, &(&1.id == job_id))
 
@@ -739,6 +749,17 @@ defmodule Nex.Agent.Cron do
 
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  defp audit_payload(%__MODULE__{} = job) do
+    %{
+      "id" => job.id,
+      "name" => job.name,
+      "enabled" => job.enabled,
+      "channel" => job.channel,
+      "chat_id" => job.chat_id,
+      "next_run" => job.next_run
+    }
   end
 
   defp ensure_workspace_loaded(%{workspaces: workspaces} = state, workspace) do

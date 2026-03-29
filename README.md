@@ -261,6 +261,17 @@ mix nex.agent gateway
 
 Other chat apps are currently better configured directly in `~/.nex/agent/config.json`.
 
+### Feishu and Lark CLI
+
+Feishu is still supported as a chat channel.
+
+What changed is the workspace automation surface:
+
+- NexAgent no longer ships built-in `feishu_*` business tools for Docs, Sheets, Base, Calendar, Tasks, Drive, chat administration, or search.
+- For those operations, use the existing `bash` tool with external `lark-cli`.
+- `lark-cli` is not vendored or auto-installed by NexAgent. Install it separately from [larksuite/cli](https://github.com/larksuite/cli).
+- If `lark-cli` is missing, the shell error should be surfaced directly and then followed with an installation hint.
+
 ## Models
 
 NexAgent currently supports:

@@ -310,6 +310,8 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "skill_discover"
     assert prompt =~ "skill_get"
     assert prompt =~ "skill_capture"
+    assert prompt =~ "lark-cli"
+    assert prompt =~ "not built-in tools anymore"
     refute prompt =~ "debug-playbook"
     refute prompt =~ "Never show stack traces to the user."
   end

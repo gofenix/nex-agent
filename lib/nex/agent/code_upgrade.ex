@@ -225,31 +225,56 @@ defmodule Nex.Agent.CodeUpgrade do
       |> CustomTools.name_for_module()
       |> CustomTools.source_path()
     else
+      compile_source = compile_source_path(module)
+
+      if is_binary(compile_source) and File.exists?(compile_source) do
+        compile_source
+      else
+        fallback_source_path(module)
+      end
+    end
+  end
+
+  defp compile_source_path(module) do
+    with {:module, ^module} <- Code.ensure_loaded(module),
+         info when is_list(info) <- module.module_info(:compile) do
+      case Keyword.get(info, :source) do
+        path when is_binary(path) -> path
+        path when is_list(path) -> List.to_string(path)
+        _ -> nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp fallback_source_path(module) do
+    beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
+
+    if beam_path == "" or String.contains?(beam_path, "non_existing") or
+         not File.exists?(beam_path) do
+      module_path =
+        module
+        |> to_string()
+        |> String.replace_prefix("Elixir.", "")
+        |> Macro.underscore()
+
+      possible_paths = [
+        Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
+        Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
+        Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
+      ]
+
+      Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
+    else
       beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
-      if beam_path == "" or String.contains?(beam_path, "non_existing") or
-           not File.exists?(beam_path) do
-        module_path =
-          module
-          |> to_string()
-          |> String.replace_prefix("Elixir.", "")
-          |> Macro.underscore()
-
-        possible_paths = [
-          Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
-          Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
-          Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
-        ]
-
-        Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
-      else
-        beam_path
-        |> Path.rootname(".beam")
-        |> Path.rootname(".ez")
-        |> String.replace("_build/", "lib/")
-        |> String.replace("/ebin/", "/lib/")
-        |> String.replace_suffix("", ".ex")
-      end
+      beam_path
+      |> Path.rootname(".beam")
+      |> Path.rootname(".ez")
+      |> String.replace("_build/", "lib/")
+      |> String.replace("/ebin/", "/lib/")
+      |> String.replace_suffix("", ".ex")
     end
   end
 

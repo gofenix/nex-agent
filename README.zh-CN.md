@@ -263,6 +263,17 @@ mix nex.agent gateway
 
 其他聊天应用当前更适合直接编辑 `~/.nex/agent/config.json` 完成配置。
 
+### Feishu 与 Lark CLI
+
+Feishu 仍然支持作为聊天通道接入。
+
+这次收口的是业务操作层：
+
+- NexAgent 不再内置 `feishu_*` 这类 Docs、Sheets、Base、Calendar、Tasks、Drive、聊天管理或搜索工具。
+- 如果要做这些 Lark/Feishu 业务操作，统一通过现有 `bash` tool 调外部 `lark-cli`。
+- `lark-cli` 不会随 NexAgent 一起 vendoring 或自动安装；请单独从 [larksuite/cli](https://github.com/larksuite/cli) 安装。
+- 如果机器上没有 `lark-cli`，应直接保留 shell 错误，并给出安装提示，而不是再尝试旧的 `feishu_*` 工具名。
+
 ## Models
 
 NexAgent 当前支持以下 provider:

@@ -399,6 +399,7 @@ defmodule Nex.Agent.Onboarding do
 
     Prefer runtime skill packages for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
+    For Lark/Feishu business operations beyond chat messaging, use `bash` with external `lark-cli` instead of expecting built-in `feishu_*` tools.
 
     ## Six-Layer Evolution
 
@@ -471,6 +472,7 @@ defmodule Nex.Agent.Onboarding do
     - Use `skill_capture` to save a reusable local knowledge package.
     - Use `skill_import` and `skill_sync` for trusted package skills managed by the runtime.
     - Use tools for executable capabilities; use skills for reusable guidance.
+    - Feishu chat messaging still uses `message`; Lark Docs/Sheets/Base/Calendar/Tasks/Drive/search should go through `bash` + `lark-cli` when available.
     """
   end
 

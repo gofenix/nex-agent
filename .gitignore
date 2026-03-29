@@ -3,8 +3,10 @@ _build/
 _build/dev/
 /cover/
 /deps/
+/console/deps/
 /doc/
 /.fetch
+/console/_build/
 
 # BEAM and Erlang files
 *.ez
