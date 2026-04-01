@@ -6,11 +6,12 @@ defmodule NexAgentConsole.Pages.Runtime do
 
   def mount(_params) do
     %{
-      title: "NexAgent Console | Runtime",
-      eyebrow: "Runtime",
-      subtitle: "Gateway、Heartbeat、服务健康与工作区结构。",
+      title: "NexAgent Console | 运行时",
+      subtitle: "运行时页只负责 gateway、services 和 heartbeat 的操作与健康检查。",
       current_path: "/runtime",
-      panel_path: "/api/admin/panels/runtime"
+      panel_path: "/api/admin/panels/runtime",
+      primary_action_label: "进入进化台",
+      primary_action_href: "/evolution"
     }
   end
 
@@ -19,22 +20,22 @@ defmodule NexAgentConsole.Pages.Runtime do
   def start_gateway(_req) do
     case Admin.start_gateway() do
       :ok ->
-        AdminUI.notice(%{title: "Gateway started", body: "runtime is now live", tone: "ok"})
+        AdminUI.notice(%{title: "网关已启动", body: "runtime is now live", tone: "ok"})
         |> trigger("admin-event", %{topic: "runtime", summary: "Gateway started"})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Start failed", body: inspect(reason), tone: "danger"})
+        AdminUI.notice(%{title: "启动失败", body: inspect(reason), tone: "danger"})
     end
   end
 
   def stop_gateway(_req) do
     case Admin.stop_gateway() do
       :ok ->
-        AdminUI.notice(%{title: "Gateway stopped", body: "runtime stopped", tone: "warn"})
+        AdminUI.notice(%{title: "网关已停止", body: "runtime stopped", tone: "warn"})
         |> trigger("admin-event", %{topic: "runtime", summary: "Gateway stopped"})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Stop failed", body: inspect(reason), tone: "danger"})
+        AdminUI.notice(%{title: "停止失败", body: inspect(reason), tone: "danger"})
     end
   end
 end

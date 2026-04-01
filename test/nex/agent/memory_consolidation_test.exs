@@ -23,20 +23,43 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     {:ok, workspace: workspace}
   end
 
-  test "consolidation fails when save_memory payload is missing required fields", %{
+  test "consolidation raw-archives after three failed save_memory payloads", %{
     workspace: workspace
   } do
     session = build_session()
+
+    failing_call = fn _, _ -> {:ok, %{"history_entry" => "history only"}} end
 
     assert {:error, reason} =
              Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
                archive_all: true,
                workspace: workspace,
-               llm_call_fun: fn _, _ -> {:ok, %{"history_entry" => "history only"}} end
+               llm_call_fun: failing_call
              )
 
     assert reason =~ "memory_update"
-    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) == ""
+
+    assert {:error, reason} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: failing_call
+             )
+
+    assert reason =~ "memory_update"
+
+    assert {:ok, updated_session} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: failing_call
+             )
+
+    assert updated_session.last_consolidated == length(session.messages)
+    history = File.read!(Path.join(workspace, "memory/HISTORY.md"))
+    assert history =~ "[RAW] 2 messages"
+    assert history =~ "USER: first"
+    assert history =~ "ASSISTANT: second"
     assert Memory.read_long_term(workspace: workspace) == "# Long-term Memory\n"
   end
 
@@ -63,7 +86,7 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Captured fact"
   end
 
-  test "consolidation works without tool_choice for anthropic provider", %{
+  test "consolidation forces save_memory tool_choice", %{
     workspace: workspace
   } do
     parent = self()
@@ -98,8 +121,7 @@ defmodule Nex.Agent.MemoryConsolidationTest do
              )
 
     assert_receive {:llm_opts, opts}
-    # tool_choice is now nil for all providers
-    refute opts[:tool_choice]
+    assert opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
     assert updated_session.last_consolidated == length(session.messages)
 
     assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~

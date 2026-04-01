@@ -120,7 +120,6 @@ defmodule Nex.SkillRuntime.Package do
     [
       package.name,
       package.manifest.description,
-      package.manifest.content,
       Enum.join(package.manifest.dependencies || [], " "),
       Enum.join(package.manifest.allowed_tools || [], " ")
     ]

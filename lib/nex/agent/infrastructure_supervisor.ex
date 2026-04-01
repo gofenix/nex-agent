@@ -17,6 +17,7 @@ defmodule Nex.Agent.InfrastructureSupervisor do
       Nex.Agent.Bus,
       Nex.Agent.Tool.Registry,
       Nex.Agent.MCP.ServerManager,
+      Nex.Agent.MemoryUpdater,
       Nex.Agent.Cron,
       Nex.Agent.Heartbeat
     ]

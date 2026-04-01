@@ -94,13 +94,13 @@ defmodule Nex.Agent.Session do
   end
 
   @doc """
-  Get history for LLM - unconsolidated messages, aligned to user turn.
+  Get recent history for LLM, aligned to a user turn boundary.
   """
   @spec get_history(t(), non_neg_integer()) :: [map()]
   def get_history(%__MODULE__{} = session, max_messages \\ 500) do
-    unconsolidated = Enum.drop(session.messages, session.last_consolidated)
-    sliced = Enum.take(unconsolidated, -max_messages)
-    slice_start = max(length(unconsolidated) - length(sliced), 0)
+    all_messages = session.messages
+    sliced = Enum.take(all_messages, -max_messages)
+    slice_start = max(length(all_messages) - length(sliced), 0)
 
     # Align to start of a complete turn (user message).
     # Drop leading assistant/tool messages that are mid-turn fragments.
@@ -113,7 +113,7 @@ defmodule Nex.Agent.Session do
           {Enum.drop(sliced, idx), slice_start + idx}
       end
 
-    unconsolidated
+    all_messages
     |> repair_leading_tool_boundary(aligned, aligned_start)
     |> Enum.map(&sanitize_history_entry/1)
   end
@@ -247,7 +247,11 @@ defmodule Nex.Agent.Session do
     end
   end
 
-  defp load_from_path(path, key) do
+  @doc false
+  @spec load_from_path(String.t(), String.t() | nil) :: t() | nil
+  def load_from_path(path, fallback_key \\ nil)
+
+  def load_from_path(path, fallback_key) when is_binary(path) do
     case File.read(path) do
       {:ok, content} ->
         lines = String.split(content, "\n", trim: true)
@@ -272,6 +276,8 @@ defmodule Nex.Agent.Session do
               %{}
           end
 
+        key = Map.get(meta, "key") || fallback_key || fallback_session_key(path)
+
         parsed_messages =
           messages
           |> Enum.map(&Jason.decode/1)
@@ -293,6 +299,12 @@ defmodule Nex.Agent.Session do
       _ ->
         nil
     end
+  end
+
+  defp fallback_session_key(path) do
+    path
+    |> Path.dirname()
+    |> Path.basename()
   end
 
   defp safe_filename(key) do

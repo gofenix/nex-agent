@@ -13,13 +13,10 @@ defmodule Nex.Agent.MemoryRebuildTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Long-term Memory\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "# Conversation History Log\n")
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Skills.load()
 
-    if Process.whereis(SessionManager) == nil do
-      start_supervised!({SessionManager, name: SessionManager})
-    end
+    start_or_restart_supervised!({SessionManager, name: SessionManager})
 
     key = "memory-rebuild:#{System.unique_integer([:positive])}"
 
@@ -39,7 +36,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
     {:ok, workspace: workspace, key: key}
   end
 
-  test "memory_rebuild performs archive_all consolidation and persists progress", %{
+  test "memory_rebuild reprocesses full session history into MEMORY.md", %{
     workspace: workspace,
     key: key
   } do
@@ -69,11 +66,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\nBatch 2 fact.\n"
         end
 
-      {:ok,
-       %{
-         "history_entry" => "[2026-03-15 11:0#{batch}] Rebuilt batch #{batch}.",
-         "memory_update" => memory_update
-       }}
+      {:ok, %{"status" => "update", "memory_update" => memory_update}}
     end
 
     assert {:ok, result} =
@@ -107,24 +100,16 @@ defmodule Nex.Agent.MemoryRebuildTest do
 
     refute Memory.read_long_term(workspace: workspace) =~
              "Existing workspace memory should not seed rebuild batches."
-
-    history = File.read!(Path.join(workspace, "memory/HISTORY.md"))
-    assert history =~ "Rebuilt batch 1."
-    assert history =~ "Rebuilt batch 2."
   end
 
-  test "memory_rebuild leaves workspace memory and history untouched when a later batch fails", %{
+  test "memory_rebuild leaves workspace memory untouched when a later batch fails", %{
     workspace: workspace,
     key: key
   } do
     original_memory =
       "# Long-term Memory\n\n## Existing Facts\nOriginal memory must survive failed rebuilds.\n"
 
-    original_history =
-      "# Conversation History Log\n\n[2026-03-15 09:00] Original history must survive failed rebuilds.\n"
-
     File.write!(Path.join(workspace, "memory/MEMORY.md"), original_memory)
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), original_history)
     parent = self()
     Process.delete(:memory_rebuild_failure_batch)
 
@@ -147,7 +132,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
                      1 ->
                        {:ok,
                         %{
-                          "history_entry" => "[2026-03-15 12:00] Temporary rebuild batch 1.",
+                          "status" => "update",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nTemporary rebuild fact.\n"
                         }}
@@ -166,7 +151,6 @@ defmodule Nex.Agent.MemoryRebuildTest do
     refute second_prompt =~ "Original memory must survive failed rebuilds."
 
     assert Memory.read_long_term(workspace: workspace) == original_memory
-    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) == original_history
 
     reloaded = Session.load(key, workspace: workspace)
     assert reloaded.last_consolidated == 1
@@ -197,7 +181,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
 
                        {:ok,
                         %{
-                          "history_entry" => "[2026-03-15 13:00] Rebuild batch 1.",
+                          "status" => "update",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\n"
                         }}
@@ -216,8 +200,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
 
                        {:ok,
                         %{
-                          "history_entry" =>
-                            "[2026-03-15 13:01] Rebuild batch 2 recovered via fallback.",
+                          "status" => "update",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\nBatch 2 fact.\n"
                         }}
@@ -234,10 +217,13 @@ defmodule Nex.Agent.MemoryRebuildTest do
 
     assert result["last_consolidated_after"] == 4
     assert Memory.read_long_term(workspace: workspace) =~ "Batch 2 fact."
+  end
 
-    history = File.read!(Path.join(workspace, "memory/HISTORY.md"))
-    assert history =~ "Rebuild batch 1."
-    assert history =~ "recovered via fallback"
+  defp start_or_restart_supervised!(child_spec) do
+    case start_supervised(child_spec) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
+    end
   end
 
   defp build_messages do
@@ -255,7 +241,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
     prompt = List.last(messages)["content"]
 
     [_, block] =
-      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation Segment/s, prompt)
 
     String.trim(block)
   end

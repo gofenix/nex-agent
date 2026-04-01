@@ -7,8 +7,7 @@ defmodule Nex.Agent.Runner do
     Bus,
     ContextBuilder,
     Memory,
-    Session,
-    SessionManager
+    Session
   }
 
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
@@ -19,7 +18,6 @@ defmodule Nex.Agent.Runner do
   @memory_window 50
   @max_tool_result_length 8000
   @tool_hint_preview_length 220
-  @memory_nudge_interval 6
   @memory_flush_min_messages 12
   @skill_complexity_tool_calls 4
   @skill_complexity_tool_rounds 2
@@ -41,17 +39,9 @@ defmodule Nex.Agent.Runner do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
-    api_key = Keyword.get(opts, :api_key)
-    base_url = Keyword.get(opts, :base_url)
     workspace = Keyword.get(opts, :workspace)
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
-
-    # Automatic consolidation disabled — trigger manually if needed
-    session =
-      if Keyword.get(opts, :force_consolidation, false),
-        do: maybe_consolidate_memory(session, provider, model, api_key, base_url, opts),
-        else: session
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
@@ -118,162 +108,15 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp maybe_consolidate_memory(session, provider, model, api_key, base_url, opts) do
-    workspace_opts = workspace_opts(opts)
-
-    case SessionManager.start_consolidation(session.key, @memory_window, workspace_opts) do
-      {:ok, consolidation_session, unconsolidated} ->
-        Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
-
-        Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-          result =
-            try do
-              _ =
-                maybe_flush_memory_before_consolidation(
-                  consolidation_session,
-                  provider,
-                  model,
-                  api_key,
-                  base_url,
-                  opts
-                )
-
-              Memory.consolidate(consolidation_session, provider, model,
-                api_key: api_key,
-                base_url: base_url,
-                memory_window: @memory_window,
-                workspace: Keyword.get(opts, :workspace),
-                req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun)
-              )
-            rescue
-              error ->
-                {:error, {:exception, Exception.message(error)}}
-            catch
-              kind, reason ->
-                {:error, {kind, reason}}
-            end
-
-          case result do
-            {:ok, updated_session} ->
-              SessionManager.finish_consolidation(updated_session, workspace_opts)
-
-              Logger.info(
-                "[Runner] Async memory consolidation saved last_consolidated=#{updated_session.last_consolidated}"
-              )
-
-            {:error, reason} ->
-              SessionManager.cancel_consolidation(consolidation_session.key, workspace_opts)
-              Logger.warning("[Runner] Async memory consolidation failed: #{inspect(reason)}")
-          end
-        end)
-
-        consolidation_session
-
-      :already_running ->
-        Logger.info("[Runner] Skipping memory consolidation: already in progress")
-        session
-
-      :below_threshold ->
-        session
-    end
-  end
-
   defp prepare_evolution_turn(session, prompt, _opts) do
-    metadata = evolution_metadata(session)
-    turns_since_memory = metadata["turns_since_memory_write"] || 0
-    turns_for_this_request = turns_since_memory + 1
-    pending_skill_nudge = metadata["pending_skill_nudge"] == true
-
-    runtime_system_messages =
-      []
-      |> maybe_add_memory_nudge(turns_for_this_request)
-      |> maybe_add_skill_nudge(pending_skill_nudge)
-
-    updated_metadata =
-      metadata
-      |> Map.put("turns_since_memory_write", turns_for_this_request)
-      |> Map.put("pending_skill_nudge", false)
+    metadata =
+      evolution_metadata(session)
       |> Map.put("last_prompt", prompt)
 
-    {put_evolution_metadata(session, updated_metadata), runtime_system_messages}
+    {put_evolution_metadata(session, metadata), []}
   end
 
-  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace) do
-    delta_messages = Enum.drop(session.messages, initial_message_count)
-    signals = collect_evolution_signals(delta_messages, prompt)
-    metadata = evolution_metadata(session)
-    wrote_memory = signals.wrote_memory
-    created_skill = signals.created_skill
-
-    updated_metadata =
-      metadata
-      |> Map.put(
-        "turns_since_memory_write",
-        if(wrote_memory, do: 0, else: Map.get(metadata, "turns_since_memory_write", 0))
-      )
-      |> Map.put("last_complex_task", signals.complex_task)
-      |> Map.put("last_tool_call_count", signals.tool_call_count)
-      |> Map.put("last_tool_rounds", signals.tool_rounds)
-      |> Map.put(
-        "pending_skill_nudge",
-        signals.complex_task and not created_skill
-      )
-
-    # Record evolution signals for the Evolution module
-    maybe_record_evolution_signal(signals, prompt, workspace)
-
-    put_evolution_metadata(session, updated_metadata)
-  end
-
-  defp maybe_record_evolution_signal(signals, prompt, workspace) do
-    if signals.correction_hint or signals.tool_errors > 0 do
-      Nex.Agent.Evolution.record_signal(
-        %{
-          source: "runner",
-          signal:
-            cond do
-              signals.correction_hint and signals.tool_errors > 0 ->
-                "User correction with #{signals.tool_errors} tool error(s): #{String.slice(prompt, 0, 200)}"
-
-              signals.correction_hint ->
-                "User correction: #{String.slice(prompt, 0, 200)}"
-
-              true ->
-                "#{signals.tool_errors} tool error(s) during: #{String.slice(prompt, 0, 200)}"
-            end,
-          context: %{
-            tool_errors: signals.tool_errors,
-            correction: signals.correction_hint,
-            tools_used: signals.used_tools |> Enum.uniq()
-          }
-        },
-        workspace: workspace
-      )
-    end
-  end
-
-  defp maybe_add_memory_nudge(messages, turns_since_memory_write) do
-    if turns_since_memory_write >= @memory_nudge_interval and
-         rem(turns_since_memory_write, @memory_nudge_interval) == 0 do
-      messages ++
-        [
-          "[Runtime Evolution Nudge] Several exchanges have passed without a memory update. " <>
-            "If this session revealed durable user profile facts, use user_update. " <>
-            "If it revealed durable environment or project conventions, use memory_write."
-        ]
-    else
-      messages
-    end
-  end
-
-  defp maybe_add_skill_nudge(messages, true) do
-    messages ++
-      [
-        "[Runtime Evolution Nudge] The previous task was complex. If you discovered a reusable workflow, troubleshooting path, or corrected multi-step procedure, decide whether to save it with skill_capture."
-      ]
-  end
-
-  defp maybe_add_skill_nudge(messages, _), do: messages
+  defp finalize_evolution_turn(session, _initial_message_count, _prompt, _workspace), do: session
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
     case SkillRuntime.prepare_run(prompt, opts) do
@@ -284,6 +127,8 @@ defmodule Nex.Agent.Runner do
             "ephemeral_tools" => Enum.map(prepared_run.ephemeral_tools, &Map.get(&1, "name"))
           })
 
+        skill_guard = selected_skill_guard(prepared_run.selected_packages)
+
         warnings =
           case prepared_run.availability_warnings do
             [] -> []
@@ -291,7 +136,8 @@ defmodule Nex.Agent.Runner do
           end
 
         {%{session | metadata: metadata},
-         runtime_system_messages ++ prepared_run.prompt_fragments ++ warnings, prepared_run}
+         runtime_system_messages ++ skill_guard ++ prepared_run.prompt_fragments ++ warnings,
+         prepared_run}
 
       {:error, reason} ->
         Logger.warning("[Runner] SkillRuntime prepare_run failed: #{reason}")
@@ -306,6 +152,24 @@ defmodule Nex.Agent.Runner do
       "execution_mode" => package.execution_mode,
       "tool_name" => package.tool_name
     }
+  end
+
+  defp selected_skill_guard([]), do: []
+
+  defp selected_skill_guard(packages) do
+    names =
+      packages
+      |> Enum.map(& &1.name)
+      |> Enum.join(", ")
+
+    [
+      "[Skill Runtime] Selected skill packages for this turn are authoritative: #{names}. " <>
+        "Follow their workflow exactly. Do not replace a concrete skill-specified command, " <>
+        "renderer, output path, or delivery step with an ad-hoc bash/python/html workaround. " <>
+        "Only use a fallback after you actually attempted the primary path and observed it fail. " <>
+        "If a selected skill says to deliver an image/file/artifact, send that artifact instead " <>
+        "of a descriptive text summary whenever the primary step succeeded."
+    ]
   end
 
   defp finalize_skill_runtime_run(

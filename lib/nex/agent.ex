@@ -2,6 +2,7 @@ defmodule Nex.Agent do
   @moduledoc false
 
   alias Nex.Agent.{
+    MemoryUpdater,
     Onboarding,
     Runner,
     Session,
@@ -92,6 +93,7 @@ defmodule Nex.Agent do
     skip_consolidation = Keyword.get(opts, :skip_consolidation, false)
     metadata = Keyword.get(opts, :metadata, %{})
     project = Keyword.get(opts, :project)
+    schedule_memory_refresh = Keyword.get(opts, :schedule_memory_refresh, true)
 
     session =
       if skip_consolidation do
@@ -125,6 +127,8 @@ defmodule Nex.Agent do
       |> maybe_put(:tools_filter, tools_filter)
       |> maybe_put(:media, media)
       |> maybe_put(:llm_client, Keyword.get(opts, :llm_client))
+      |> maybe_put(:llm_call_fun, Keyword.get(opts, :llm_call_fun))
+      |> maybe_put(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
       |> maybe_put(:history_limit, Keyword.get(opts, :history_limit))
       |> maybe_put(:skip_consolidation, Keyword.get(opts, :skip_consolidation))
       |> maybe_put(:skip_skills, Keyword.get(opts, :skip_skills))
@@ -132,10 +136,12 @@ defmodule Nex.Agent do
     case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
+        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
         {:ok, result, %{agent | session: session, workspace: workspace, cwd: cwd}}
 
       {:error, reason, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
+        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
         {:error, reason, %{agent | session: session, workspace: workspace, cwd: cwd}}
     end
   end
@@ -184,4 +190,20 @@ defmodule Nex.Agent do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp maybe_enqueue_memory_refresh(_session, false, _skip_consolidation, _runner_opts), do: :ok
+  defp maybe_enqueue_memory_refresh(_session, _schedule, true, _runner_opts), do: :ok
+
+  defp maybe_enqueue_memory_refresh(session, true, false, runner_opts) do
+    MemoryUpdater.enqueue(
+      session,
+      provider: Keyword.get(runner_opts, :provider),
+      model: Keyword.get(runner_opts, :model),
+      api_key: Keyword.get(runner_opts, :api_key),
+      base_url: Keyword.get(runner_opts, :base_url),
+      workspace: Keyword.get(runner_opts, :workspace),
+      req_llm_generate_text_fun: Keyword.get(runner_opts, :req_llm_generate_text_fun),
+      llm_call_fun: Keyword.get(runner_opts, :llm_call_fun)
+    )
+  end
 end

@@ -11,7 +11,7 @@ defmodule Nex.Agent.Tool.Message do
     %{
       name: "message",
       description:
-        "Send a message to the user. Use this when you want to communicate something immediately. For Feishu, you can send structured native message types by providing msg_type plus content_json.",
+        "Send a message to the user. Use this when you want to communicate something immediately. For Feishu, you can send structured native message types by providing msg_type plus content_json, upload and send a local PNG/JPEG via local_image_path, or provide both content and local_image_path to send a short text followed by the image.",
       parameters: %{
         type: "object",
         properties: %{
@@ -25,6 +25,11 @@ defmodule Nex.Agent.Tool.Message do
             type: ["object", "string"],
             description:
               "Optional structured message payload. For Feishu this should be the raw content JSON object/string for the specified msg_type. Examples: image => {image_key}, file/audio/media/sticker => {file_key}, share_chat => {chat_id}, share_user => {user_id}, text => {text}, system => {type, params}."
+          },
+          local_image_path: %{
+            type: "string",
+            description:
+              "Optional absolute or workspace-relative path to a local image file. For Feishu, the runtime uploads it and sends a native image message. If content or content_json is also present, Feishu sends that message first and then the image."
           },
           receive_id_type: %{
             type: "string",
@@ -41,7 +46,8 @@ defmodule Nex.Agent.Tool.Message do
             description: "Target chat/user ID. Defaults to current chat."
           }
         },
-        required: ["content"]
+        description: "Provide at least one of content, content_json, or local_image_path.",
+        required: []
       }
     }
   end
@@ -55,9 +61,12 @@ defmodule Nex.Agent.Tool.Message do
     chat_id = Map.get(args, "chat_id") || Map.get(ctx, :chat_id, "")
     msg_type = Map.get(args, "msg_type")
     content_json = Map.get(args, "content_json")
+    local_image_path = Map.get(args, "local_image_path")
     receive_id_type = Map.get(args, "receive_id_type")
+    has_local_image = is_binary(local_image_path) and local_image_path != ""
+    has_message_payload = present_message_payload?(content, content_json)
 
-    if content || content_json do
+    if has_message_payload || has_local_image do
       topic =
         case channel do
           "telegram" -> :telegram_outbound
@@ -82,14 +91,97 @@ defmodule Nex.Agent.Tool.Message do
 
       Logger.info("Message Tool Publishing to #{topic}: #{inspect(payload)}")
 
-      Nex.Agent.Bus.publish(topic, payload)
+      case channel do
+        "feishu" ->
+          cond do
+            has_local_image and has_message_payload ->
+              if Process.whereis(Nex.Agent.Channel.Feishu) do
+                with :ok <-
+                       Nex.Agent.Channel.Feishu.deliver_message(
+                         chat_id,
+                         content,
+                         feishu_companion_metadata(metadata)
+                       ),
+                     :ok <-
+                       Nex.Agent.Channel.Feishu.deliver_local_image(
+                         chat_id,
+                         local_image_path,
+                         metadata
+                       ) do
+                  {:ok,
+                   %{
+                     sent: true,
+                     channel: channel,
+                     chat_id: chat_id,
+                     delivered: ["message", "image"]
+                   }}
+                else
+                  {:error, reason} ->
+                    {:error, "Feishu text+image send failed: #{inspect(reason)}"}
+                end
+              else
+                {:error, "Feishu text+image send requires the Feishu channel process to be running"}
+              end
 
-      {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+            has_local_image ->
+              if Process.whereis(Nex.Agent.Channel.Feishu) do
+                case Nex.Agent.Channel.Feishu.deliver_local_image(
+                       chat_id,
+                       local_image_path,
+                       metadata
+                     ) do
+                  :ok ->
+                    {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+
+                  {:error, reason} ->
+                    {:error, "Feishu image send failed: #{inspect(reason)}"}
+                end
+              else
+                {:error, "Feishu image send requires the Feishu channel process to be running"}
+              end
+
+            Process.whereis(Nex.Agent.Channel.Feishu) ->
+              case Nex.Agent.Channel.Feishu.deliver_message(chat_id, content, metadata) do
+                :ok ->
+                  {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+
+                {:error, reason} ->
+                  {:error, "Feishu send failed: #{inspect(reason)}"}
+              end
+
+            true ->
+              Nex.Agent.Bus.publish(topic, payload)
+              {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+          end
+
+        _ ->
+          if is_binary(local_image_path) and local_image_path != "" do
+            {:error, "local_image_path is currently only supported for Feishu"}
+          else
+            Nex.Agent.Bus.publish(topic, payload)
+            {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+          end
+      end
     else
-      {:error, "content or content_json is required"}
+      {:error, "content, content_json, or local_image_path is required"}
     end
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp present_message_payload?(content, content_json) do
+    (is_binary(content) and String.trim(content) != "") or not is_nil(content_json)
+  end
+
+  defp feishu_companion_metadata(metadata) do
+    msg_type = Map.get(metadata, "msg_type")
+    content_json = Map.get(metadata, "content_json")
+
+    if (is_nil(msg_type) or msg_type == "") and is_nil(content_json) do
+      Map.put(metadata, "msg_type", "text")
+    else
+      metadata
+    end
+  end
 end

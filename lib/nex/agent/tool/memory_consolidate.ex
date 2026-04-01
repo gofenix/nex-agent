@@ -3,23 +3,22 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.{Memory, Session, SessionManager}
+  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager}
 
   @default_model "claude-sonnet-4-20250514"
-  @memory_window 50
 
   def name, do: "memory_consolidate"
 
   def description do
     """
-    Immediately run normal memory consolidation for the current session.
+    Immediately run a memory refresh for the current session.
 
-    Use this when the user explicitly asks to trigger or run memory consolidation now:
-    - "trigger memory consolidation" / "run memory consolidation"
-    - "触发记忆整理" / "现在整理记忆"
+    Use this when the user explicitly asks to trigger memory refresh now:
+    - "trigger memory refresh" / "refresh memory now"
+    - "立即更新记忆" / "现在刷新记忆"
 
     This is not a full rebuild. Use `memory_status` to only check status.
-    Use `memory_rebuild` only for a full rebuild of MEMORY.md and HISTORY.md from the full session history.
+    Use `memory_rebuild` only for a full rebuild of MEMORY.md from the full session history.
     """
   end
 
@@ -59,92 +58,52 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
         derive_session_key(ctx)
 
     with {:ok, session_key} <- validate_session_key(session_key) do
-      session_opts = workspace_opts(workspace)
+      case fetch_session(session_key, workspace) do
+        nil ->
+          {:error, "Session not found: #{session_key}"}
 
-      case SessionManager.start_explicit_consolidation(session_key, session_opts) do
-        {:ok, session, _unconsolidated} ->
-          case consolidation_reason(session, @memory_window) do
-            nil ->
-              opts =
-                [
-                  api_key: api_key,
-                  base_url: base_url,
-                  memory_window: @memory_window,
-                  workspace: workspace
-                ]
-                |> maybe_put(:llm_call_fun, llm_call_fun)
-                |> maybe_put(:req_llm_generate_text_fun, req_llm_generate_text_fun)
+        session ->
+          updater = MemoryUpdater.status(session_key, workspace: workspace)
 
-              result =
-                try do
-                  Memory.consolidate(session, provider, model, opts)
-                rescue
-                  error ->
-                    {:error, {:exception, Exception.message(error)}}
-                catch
-                  kind, reason ->
-                    {:error, {kind, reason}}
-                end
+          if updater["status"] in ["running", "queued"] do
+            {:ok,
+             result_payload(
+               session_key,
+               "already_running",
+               "memory_refresh_#{updater["status"]}",
+               session,
+               session,
+               workspace
+             )}
+          else
+            opts =
+              [
+                api_key: api_key,
+                base_url: base_url,
+                workspace: workspace
+              ]
+              |> maybe_put(:llm_call_fun, llm_call_fun)
+              |> maybe_put(:req_llm_generate_text_fun, req_llm_generate_text_fun)
 
-              case result do
-                {:ok, updated_session} ->
-                  SessionManager.finish_consolidation(updated_session, session_opts)
+            case Memory.refresh(session, provider, model, opts) do
+              {:ok, updated_session, refresh_status} ->
+                SessionManager.save_sync(updated_session, workspace: workspace)
 
-                  status =
-                    if updated_session.last_consolidated > session.last_consolidated,
-                      do: "consolidated",
-                      else: "noop"
+                {:ok,
+                 result_payload(
+                   session_key,
+                   if(refresh_status == :updated, do: "refreshed", else: "noop"),
+                   if(refresh_status == :updated, do: "ok", else: "no_new_memory"),
+                   session,
+                   updated_session,
+                   workspace
+                 )}
 
-                  reason =
-                    if status == "consolidated",
-                      do: "ok",
-                      else: consolidation_reason(updated_session, @memory_window) || "ok"
-
-                  {:ok,
-                   result_payload(
-                     session_key,
-                     status,
-                     reason,
-                     session,
-                     updated_session,
-                     workspace
-                   )}
-
-                {:error, reason} ->
-                  SessionManager.cancel_consolidation(session_key, session_opts)
-                  {:error, reason}
-              end
-
-            reason ->
-              SessionManager.cancel_consolidation(session_key, session_opts)
-              {:ok, result_payload(session_key, "noop", reason, session, session, workspace)}
+              {:error, reason} ->
+                {:error, reason}
+            end
           end
-
-        :already_running ->
-          session = fetch_session(session_key, workspace)
-          session = session || Session.new(session_key)
-
-          {:ok,
-           result_payload(
-             session_key,
-             "already_running",
-             "consolidation_in_progress",
-             session,
-             session,
-             workspace
-           )}
       end
-    end
-  end
-
-  defp consolidation_reason(%Session{} = session, memory_window) do
-    keep_count = div(memory_window, 2)
-    unconsolidated = max(length(session.messages) - session.last_consolidated, 0)
-
-    cond do
-      unconsolidated <= 0 -> "no_unconsolidated_messages"
-      length(session.messages) <= keep_count -> "below_keep_window"
-      true -> nil
     end
   end
 
@@ -153,10 +112,9 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
       "session_key" => session_key,
       "status" => status,
       "reason" => reason,
-      "last_consolidated_before" => before_session.last_consolidated,
-      "last_consolidated_after" => after_session.last_consolidated,
-      "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace)),
-      "history_bytes" => history_bytes(workspace)
+      "last_reviewed_before" => before_session.last_consolidated,
+      "last_reviewed_after" => after_session.last_consolidated,
+      "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace))
     }
   end
 
@@ -169,14 +127,6 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
       Session.load(session_key, session_opts)
     end
   end
-
-  defp history_bytes(workspace) do
-    path = Path.join(memory_dir(workspace), "HISTORY.md")
-    if File.exists?(path), do: File.stat!(path).size, else: 0
-  end
-
-  defp memory_dir(nil), do: Path.join(Memory.workspace_path(), "memory")
-  defp memory_dir(workspace), do: Path.join(workspace, "memory")
 
   defp validate_session_key(nil), do: {:error, "session_key is required"}
   defp validate_session_key(""), do: {:error, "session_key is required"}

@@ -15,6 +15,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
   @openrouter_referer "https://nex.dev"
   @openrouter_title "Nex Agent"
   @chat_timeout 180_000
+  @ollama_placeholder_api_key "ollama"
 
   def chat(messages, options) do
     model_spec = resolve_model(options)
@@ -141,7 +142,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
     {api_key, should_include_api_key} =
       case provider do
-        :ollama -> {"", true}
+        # ReqLLM resolves Ollama through its OpenAI-compatible provider path.
+        # Passing an empty string triggers OPENAI_API_KEY validation before the
+        # request ever reaches the local Ollama base_url, so use a stable
+        # placeholder credential instead.
+        :ollama -> {@ollama_placeholder_api_key, true}
         _ -> {options[:api_key], present?(options[:api_key])}
       end
 

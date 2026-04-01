@@ -1,6 +1,8 @@
 defmodule Nex.Agent.Admin do
   @moduledoc false
 
+  require Logger
+
   alias Nex.Agent.{
     Admin.Event,
     Audit,
@@ -19,6 +21,7 @@ defmodule Nex.Agent.Admin do
     Workspace
   }
 
+  alias Nex.Agent.Tool.{CustomTools, Registry}
   alias Nex.SkillRuntime.Store
 
   @event_topic :admin_events
@@ -76,7 +79,6 @@ defmodule Nex.Agent.Admin do
     %{
       runtime: runtime_state(opts),
       recent_events: recent_events(limit: 12, workspace: workspace(opts)),
-      pending_signals: Evolution.read_signals(workspace_opts(opts)),
       skills: skills_summary(opts),
       tasks: tasks_summary(opts),
       recent_sessions: Enum.take(list_sessions(opts), 6),
@@ -92,10 +94,12 @@ defmodule Nex.Agent.Admin do
       workspace: workspace,
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 60))
-        |> Enum.filter(&(String.starts_with?(Map.get(&1, "event", ""), "evolution."))),
-      pending_signals: Evolution.read_signals(workspace_opts(opts)),
+        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "evolution.")),
       soul_preview: file_preview(Path.join(workspace, "SOUL.md")),
-      memory_preview: file_preview(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md"))
+      user_preview: file_preview(Path.join(workspace, "USER.md"), 40),
+      memory_preview:
+        file_preview(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md")),
+      layers: evolution_layers(opts)
     }
   end
 
@@ -111,7 +115,9 @@ defmodule Nex.Agent.Admin do
       runtime_catalog: Store.load_catalog_records(runtime_opts),
       lineage: Store.load_lineage_records(runtime_opts) |> Enum.take(-50) |> Enum.reverse(),
       recent_runs: list_runtime_runs(workspace) |> Enum.take(20),
-      skill_runtime_config: Config.load(config_path: Keyword.get(opts, :config_path)) |> Config.skill_runtime()
+      tools: tool_inventory(),
+      skill_runtime_config:
+        Config.load(config_path: Keyword.get(opts, :config_path)) |> Config.skill_runtime()
     }
   end
 
@@ -122,11 +128,10 @@ defmodule Nex.Agent.Admin do
 
     %{
       workspace: workspace,
+      soul_preview: file_preview(Path.join(workspace, "SOUL.md"), 40),
       memory_preview: file_preview(Path.join(memory_dir, "MEMORY.md"), 80),
-      history_preview: file_preview(Path.join(memory_dir, "HISTORY.md"), 80),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 60),
       memory_bytes: file_size(Path.join(memory_dir, "MEMORY.md")),
-      history_bytes: file_size(Path.join(memory_dir, "HISTORY.md")),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 20))
         |> Enum.filter(fn entry ->
@@ -214,7 +219,7 @@ defmodule Nex.Agent.Admin do
       versions: versions_for(selected_module),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 30))
-        |> Enum.filter(&(String.starts_with?(Map.get(&1, "event", ""), "code.")))
+        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "code."))
     }
   end
 
@@ -226,16 +231,15 @@ defmodule Nex.Agent.Admin do
 
       %Session{} = session ->
         messages = session.messages
-        unconsolidated = max(length(messages) - session.last_consolidated, 0)
+        unreviewed = max(length(messages) - session.last_consolidated, 0)
 
         %{
           key: session.key,
           created_at: session.created_at,
           updated_at: session.updated_at,
           total_messages: length(messages),
-          last_consolidated: session.last_consolidated,
-          unconsolidated_messages: unconsolidated,
-          consolidation_in_progress: get_in(session.metadata || %{}, ["consolidation_in_progress"]) == true,
+          last_reviewed_message_count: session.last_consolidated,
+          unreviewed_messages: unreviewed,
           last_prompt: get_in(session.metadata || %{}, ["runtime_evolution", "last_prompt"]),
           messages:
             messages
@@ -372,6 +376,7 @@ defmodule Nex.Agent.Admin do
 
   @spec rollback_code(String.t(), String.t() | nil, keyword()) :: :ok | {:error, String.t()}
   def rollback_code(module_name, version_id \\ nil, opts \\ [])
+
   def rollback_code(module_name, version_id, opts) when is_binary(module_name) do
     case resolve_module(module_name) do
       nil ->
@@ -411,12 +416,15 @@ defmodule Nex.Agent.Admin do
 
   defp skills_summary(opts) do
     runtime_opts = workspace_opts(opts)
+    tools = tool_summary()
 
     %{
       local_count: length(Skills.list(runtime_opts)),
       runtime_package_count: length(Store.load_skill_records(runtime_opts)),
       lineage_events: length(Store.load_lineage_records(runtime_opts)),
-      recent_runs: length(list_runtime_runs(workspace(opts)))
+      recent_runs: length(list_runtime_runs(workspace(opts))),
+      builtin_tools: tools.builtin_count,
+      custom_tools: tools.custom_count
     }
   end
 
@@ -436,9 +444,143 @@ defmodule Nex.Agent.Admin do
       modules: length(code_modules()),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 8))
-        |> Enum.filter(&(String.starts_with?(Map.get(&1, "event", ""), "code.")))
+        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "code."))
     }
   end
+
+  defp evolution_layers(opts) do
+    workspace = workspace(opts)
+    skills = skills_summary(opts)
+    tools = tool_summary()
+    code = code_summary(opts)
+
+    [
+      %{
+        key: "SOUL",
+        href: "/memory",
+        summary: "身份、价值观与长期原则",
+        detail: preview_summary(file_preview(Path.join(workspace, "SOUL.md"), 18), "(SOUL 暂无内容)")
+      },
+      %{
+        key: "USER",
+        href: "/memory",
+        summary: "用户画像、协作风格与长期偏好",
+        detail: preview_summary(file_preview(Path.join(workspace, "USER.md"), 18), "(USER 暂无内容)")
+      },
+      %{
+        key: "MEMORY",
+        href: "/memory",
+        summary: "项目事实、长期经验与上下文",
+        detail:
+          "#{length(Evolution.read_signals(workspace_opts(opts)))} 个 pending signals · #{file_size(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md"))} bytes"
+      },
+      %{
+        key: "SKILL",
+        href: "/skills",
+        summary: "可复用的方法、流程与谱系",
+        detail:
+          "#{skills.local_count} 本地 skills · #{skills.runtime_package_count} runtime packages"
+      },
+      %{
+        key: "TOOL",
+        href: "/skills",
+        summary: "确定性能力与可调用扩展",
+        detail: "#{tools.builtin_count} builtin tools · #{tools.custom_count} custom tools"
+      },
+      %{
+        key: "CODE",
+        href: "/code",
+        summary: "底层实现升级、diff 与回滚",
+        detail: "#{code.modules} 个模块可热更 · #{length(code.recent_events)} 条最近 code events"
+      }
+    ]
+  end
+
+  defp tool_summary do
+    inventory = tool_inventory()
+
+    %{
+      builtin_count: length(inventory.builtin),
+      custom_count: length(inventory.custom)
+    }
+  end
+
+  defp tool_inventory do
+    custom = CustomTools.list()
+    custom_names = MapSet.new(Enum.map(custom, &Map.get(&1, "name")))
+
+    builtin_names =
+      if Process.whereis(Registry) do
+        Registry.list()
+      else
+        Registry.builtin_names()
+      end
+
+    builtin =
+      builtin_names
+      |> Enum.reject(&MapSet.member?(custom_names, &1))
+      |> Enum.sort()
+      |> Enum.map(fn name ->
+        module =
+          if Process.whereis(Registry) do
+            Registry.get(name)
+          end
+
+        %{
+          "name" => name,
+          "description" => tool_description(module),
+          "layers" => tool_layers(module)
+        }
+      end)
+
+    %{
+      builtin: builtin,
+      custom:
+        Enum.map(custom, fn tool ->
+          %{
+            "name" => tool["name"],
+            "description" => tool["description"],
+            "module" => tool["module"],
+            "origin" => tool["origin"],
+            "layers" => ["tool"]
+          }
+        end)
+    }
+  end
+
+  defp tool_description(module) when is_atom(module) do
+    if function_exported?(module, :description, 0), do: module.description(), else: ""
+  end
+
+  defp tool_description(_), do: ""
+
+  defp tool_layers(module) when is_atom(module) do
+    if function_exported?(module, :name, 0) do
+      case module.name() do
+        "soul_update" -> ["soul"]
+        "user_update" -> ["user"]
+        "memory_consolidate" -> ["memory"]
+        "memory_status" -> ["memory"]
+        "memory_rebuild" -> ["memory"]
+        "memory_write" -> ["memory"]
+        "skill_discover" -> ["skill"]
+        "skill_get" -> ["skill"]
+        "skill_capture" -> ["skill"]
+        "skill_import" -> ["skill"]
+        "skill_sync" -> ["skill"]
+        "tool_create" -> ["tool"]
+        "tool_list" -> ["tool"]
+        "tool_delete" -> ["tool"]
+        "reflect" -> ["code"]
+        "upgrade_code" -> ["code"]
+        _ -> ["tool"]
+      end
+    else
+      ["tool"]
+    end
+  end
+
+  defp tool_layers(_), do: ["tool"]
 
   defp list_sessions(opts) do
     session_files =
@@ -450,13 +592,7 @@ defmodule Nex.Agent.Admin do
 
     session_files
     |> Enum.map(fn path ->
-      key =
-        path
-        |> Path.dirname()
-        |> Path.basename()
-        |> URI.decode()
-
-      session = load_session_from_path(path, key)
+      session = load_session_from_path(path)
 
       if session do
         last_message =
@@ -498,6 +634,7 @@ defmodule Nex.Agent.Admin do
       Cron.status(workspace_opts(opts))
     else
       jobs = list_cron_jobs(opts)
+
       %{
         total: length(jobs),
         enabled: Enum.count(jobs, &truthy(Map.get(&1, "enabled"))),
@@ -512,31 +649,8 @@ defmodule Nex.Agent.Admin do
     workspace
     |> Path.join("skill_runtime/runs/*.jsonl")
     |> Path.wildcard()
-    |> Enum.map(fn path ->
-      lines =
-        case File.read(path) do
-          {:ok, content} ->
-            content
-            |> String.split("\n", trim: true)
-            |> Enum.map(&Jason.decode!/1)
-
-          {:error, _} ->
-            []
-        end
-
-      started = Enum.find(lines, &(&1["type"] == "run_started")) || %{}
-      completed = Enum.find(lines, &(&1["type"] == "run_completed")) || %{}
-      selected = Enum.find(lines, &(&1["type"] == "skills_selected")) || %{}
-
-      %{
-        run_id: started["run_id"] || Path.basename(path, ".jsonl"),
-        prompt: truncate_text(started["prompt"], 140),
-        inserted_at: started["inserted_at"],
-        status: completed["status"] || "completed",
-        result: truncate_text(completed["result"], 200),
-        packages: selected["packages"] || []
-      }
-    end)
+    |> Enum.map(&runtime_run_summary/1)
+    |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(&(&1.inserted_at || ""), :desc)
   end
 
@@ -544,7 +658,6 @@ defmodule Nex.Agent.Admin do
     CodeUpgrade.list_upgradable_modules()
     |> Enum.map(&Atom.to_string/1)
     |> Enum.map(&String.replace_prefix(&1, "Elixir.", ""))
-    |> Enum.reject(&String.starts_with?(&1, "Nex.Agent.Tool.Custom."))
     |> Enum.sort()
   end
 
@@ -592,19 +705,77 @@ defmodule Nex.Agent.Admin do
 
   defp load_session(session_key, opts) do
     if Process.whereis(SessionManager) do
-      SessionManager.get(session_key, workspace_opts(opts)) || Session.load(session_key, workspace_opts(opts))
+      SessionManager.get(session_key, workspace_opts(opts)) ||
+        Session.load(session_key, workspace_opts(opts))
     else
       Session.load(session_key, workspace_opts(opts))
     end
   end
 
-  defp load_session_from_path(path, key) do
+  defp load_session_from_path(path) do
     if File.exists?(path) do
       try do
-        apply(Session, :load, [key, [workspace: path |> Path.dirname() |> Path.dirname() |> Path.dirname()]])
+        Session.load_from_path(path)
       rescue
         _ -> nil
       end
+    end
+  end
+
+  defp runtime_run_summary(path) do
+    lines = decode_runtime_run_lines(path)
+
+    started = Enum.find(lines, &(&1["type"] == "run_started")) || %{}
+    completed = Enum.find(lines, &(&1["type"] == "run_completed")) || %{}
+    selected = Enum.find(lines, &(&1["type"] == "skills_selected")) || %{}
+
+    if started == %{} and completed == %{} and selected == %{} do
+      nil
+    else
+      %{
+        run_id:
+          started["run_id"] || completed["run_id"] || selected["run_id"] ||
+            Path.basename(path, ".jsonl"),
+        prompt: truncate_text(started["prompt"], 140),
+        inserted_at:
+          started["inserted_at"] || completed["inserted_at"] || selected["inserted_at"],
+        status: completed["status"] || "completed",
+        result: truncate_text(completed["result"], 200),
+        packages: selected["packages"] || []
+      }
+    end
+  end
+
+  defp decode_runtime_run_lines(path) do
+    case File.read(path) do
+      {:ok, content} ->
+        content
+        |> String.split("\n", trim: true)
+        |> Enum.with_index(1)
+        |> Enum.reduce([], fn {line, line_number}, acc ->
+          case Jason.decode(line) do
+            {:ok, decoded} when is_map(decoded) ->
+              [decoded | acc]
+
+            {:ok, decoded} ->
+              Logger.debug(
+                "[Admin] Skipping non-map runtime run entry #{path}:#{line_number}: #{inspect(decoded)}"
+              )
+
+              acc
+
+            {:error, reason} ->
+              Logger.debug(
+                "[Admin] Skipping malformed runtime run entry #{path}:#{line_number}: #{inspect(reason)}"
+              )
+
+              acc
+          end
+        end)
+        |> Enum.reverse()
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -664,6 +835,21 @@ defmodule Nex.Agent.Admin do
       text
     else
       String.slice(text, 0, limit) <> "..."
+    end
+  end
+
+  defp preview_summary(content, fallback) do
+    content
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" ->
+        fallback
+
+      text ->
+        text
+        |> String.replace(~r/\s+/, " ")
+        |> truncate_text(140)
     end
   end
 

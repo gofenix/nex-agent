@@ -170,6 +170,7 @@ defmodule Nex.SkillRuntime.Registry do
 
   defp tokenize(text) when is_binary(text) do
     text
+    |> String.replace(~r/https?:\/\/\S+/u, " ")
     |> String.downcase()
     |> String.replace(~r/[^[:alnum:]\s_-]+/u, " ")
     |> String.split(~r/\s+/, trim: true)

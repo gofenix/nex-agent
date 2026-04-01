@@ -23,7 +23,7 @@ end
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, ContextBuilder, Onboarding, Runner, Session, Skills}
+  alias Nex.Agent.{Bus, ContextBuilder, Onboarding, Runner, Session, SessionManager, Skills}
 
   setup do
     workspace =
@@ -46,6 +46,10 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(SessionManager) == nil do
+      start_supervised!({SessionManager, name: SessionManager})
     end
 
     if Process.whereis(Nex.Agent.Tool.Registry) == nil do
@@ -165,6 +169,71 @@ defmodule Nex.Agent.RunnerEvolutionTest do
              _ ->
                false
            end)
+  end
+
+  test "runner triggers async memory consolidation in the normal chat flow", %{
+    workspace: workspace
+  } do
+    key = "runner-auto-consolidation"
+    session = %Session{Session.new(key) | messages: build_consolidation_messages(52)}
+    :ok = Session.save(session, workspace: workspace)
+
+    llm_client = fn _messages, _opts ->
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    req_llm_generate_text_fun = fn _model_spec, _messages, opts ->
+      tool_names = Enum.map(opts[:tools] || [], &tool_name_from_definition/1)
+
+      cond do
+        "memory_write" in tool_names ->
+          {:ok, %{content: "", finish_reason: nil, tool_calls: []}}
+
+        "save_memory" in tool_names ->
+          {:ok,
+           %{
+             tool_calls: [
+               %{
+                 function: %{
+                   name: "save_memory",
+                   arguments: %{
+                     "history_entry" => "[2026-03-30 10:00] Auto consolidation ran.",
+                     "memory_update" => "# Memory\n\nAuto consolidation fact.\n"
+                   }
+                 }
+               }
+             ]
+           }}
+
+        true ->
+          {:ok, %{content: "", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    {:ok, _result, _session} =
+      Runner.run(session, "latest prompt",
+        llm_client: llm_client,
+        workspace: workspace,
+        req_llm_generate_text_fun: req_llm_generate_text_fun,
+        channel: "telegram",
+        chat_id: "auto"
+      )
+
+    history =
+      wait_for_value(fn ->
+        File.read!(Path.join(workspace, "memory/HISTORY.md"))
+      end, fn content -> String.contains?(content, "Auto consolidation ran.") end)
+
+    assert history =~ "Auto consolidation ran."
+
+    persisted =
+      wait_for_value(
+        fn -> Session.load(key, workspace: workspace) end,
+        fn persisted -> persisted && persisted.last_consolidated > 0 end
+      )
+
+    assert persisted.last_consolidated > 0
+    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~ "Auto consolidation fact."
   end
 
   test "complex task sets next-turn skill nudge and skill creation clears it", %{
@@ -609,13 +678,13 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                provider: :anthropic,
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
-               tool_choice: %{type: "tool", name: "save_memory"},
+               tool_choice: %{type: "function", function: %{name: "save_memory"}},
                req_llm_generate_text_fun: llm_generate_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
     assert_receive {:consolidation_opts, second_opts}
-    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    assert first_opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
     refute Keyword.has_key?(second_opts, :tool_choice)
   end
 
@@ -632,12 +701,12 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                provider: :anthropic,
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
-               tool_choice: %{type: "tool", name: "save_memory"},
+               tool_choice: %{type: "function", function: %{name: "save_memory"}},
                req_llm_generate_text_fun: llm_generate_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
-    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    assert first_opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
     refute_receive {:consolidation_opts, _}
   end
 
@@ -712,5 +781,33 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         }
       }
     }
+  end
+
+  defp build_consolidation_messages(count) do
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    for idx <- 1..count do
+      role = if rem(idx, 2) == 1, do: "user", else: "assistant"
+      %{"role" => role, "content" => "message #{idx}", "timestamp" => now}
+    end
+  end
+
+  defp tool_name_from_definition(%{"function" => %{"name" => name}}), do: name
+  defp tool_name_from_definition(%{function: %{name: name}}), do: name
+  defp tool_name_from_definition(%{name: name}), do: name
+  defp tool_name_from_definition(_), do: nil
+
+  defp wait_for_value(fun, predicate, attempts \\ 40)
+  defp wait_for_value(fun, _predicate, 0), do: fun.()
+
+  defp wait_for_value(fun, predicate, attempts) do
+    value = fun.()
+
+    if predicate.(value) do
+      value
+    else
+      Process.sleep(25)
+      wait_for_value(fun, predicate, attempts - 1)
+    end
   end
 end

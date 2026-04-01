@@ -15,11 +15,12 @@ defmodule NexAgentConsole.Pages.Code do
       end
 
     %{
-      title: "NexAgent Console | Code",
-      eyebrow: "Code",
-      subtitle: "预览 diff、热更内部模块，并回滚到历史版本。",
+      title: "NexAgent Console | 代码层",
+      subtitle: "代码层是最后一层：只有高层不能解决时，才应该进入这里预览 diff、热更和回滚。",
       current_path: "/code",
-      panel_path: panel_path
+      panel_path: panel_path,
+      primary_action_label: "回到六层",
+      primary_action_href: "/evolution"
     }
   end
 
@@ -31,7 +32,7 @@ defmodule NexAgentConsole.Pages.Code do
         AdminUI.diff_preview(%{module: payload.module, diff: payload.diff})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Preview failed", body: reason, tone: "danger"})
+        AdminUI.notice(%{title: "预览失败", body: reason, tone: "danger"})
     end
   end
 
@@ -45,25 +46,25 @@ defmodule NexAgentConsole.Pages.Code do
         version_id = get_in(result, [:version, :id]) || "ok"
 
         AdminUI.notice(%{
-          title: "Hot upgrade applied",
+          title: "热更已应用",
           body: "#{module} · version #{version_id}",
           tone: "ok"
         })
         |> trigger("admin-event", %{topic: "code", summary: "Hot upgrade applied"})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Hot upgrade failed", body: reason, tone: "danger"})
+        AdminUI.notice(%{title: "热更失败", body: reason, tone: "danger"})
     end
   end
 
   def rollback(req) do
     case Admin.rollback_code(req.body["module"], req.body["version_id"]) do
       :ok ->
-        AdminUI.notice(%{title: "Rollback applied", body: req.body["module"], tone: "warn"})
+        AdminUI.notice(%{title: "回滚已应用", body: req.body["module"], tone: "warn"})
         |> trigger("admin-event", %{topic: "code", summary: "Rollback applied"})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Rollback failed", body: reason, tone: "danger"})
+        AdminUI.notice(%{title: "回滚失败", body: reason, tone: "danger"})
     end
   end
 end

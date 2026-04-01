@@ -5,11 +5,12 @@ defmodule NexAgentConsole.Pages.Index do
 
   def mount(_params) do
     %{
-      title: "NexAgent Console | 总览",
-      eyebrow: "Overview",
-      subtitle: "单实例运行时概览，聚合 evolution、任务、会话与最近热更。",
+      title: "NexAgent Console | 控制台",
+      subtitle: "运行总览只提供状态与入口分发；真正的分层判断应回到六层进化页。",
       current_path: "/",
-      panel_path: "/api/admin/panels/overview"
+      panel_path: "/api/admin/panels/overview",
+      primary_action_label: "查看六层",
+      primary_action_href: "/evolution"
     }
   end
 

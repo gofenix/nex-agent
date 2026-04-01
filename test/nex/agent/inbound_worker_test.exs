@@ -1,7 +1,7 @@
 defmodule Nex.Agent.InboundWorkerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, InboundWorker, Runner, Skills}
+  alias Nex.Agent.{Bus, InboundWorker, Memory, MemoryUpdater, Runner, Session, SessionManager, Skills}
 
   setup do
     workspace =
@@ -29,6 +29,14 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     if Process.whereis(Nex.Agent.Tool.Registry) == nil do
       start_supervised!({Nex.Agent.Tool.Registry, name: Nex.Agent.Tool.Registry})
+    end
+
+    if Process.whereis(Nex.Agent.SessionManager) == nil do
+      start_supervised!({Nex.Agent.SessionManager, name: Nex.Agent.SessionManager})
+    end
+
+    if Process.whereis(Nex.Agent.MemoryUpdater) == nil do
+      start_supervised!({Nex.Agent.MemoryUpdater, name: Nex.Agent.MemoryUpdater})
     end
 
     worker_name = String.to_atom("inbound_worker_test_#{System.unique_integer([:positive])}")
@@ -230,12 +238,80 @@ defmodule Nex.Agent.InboundWorkerTest do
     refute Enum.any?(payloads, &(&1.metadata["_progress"] == true))
   end
 
+  test "inbound worker publishes final reply before background memory refresh finishes", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_memory_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, _opts ->
+      updated_session =
+        agent.session
+        |> Session.add_message("user", "hello")
+        |> Session.add_message("assistant", "final reply")
+        |> then(fn session ->
+          metadata =
+            Map.merge(session.metadata || %{}, %{
+              "memory_refresh_llm_call_fun" =>
+                fn _messages, _llm_opts ->
+                  send(parent, :memory_refresh_started)
+                  Process.sleep(200)
+
+                  {:ok,
+                   %{
+                     "status" => "update",
+                     "memory_update" =>
+                       "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+                   }}
+                end
+            })
+
+          %{session | metadata: metadata}
+        end)
+
+      {:ok, "final reply", %{agent | session: updated_session, workspace: workspace}}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{channel: "feishu", chat_id: "chat-memory", content: "hello"}
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert payload.content == "final reply"
+    assert Memory.read_long_term(workspace: workspace) == "# Memory\n"
+
+    assert_receive :memory_refresh_started, 1_000
+
+    wait_for(fn ->
+      Memory.read_long_term(workspace: workspace) =~ "Likes concise replies."
+    end)
+  end
+
   defp collect_feishu_payloads(acc) do
     receive do
       {:bus_message, :feishu_outbound, payload} ->
         collect_feishu_payloads([payload | acc])
     after
       200 -> Enum.reverse(acc)
+    end
+  end
+
+  defp wait_for(predicate, attempts \\ 50)
+
+  defp wait_for(_predicate, 0) do
+    flunk("condition did not become true in time")
+  end
+
+  defp wait_for(predicate, attempts) do
+    if predicate.() do
+      :ok
+    else
+      Process.sleep(20)
+      wait_for(predicate, attempts - 1)
     end
   end
 end

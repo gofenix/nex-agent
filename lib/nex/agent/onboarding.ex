@@ -194,8 +194,7 @@ defmodule Nex.Agent.Onboarding do
     templates = [
       {Path.join(w, "SOUL.md"), soul_template()},
       {Path.join(w, "USER.md"), user_template()},
-      {Path.join(w, "memory/MEMORY.md"), memory_template()},
-      {Path.join(w, "memory/HISTORY.md"), history_template()}
+      {Path.join(w, "memory/MEMORY.md"), memory_template()}
     ]
 
     Enum.each(managed_templates, fn {path, key, content} ->
@@ -344,7 +343,6 @@ defmodule Nex.Agent.Onboarding do
 
     - Workspace root: `~/.nex/agent/workspace`
     - Memory: `workspace/memory/MEMORY.md`
-    - History: `workspace/memory/HISTORY.md` (grep-friendly, each entry starts with `[YYYY-MM-DD HH:MM]`)
     - Skills: `workspace/skills/<name>/SKILL.md`
     - Workspace tools: `workspace/tools/<name>/`
     - Notes and captures: `workspace/notes/`
@@ -393,8 +391,8 @@ defmodule Nex.Agent.Onboarding do
     - Code evolution: `reflect`, `upgrade_code`
 
     Memory tool intent split:
-    - Use `memory_consolidate` for "trigger memory consolidation now" / "触发记忆整理"
-    - Use `memory_status` for "check memory status" / "检查记忆状态"
+    - Use `memory_consolidate` for "trigger memory refresh now" / "立即刷新记忆"
+    - Use `memory_status` for "check memory refresh status" / "检查记忆状态"
     - Use `memory_rebuild` for "full rebuild" / "重建记忆"
 
     Prefer runtime skill packages for reusable instruction workflows.
@@ -447,8 +445,8 @@ defmodule Nex.Agent.Onboarding do
     - SOUL layer: `soul_update`
     - USER layer: `user_update`
     - MEMORY layer:
-      - `memory_consolidate`: trigger memory consolidation now / 触发记忆整理
-      - `memory_status`: check memory status only / 检查记忆状态
+      - `memory_consolidate`: trigger memory refresh now / 立即刷新记忆
+      - `memory_status`: check memory refresh status only / 检查记忆状态
       - `memory_rebuild`: full rebuild from session history / 重建记忆
       - `memory_write`: persist durable facts to MEMORY.md
     - SKILL layer: `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
@@ -566,13 +564,4 @@ defmodule Nex.Agent.Onboarding do
     """
   end
 
-  defp history_template do
-    """
-    # Conversation History Log
-
-    Grep-searchable log of past conversations. Each entry starts with [YYYY-MM-DD HH:MM].
-
-    ---
-    """
-  end
 end

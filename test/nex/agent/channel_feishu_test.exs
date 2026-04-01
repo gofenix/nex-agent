@@ -41,13 +41,27 @@ defmodule Nex.Agent.Channel.FeishuTest do
       end
     end
 
+    http_post_multipart_fun = fn url, body, headers ->
+      send(parent, {:http_post_multipart, url, body, headers})
+
+      if String.contains?(url, "/im/v1/images") do
+        {:ok, %{"code" => 0, "data" => %{"image_key" => "img_uploaded"}}}
+      else
+        {:ok, %{"code" => 1, "msg" => "unexpected"}}
+      end
+    end
+
     config = %Config{Config.default() | feishu: %{"enabled" => false}}
     name = String.to_atom("feishu_test_#{System.unique_integer([:positive])}")
 
     pid =
       start_supervised!(
         {Feishu,
-         name: name, config: config, http_post_fun: http_post_fun, http_get_fun: http_get_fun}
+         name: name,
+         config: config,
+         http_post_fun: http_post_fun,
+         http_post_multipart_fun: http_post_multipart_fun,
+         http_get_fun: http_get_fun}
       )
 
     :sys.replace_state(pid, fn state ->
@@ -97,6 +111,47 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert url =~ "receive_id_type=chat_id"
     assert body["msg_type"] == "image"
     assert Jason.decode!(body["content"]) == %{"image_key" => "img_123"}
+  end
+
+  test "synchronous send_message call confirms Feishu delivery", %{pid: pid} do
+    assert :ok = GenServer.call(pid, {:send_message, "ou_123", "hello sync", %{}})
+
+    assert_receive {:http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages"
+    assert body2["receive_id"] == "ou_123"
+    assert body2["msg_type"] == "interactive"
+    assert is_binary(body2["content"])
+  end
+
+  test "synchronous local image send uploads and delivers native image message", %{pid: pid} do
+    path =
+      Path.join(System.tmp_dir!(), "feishu_test_image_#{System.unique_integer([:positive])}.png")
+
+    File.write!(path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
+
+    on_exit(fn -> File.rm(path) end)
+
+    assert :ok = GenServer.call(pid, {:send_local_image, "ou_123", path, %{}})
+
+    assert_receive {:http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:http_post_multipart, upload_url, multipart_body, upload_headers}
+    assert upload_url =~ "/im/v1/images"
+
+    assert Enum.any?(upload_headers, fn {key, value} ->
+             key == "Authorization" and value =~ "Bearer "
+           end)
+
+    assert Keyword.get(multipart_body, :image_type) == "message"
+
+    assert_receive {:http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages"
+    assert body2["msg_type"] == "image"
+    assert Jason.decode!(body2["content"]) == %{"image_key" => "img_uploaded"}
   end
 
   test "progress payloads are ignored instead of being sent to feishu", %{pid: _pid} do

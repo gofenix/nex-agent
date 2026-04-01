@@ -3,23 +3,20 @@ defmodule Nex.Agent.Tool.MemoryStatus do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.{Memory, Session, SessionManager}
-
-  @memory_window 50
-  @memory_nudge_interval 6
+  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager}
 
   def name, do: "memory_status"
 
   def description do
     """
-    Inspect memory consolidation status for the current session and workspace.
+    Inspect memory refresh status for the current session and workspace.
 
     Use this when the user wants to check memory status only:
-    - "check memory status" / "was memory consolidated?"
-    - "检查记忆状态" / "刚才整理过了吗"
+    - "check memory status" / "was memory refreshed?"
+    - "检查记忆状态" / "刚才更新记忆了吗"
 
-    This does not run consolidation. Use `memory_consolidate` to trigger normal consolidation now.
-    Use `memory_rebuild` only for a full rebuild of MEMORY.md and HISTORY.md.
+    This does not run a refresh. Use `memory_consolidate` to trigger an immediate refresh now.
+    Use `memory_rebuild` only for a full rebuild of MEMORY.md.
     """
   end
 
@@ -52,43 +49,29 @@ defmodule Nex.Agent.Tool.MemoryStatus do
 
     session = load_session(session_key, workspace)
     memory_content = Memory.read_long_term(workspace: workspace)
-    history_content = read_history(workspace)
-    runtime_evolution = session_metadata(session, "runtime_evolution") || %{}
     total_messages = if session, do: length(session.messages), else: 0
     last_consolidated = if session, do: session.last_consolidated, else: 0
-    unconsolidated = max(total_messages - last_consolidated, 0)
-    in_progress = session_metadata(session, "consolidation_in_progress") == true
-    started_at = session_metadata(session, "consolidation_started_at")
-    stale = in_progress and stale_timestamp?(started_at)
+    unreviewed = max(total_messages - last_consolidated, 0)
+    updater = MemoryUpdater.status(session_key || "", workspace: workspace)
 
     {:ok,
      %{
        "session_key" => session_key,
-       "status" => status_for(session_key, unconsolidated, in_progress, stale),
-       "reason" => reason_for(session_key, unconsolidated, in_progress, stale),
-       "thresholds" => %{
-         "consolidation_min_unconsolidated_messages" => @memory_window,
-         "memory_nudge_interval_turns" => @memory_nudge_interval
-       },
+       "status" => status_for(session_key, updater["status"], unreviewed),
+       "reason" => reason_for(session_key, updater["status"], unreviewed),
        "session" => %{
          "exists" => not is_nil(session),
          "total_messages" => total_messages,
-         "last_consolidated" => last_consolidated,
-         "unconsolidated_messages" => unconsolidated,
-         "consolidation_in_progress" => in_progress,
-         "consolidation_started_at" => started_at,
-         "consolidation_stale" => stale
+         "last_reviewed_message_count" => last_consolidated,
+         "unreviewed_messages" => unreviewed
        },
        "memory_files" => %{
          "memory_has_user_content" => has_meaningful_memory_content?(memory_content),
-         "history_has_entries" => has_history_entries?(history_content),
-         "memory_bytes" => byte_size(memory_content),
-         "history_bytes" => byte_size(history_content)
+         "memory_bytes" => byte_size(memory_content)
        },
-       "runtime_evolution" => %{
-         "turns_since_memory_write" => runtime_evolution["turns_since_memory_write"] || 0,
-         "next_memory_nudge_due_in_turns" =>
-           turns_until_next_nudge(runtime_evolution["turns_since_memory_write"] || 0)
+       "refresh" => %{
+         "job_status" => updater["status"],
+         "queued_jobs_for_session" => updater["queued"]
        }
      }}
   end
@@ -106,19 +89,8 @@ defmodule Nex.Agent.Tool.MemoryStatus do
     end
   end
 
-  defp read_history(workspace) do
-    history_file = Path.join(memory_dir(workspace), "HISTORY.md")
-    if File.exists?(history_file), do: File.read!(history_file), else: ""
-  end
-
-  defp memory_dir(nil), do: Path.join(Memory.workspace_path(), "memory")
-  defp memory_dir(workspace), do: Path.join(workspace, "memory")
-
   defp workspace_opts(nil), do: []
   defp workspace_opts(workspace), do: [workspace: workspace]
-
-  defp session_metadata(nil, _key), do: nil
-  defp session_metadata(session, key), do: Map.get(session.metadata || %{}, key)
 
   defp derive_session_key(ctx) do
     channel = Map.get(ctx, :channel) || Map.get(ctx, "channel")
@@ -134,25 +106,10 @@ defmodule Nex.Agent.Tool.MemoryStatus do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
 
-  defp stale_timestamp?(timestamp) when is_binary(timestamp) do
-    case DateTime.from_iso8601(timestamp) do
-      {:ok, started_at, _offset} -> DateTime.diff(DateTime.utc_now(), started_at, :second) >= 900
-      _ -> true
-    end
-  end
-
-  defp stale_timestamp?(_), do: true
-
   defp has_meaningful_memory_content?(content) do
     content
     |> strip_template_lines()
     |> Enum.any?(&(String.trim(&1) != ""))
-  end
-
-  defp has_history_entries?(content) do
-    content
-    |> String.split("\n")
-    |> Enum.any?(&String.match?(&1, ~r/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]/))
   end
 
   defp strip_template_lines(content) do
@@ -173,33 +130,17 @@ defmodule Nex.Agent.Tool.MemoryStatus do
     end)
   end
 
-  defp turns_until_next_nudge(turns_since_memory_write)
-       when is_integer(turns_since_memory_write) do
-    remainder = rem(turns_since_memory_write, @memory_nudge_interval)
-    if remainder == 0, do: 0, else: @memory_nudge_interval - remainder
-  end
+  defp status_for(nil, _job_status, _unreviewed), do: "unknown"
+  defp status_for("", _job_status, _unreviewed), do: "unknown"
+  defp status_for(_session_key, "running", _unreviewed), do: "running"
+  defp status_for(_session_key, "queued", _unreviewed), do: "queued"
+  defp status_for(_session_key, _job_status, unreviewed) when unreviewed > 0, do: "pending"
+  defp status_for(_session_key, _job_status, _unreviewed), do: "idle"
 
-  defp turns_until_next_nudge(_), do: @memory_nudge_interval
-
-  defp status_for(nil, _unconsolidated, _in_progress, _stale), do: "unknown"
-  defp status_for("", _unconsolidated, _in_progress, _stale), do: "unknown"
-  defp status_for(_session_key, _unconsolidated, true, true), do: "blocked"
-  defp status_for(_session_key, _unconsolidated, true, false), do: "running"
-
-  defp status_for(_session_key, unconsolidated, false, _stale)
-       when unconsolidated >= @memory_window,
-       do: "ready"
-
-  defp status_for(_session_key, _unconsolidated, false, _stale), do: "idle"
-
-  defp reason_for(nil, _unconsolidated, _in_progress, _stale), do: "missing_session_key"
-  defp reason_for("", _unconsolidated, _in_progress, _stale), do: "missing_session_key"
-  defp reason_for(_session_key, _unconsolidated, true, true), do: "stale_consolidation_flag"
-  defp reason_for(_session_key, _unconsolidated, true, false), do: "consolidation_in_progress"
-
-  defp reason_for(_session_key, unconsolidated, false, _stale)
-       when unconsolidated >= @memory_window,
-       do: "threshold_reached"
-
-  defp reason_for(_session_key, _unconsolidated, false, _stale), do: "below_threshold"
+  defp reason_for(nil, _job_status, _unreviewed), do: "missing_session_key"
+  defp reason_for("", _job_status, _unreviewed), do: "missing_session_key"
+  defp reason_for(_session_key, "running", _unreviewed), do: "memory_refresh_running"
+  defp reason_for(_session_key, "queued", _unreviewed), do: "memory_refresh_queued"
+  defp reason_for(_session_key, _job_status, unreviewed) when unreviewed > 0, do: "unreviewed_messages"
+  defp reason_for(_session_key, _job_status, _unreviewed), do: "up_to_date"
 end

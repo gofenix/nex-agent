@@ -46,6 +46,14 @@ defmodule Nex.Agent.SessionManager do
   end
 
   @doc """
+  Save session to disk and update cache synchronously.
+  """
+  @spec save_sync(Session.t(), keyword()) :: Session.t()
+  def save_sync(%Session{} = session, opts \\ []) do
+    GenServer.call(__MODULE__, {:save_sync, session, opts})
+  end
+
+  @doc """
   Invalidate cache for a session.
   """
   @spec invalidate(String.t(), keyword()) :: :ok
@@ -193,6 +201,18 @@ defmodule Nex.Agent.SessionManager do
       |> Enum.sort_by(& &1.updated_at, :desc)
 
     {:reply, sessions, state}
+  end
+
+  def handle_call({:save_sync, session, opts}, _from, %{cache: cache} = state) do
+    cache_key = cache_key(session.key, opts)
+
+    merged_session =
+      cache
+      |> Map.get(cache_key, Session.load(session.key, opts))
+      |> merge_session(session)
+
+    Session.save(merged_session, opts)
+    {:reply, merged_session, %{state | cache: Map.put(cache, cache_key, merged_session)}}
   end
 
   @impl true

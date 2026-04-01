@@ -1,7 +1,7 @@
 defmodule Nex.Agent.MemoryConsolidateTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, Session, SessionManager, Skills}
+  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager, Skills}
   alias Nex.Agent.Tool.MemoryConsolidate
 
   setup do
@@ -13,13 +13,11 @@ defmodule Nex.Agent.MemoryConsolidateTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Long-term Memory\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "# Conversation History Log\n")
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Skills.load()
 
-    if Process.whereis(SessionManager) == nil do
-      start_supervised!({SessionManager, name: SessionManager})
-    end
+    start_or_restart_supervised!({SessionManager, name: SessionManager})
+    start_or_restart_supervised!({MemoryUpdater, name: MemoryUpdater})
 
     key = "memory-consolidate:#{System.unique_integer([:positive])}"
 
@@ -32,7 +30,7 @@ defmodule Nex.Agent.MemoryConsolidateTest do
     {:ok, workspace: workspace, key: key}
   end
 
-  test "memory_consolidate runs normal consolidation and persists progress", %{
+  test "memory_consolidate refreshes durable memory and persists reviewed progress", %{
     workspace: workspace,
     key: key
   } do
@@ -40,8 +38,8 @@ defmodule Nex.Agent.MemoryConsolidateTest do
       Session.save(
         %{
           Session.new(key)
-          | messages: build_messages(63),
-            last_consolidated: 10
+          | messages: build_messages(4),
+            last_consolidated: 2
         },
         workspace: workspace
       )
@@ -57,40 +55,31 @@ defmodule Nex.Agent.MemoryConsolidateTest do
                  llm_call_fun: fn _messages, _opts ->
                    {:ok,
                     %{
-                      "history_entry" => "[2026-03-22 16:00] Triggered explicit consolidation.",
+                      "status" => "update",
                       "memory_update" =>
-                        "# Long-term Memory\n\n## Consolidated Facts\nImmediate consolidation succeeded.\n"
+                        "# Long-term Memory\n\n## Workflow Lessons\n- Confirmed durable lesson.\n"
                     }}
                  end
                }
              )
 
-    assert result["status"] == "consolidated"
+    assert result["status"] == "refreshed"
     assert result["reason"] == "ok"
     assert result["session_key"] == key
-    assert result["last_consolidated_before"] == 10
-    assert result["last_consolidated_after"] == 38
+    assert result["last_reviewed_before"] == 2
+    assert result["last_reviewed_after"] == 4
     assert result["memory_bytes"] > 0
-    assert result["history_bytes"] > 0
 
-    persisted =
-      wait_for_session(key, workspace, fn session ->
-        session.last_consolidated == 38 and
-          get_in(session.metadata, ["consolidation_in_progress"]) != true
-      end)
-
-    assert persisted.last_consolidated == 38
-    assert Memory.read_long_term(workspace: workspace) =~ "Immediate consolidation succeeded"
-
-    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~
-             "Triggered explicit consolidation"
+    persisted = wait_for_session(key, workspace, &(&1.last_consolidated == 4))
+    assert persisted.last_consolidated == 4
+    assert Memory.read_long_term(workspace: workspace) =~ "Confirmed durable lesson"
   end
 
-  test "memory_consolidate returns noop when there are no unconsolidated messages", %{
+  test "memory_consolidate returns noop when there are no unreviewed messages", %{
     workspace: workspace,
     key: key
   } do
-    total_messages = 40
+    total_messages = 4
 
     :ok =
       Session.save(
@@ -112,89 +101,61 @@ defmodule Nex.Agent.MemoryConsolidateTest do
                  session_key: key,
                  llm_call_fun: fn _messages, _opts ->
                    send(parent, :llm_called)
-                   flunk("llm_call_fun should not run when consolidation is a noop")
+                   flunk("llm_call_fun should not run when memory is already up to date")
                  end
                }
              )
 
     assert result["status"] == "noop"
-    assert result["reason"] == "no_unconsolidated_messages"
-    assert result["last_consolidated_before"] == total_messages
-    assert result["last_consolidated_after"] == total_messages
+    assert result["reason"] == "no_new_memory"
+    assert result["last_reviewed_before"] == total_messages
+    assert result["last_reviewed_after"] == total_messages
     refute_received :llm_called
+  end
 
+  test "memory_consolidate returns already_running when a background refresh is running", %{
+    workspace: workspace,
+    key: key
+  } do
     persisted =
-      wait_for_session(key, workspace, fn session ->
-        get_in(session.metadata, ["consolidation_in_progress"]) != true
-      end)
+      %{
+        Session.new(key)
+        | messages: build_messages(4),
+          last_consolidated: 0
+      }
 
-    assert persisted.last_consolidated == total_messages
-  end
+    :ok = Session.save(persisted, workspace: workspace)
 
-  test "memory_consolidate returns noop when the session is still below the keep window", %{
-    workspace: workspace,
-    key: key
-  } do
-    :ok =
-      Session.save(
-        %{
-          Session.new(key)
-          | messages: build_messages(12),
-            last_consolidated: 0
-        },
-        workspace: workspace
-      )
+    MemoryUpdater.enqueue(
+      %{
+        persisted
+        | metadata: %{
+            "memory_refresh_llm_call_fun" =>
+              fn _messages, _opts ->
+                Process.sleep(200)
+                {:ok, %{"status" => "noop"}}
+              end
+          }
+      },
+      workspace: workspace
+    )
 
-    parent = self()
-
-    assert {:ok, result} =
-             MemoryConsolidate.execute(
-               %{},
-               %{
-                 workspace: workspace,
-                 session_key: key,
-                 llm_call_fun: fn _messages, _opts ->
-                   send(parent, :llm_called)
-                   flunk("llm_call_fun should not run below the keep window")
-                 end
-               }
-             )
-
-    assert result["status"] == "noop"
-    assert result["reason"] == "below_keep_window"
-    assert result["last_consolidated_before"] == 0
-    assert result["last_consolidated_after"] == 0
-    refute_received :llm_called
-  end
-
-  test "memory_consolidate returns already_running when consolidation is already in progress", %{
-    workspace: workspace,
-    key: key
-  } do
-    :ok =
-      Session.save(
-        %{
-          Session.new(key)
-          | messages: build_messages(63),
-            last_consolidated: 10,
-            metadata: %{
-              "consolidation_in_progress" => true,
-              "consolidation_started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            }
-        },
-        workspace: workspace
-      )
+    wait_for(fn ->
+      MemoryUpdater.status(key, workspace: workspace)["status"] == "running"
+    end)
 
     assert {:ok, result} =
              MemoryConsolidate.execute(%{}, %{workspace: workspace, session_key: key})
 
     assert result["status"] == "already_running"
-    assert result["reason"] == "consolidation_in_progress"
-    assert result["last_consolidated_before"] == 10
-    assert result["last_consolidated_after"] == 10
+    assert result["reason"] == "memory_refresh_running"
+
+    wait_for(fn ->
+      MemoryUpdater.status(key, workspace: workspace)["status"] == "idle"
+    end)
   end
 
-  test "memory_consolidate clears the in-progress flag when consolidation fails", %{
+  test "memory_consolidate surfaces refresh failures without changing reviewed progress", %{
     workspace: workspace,
     key: key
   } do
@@ -202,8 +163,8 @@ defmodule Nex.Agent.MemoryConsolidateTest do
       Session.save(
         %{
           Session.new(key)
-          | messages: build_messages(63),
-            last_consolidated: 10
+          | messages: build_messages(4),
+            last_consolidated: 1
         },
         workspace: workspace
       )
@@ -220,14 +181,18 @@ defmodule Nex.Agent.MemoryConsolidateTest do
                }
              )
 
-    persisted =
-      wait_for_session(key, workspace, fn session ->
-        get_in(session.metadata, ["consolidation_in_progress"]) != true
-      end)
-
-    assert persisted.last_consolidated == 10
+    assert Session.load(key, workspace: workspace).last_consolidated == 1
     assert Memory.read_long_term(workspace: workspace) == "# Long-term Memory\n"
-    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) == "# Conversation History Log\n"
+  end
+
+  defp start_or_restart_supervised!(child_spec) do
+    case start_supervised(child_spec) do
+      {:ok, pid} ->
+        pid
+
+      {:error, {:already_started, pid}} ->
+        pid
+    end
   end
 
   defp wait_for_session(key, workspace, predicate, attempts \\ 40)
@@ -244,6 +209,21 @@ defmodule Nex.Agent.MemoryConsolidateTest do
     else
       Process.sleep(10)
       wait_for_session(key, workspace, predicate, attempts - 1)
+    end
+  end
+
+  defp wait_for(predicate, attempts \\ 40)
+
+  defp wait_for(_predicate, 0) do
+    flunk("condition did not become true in time")
+  end
+
+  defp wait_for(predicate, attempts) do
+    if predicate.() do
+      :ok
+    else
+      Process.sleep(10)
+      wait_for(predicate, attempts - 1)
     end
   end
 

@@ -202,13 +202,10 @@ defmodule Nex.Agent.Heartbeat do
     # 1. Built-in maintenance (once per day)
     state = maybe_run_maintenance(state, now)
 
-    # 2. Weekly evolution (deep analysis)
-    state = maybe_run_weekly_evolution(state, now)
-
-    # 3. User-defined tasks from HEARTBEAT.md
+    # 2. User-defined tasks from HEARTBEAT.md
     state = run_heartbeat_tasks(state, now)
 
-    # 4. Health checks
+    # 3. Health checks
     health = check_services_health()
     dead = Enum.filter(health, fn {_svc, alive} -> not alive end) |> Enum.map(&elem(&1, 0))
 
@@ -236,8 +233,7 @@ defmodule Nex.Agent.Heartbeat do
           results = [
             {:session_gc, run_session_gc(workspace)},
             {:log_archive, run_log_archive(workspace)},
-            {:code_upgrade_cleanup, run_code_upgrade_cleanup()},
-            {:evolution, %{trigger: "scheduled_daily", result: run_daily_evolution(workspace)}}
+            {:code_upgrade_cleanup, run_code_upgrade_cleanup()}
           ]
 
           send(heartbeat, {:maintenance_done, results})
@@ -372,54 +368,6 @@ defmodule Nex.Agent.Heartbeat do
       end,
       :desc
     )
-  end
-
-  # ── Evolution ──
-
-  defp run_daily_evolution(workspace) do
-    run_evolution(:scheduled_daily, workspace)
-  end
-
-  @weekly_evolution_cooldown 7 * 86_400
-
-  defp maybe_run_weekly_evolution(state, now) do
-    last_weekly = state.last_weekly_evolution || 0
-
-    cond do
-      state.weekly_evolution_running ->
-        state
-
-      now - last_weekly >= @weekly_evolution_cooldown ->
-        Logger.info("[Heartbeat] Running scheduled deep evolution (async)...")
-
-        heartbeat = self()
-        workspace = state.workspace
-
-        Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-          result = run_evolution(:scheduled_weekly, workspace)
-          send(heartbeat, {:weekly_evolution_done, now, result})
-        end)
-
-        %{state | weekly_evolution_running: true}
-
-      true ->
-        state
-    end
-  end
-
-  defp run_evolution(trigger, workspace) do
-    case Nex.Agent.Evolution.run_evolution_cycle(workspace: workspace, trigger: trigger) do
-      {:ok, _applied} = ok ->
-        ok
-
-      {:error, reason} = error ->
-        Logger.warning("[Heartbeat] #{trigger} evolution failed: #{inspect(reason)}")
-        error
-    end
-  rescue
-    e ->
-      Logger.warning("[Heartbeat] #{trigger} evolution error: #{Exception.message(e)}")
-      {:error, {:exception, Exception.message(e)}}
   end
 
   # ── HEARTBEAT.md Tasks ──

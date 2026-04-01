@@ -77,7 +77,6 @@ defmodule Nex.Agent.ContextBuilder do
     ## Workspace
     Your workspace is at: #{workspace_path}
     - Long-term memory: #{workspace_path}/memory/MEMORY.md (write important facts here)
-    - History log: #{workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
     - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
     - Workspace tools: #{Path.join(workspace_path, "tools")}/{tool-name}/
     - Notes and raw captures: #{workspace_path}/notes/
@@ -108,6 +107,8 @@ defmodule Nex.Agent.ContextBuilder do
     - If you need a native Feishu format, set `msg_type` and `content_json` explicitly.
     - Prefer `text` for short progress updates.
     - Prefer `interactive` for formatted reports, code blocks, and structured summaries.
+    - If you have a local PNG/JPEG file and want to send it to Feishu, use `local_image_path` on the `message` tool. The runtime will upload it and send a native image message.
+    - If you need a short companion text plus a PNG, provide both the text payload and `local_image_path` in the same `message` call. The runtime will send the text first and then the image.
     - Use `image` with `{"image_key": "..."}`
     - Use `file`, `audio`, `media`, or `sticker` with `{"file_key": "..."}`
     - Use `share_chat` with `{"chat_id": "..."}`
@@ -147,12 +148,12 @@ defmodule Nex.Agent.ContextBuilder do
     - CODE: internal implementation upgrades
 
     Prefer the highest layer that solves the need. Do not persist one-off outputs, temporary state, or information that is easy to rediscover.
-    If the user explicitly asks to trigger or run memory consolidation now, use `memory_consolidate` directly.
-    For deterministic inspection of memory/consolidation state, prefer the `memory_status` tool over free-form inference.
+    If the user explicitly asks to trigger memory refresh now, use `memory_consolidate` directly.
+    For deterministic inspection of memory refresh state, prefer the `memory_status` tool over free-form inference.
     If long-term memory is clearly stale or incomplete and the user explicitly wants a full rebuild, use `memory_rebuild`.
     When a built-in memory tool directly matches the user's request, do not inspect implementation with `read` or `bash` first.
-    When asked whether memory was updated, consolidated, or previously triggered, inspect both long-term memory files and the current session state/history before answering.
-    Empty `MEMORY.md` or `HISTORY.md` does not imply this is the first conversation or that no prior session history exists.
+    When asked whether memory was updated or previously triggered, inspect MEMORY.md and the current session state before answering.
+    Empty `MEMORY.md` does not imply this is the first conversation or that no prior session history exists.
     """
 
     parts ++ [guidance]

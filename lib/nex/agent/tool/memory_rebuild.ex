@@ -4,7 +4,6 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
   @behaviour Nex.Agent.Tool.Behaviour
 
   @blank_memory "# Long-term Memory\n"
-  @blank_history "# Conversation History Log\n"
 
   alias Nex.Agent.{Memory, Session, SessionManager}
 
@@ -18,11 +17,10 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     - "rebuild memory" / "full memory rebuild"
     - "重建记忆" / "全量重建记忆"
 
-    This reprocesses the entire session history into MEMORY.md and HISTORY.md instead of waiting
-    for the normal incremental threshold.
+    This reprocesses the entire session history into MEMORY.md.
 
-    Do not use this for a normal "trigger memory consolidation now" request.
-    Use `memory_consolidate` for immediate normal consolidation, or `memory_status` for status-only checks.
+    Do not use this for a normal "refresh memory now" request.
+    Use `memory_consolidate` for an immediate refresh, or `memory_status` for status-only checks.
     """
   end
 
@@ -92,8 +90,7 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
          "batch_messages" => batch_messages,
          "last_consolidated_before" => session.last_consolidated,
          "last_consolidated_after" => updated_session.last_consolidated,
-         "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace)),
-         "history_bytes" => history_bytes(workspace)
+         "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace))
        }}
     end
   end
@@ -157,13 +154,12 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
         [
           api_key: api_key,
           base_url: base_url,
-          archive_all: true,
           workspace: temp_workspace
         ]
         |> maybe_put(:llm_call_fun, llm_call_fun)
 
-      case Memory.consolidate(batch_session, provider, model, opts) do
-        {:ok, _updated_batch_session} ->
+      case Memory.refresh(batch_session, provider, model, opts) do
+        {:ok, _updated_batch_session, _status} ->
           processed = min(idx * batch_size, length(session.messages))
           {:cont, {:ok, processed}}
 
@@ -195,11 +191,6 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
   defp validate_session_key(""), do: {:error, "session_key is required"}
   defp validate_session_key(session_key), do: {:ok, session_key}
 
-  defp history_bytes(workspace) do
-    path = Path.join(memory_dir(workspace), "HISTORY.md")
-    if File.exists?(path), do: File.stat!(path).size, else: 0
-  end
-
   defp rebuild_workspace_path do
     Path.join(
       System.tmp_dir!(),
@@ -211,7 +202,6 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     memory_dir = memory_dir(workspace)
     File.mkdir_p!(memory_dir)
     File.write!(Path.join(memory_dir, "MEMORY.md"), @blank_memory)
-    File.write!(Path.join(memory_dir, "HISTORY.md"), @blank_history)
     :ok
   end
 
@@ -222,11 +212,6 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     File.cp!(
       Path.join(memory_dir(temp_workspace), "MEMORY.md"),
       Path.join(destination_dir, "MEMORY.md")
-    )
-
-    File.cp!(
-      Path.join(memory_dir(temp_workspace), "HISTORY.md"),
-      Path.join(destination_dir, "HISTORY.md")
     )
 
     :ok

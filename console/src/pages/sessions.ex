@@ -15,11 +15,12 @@ defmodule NexAgentConsole.Pages.Sessions do
       end
 
     %{
-      title: "NexAgent Console | Sessions",
-      eyebrow: "Sessions",
-      subtitle: "检查历史会话、手动 consolidation，并重置单个 session。",
+      title: "NexAgent Console | 会话",
+      subtitle: "会话页只承载运行证据：看消息、未 consolidation 数量，再决定是否整理或 reset。",
       current_path: "/sessions",
-      panel_path: panel_path
+      panel_path: panel_path,
+      primary_action_label: "回到六层",
+      primary_action_href: "/evolution"
     }
   end
 
@@ -31,7 +32,7 @@ defmodule NexAgentConsole.Pages.Sessions do
     case Admin.consolidate_memory(session_key) do
       {:ok, payload} ->
         AdminUI.notice(%{
-          title: "Consolidation finished",
+          title: "Consolidation 已完成",
           body: "#{payload["status"]} · #{payload["reason"]}",
           tone: "ok"
         })
@@ -39,7 +40,7 @@ defmodule NexAgentConsole.Pages.Sessions do
 
       {:error, reason} ->
         AdminUI.notice(%{
-          title: "Consolidation failed",
+          title: "Consolidation 失败",
           body: inspect(reason),
           tone: "danger"
         })
@@ -52,7 +53,7 @@ defmodule NexAgentConsole.Pages.Sessions do
     case Admin.reset_session(session_key) do
       :ok ->
         AdminUI.notice(%{
-          title: "Session reset",
+          title: "会话已清空",
           body: session_key,
           tone: "ok"
         })
@@ -60,7 +61,7 @@ defmodule NexAgentConsole.Pages.Sessions do
 
       {:error, reason} ->
         AdminUI.notice(%{
-          title: "Reset failed",
+          title: "清空失败",
           body: inspect(reason),
           tone: "danger"
         })

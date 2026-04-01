@@ -1,10 +1,9 @@
 defmodule Nex.Agent.Memory do
   @moduledoc """
-  Nanobot-style persistent memory store.
+  Persistent memory store.
 
-  The default memory model is two-layer only:
-  - `memory/MEMORY.md` for long-term facts
-  - `memory/HISTORY.md` for grep-friendly summaries
+  The active memory model is single-layer:
+  - `memory/MEMORY.md` for durable long-term facts
   """
 
   require Logger
@@ -68,13 +67,10 @@ defmodule Nex.Agent.Memory do
   end
 
   @doc """
-  Append a grep-friendly history entry to HISTORY.md.
+  Compatibility no-op for retired HISTORY.md writes.
   """
   @spec append_history(String.t(), keyword()) :: :ok
-  def append_history(entry, opts \\ []) do
-    init(opts)
-    history_file = Path.join(memory_dir(opts), "HISTORY.md")
-    File.write!(history_file, String.trim_trailing(entry) <> "\n\n", [:append])
+  def append_history(_entry, _opts \\ []) do
     :ok
   end
 
@@ -133,158 +129,127 @@ defmodule Nex.Agent.Memory do
   end
 
   @doc """
-  Consolidate old messages into MEMORY.md and HISTORY.md via LLM tool call.
+  Refresh MEMORY.md from unreviewed session messages.
 
-  Returns `{:ok, session}` on success or no-op, `{:error, reason}` on failure.
+  Returns `{:ok, session, status}` where status is `:noop` or `:updated`.
   """
-  @spec consolidate(map(), atom(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def consolidate(session, provider, model, opts \\ []) do
+  @spec refresh(map(), atom(), String.t(), keyword()) ::
+          {:ok, map(), :noop | :updated} | {:error, term()}
+  def refresh(session, provider, model, opts \\ []) do
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
-    memory_window = Keyword.get(opts, :memory_window, 50)
-    archive_all = Keyword.get(opts, :archive_all, false)
     workspace = Keyword.get(opts, :workspace)
+    memory_opts = workspace_opts(workspace)
+    pending_messages = pending_memory_messages(session)
 
-    {old_messages, keep_count} =
-      if archive_all do
-        Logger.info("Memory consolidation (archive_all): #{length(session.messages)} messages")
-        {session.messages, 0}
-      else
-        keep_count = div(memory_window, 2)
-
-        cond do
-          length(session.messages) <= keep_count ->
-            {[], keep_count}
-
-          length(session.messages) - session.last_consolidated <= 0 ->
-            {[], keep_count}
-
-          true ->
-            {
-              Enum.slice(
-                session.messages,
-                session.last_consolidated,
-                length(session.messages) - keep_count - session.last_consolidated
-              ),
-              keep_count
-            }
-        end
-      end
-
-    if old_messages == [] do
-      {:ok, session}
+    if pending_messages == [] do
+      {:ok, session, :noop}
     else
-      Logger.info(
-        "Memory consolidation: #{length(old_messages)} to consolidate, #{keep_count} keep"
-      )
-
-      lines =
-        old_messages
-        |> Enum.reduce([], fn m, acc ->
-          content = Map.get(m, "content")
-
-          if is_nil(content) or content == "" do
-            acc
-          else
-            tools =
-              case Map.get(m, "tools_used") do
-                tools when is_list(tools) and tools != [] -> " [tools: #{Enum.join(tools, ", ")}]"
-                _ -> ""
-              end
-
-            timestamp = Map.get(m, "timestamp", "?") |> to_string() |> String.slice(0, 16)
-            role = Map.get(m, "role", "") |> to_string() |> String.upcase()
-            acc ++ ["[#{timestamp}] #{role}#{tools}: #{content}"]
-          end
-        end)
-
-      memory_opts = workspace_opts(workspace)
       current_memory = read_long_term(memory_opts)
       prompt_memory = compact_consolidation_memory(current_memory)
-      messages = consolidation_messages(prompt_memory, lines)
+      lines = render_memory_lines(pending_messages)
+      if lines == [] do
+        {:ok, mark_reviewed(session), :noop}
+      else
+        messages = refresh_messages(prompt_memory, lines)
 
-      llm_opts =
-        [
-          provider: provider,
-          model: model,
-          api_key: api_key,
-          base_url: base_url,
-          tools: save_memory_tool(),
-          tool_choice: tool_choice_for(provider, "save_memory")
-        ]
-        |> maybe_put_llm_opt(
-          :req_llm_generate_text_fun,
-          Keyword.get(opts, :req_llm_generate_text_fun)
-        )
-
-      llm_call_fun =
-        Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
-
-      Logger.info(
-        "[Memory] Consolidation LLM call: provider=#{provider} model=#{model} lines=#{length(lines)} tool_choice=#{inspect(llm_opts[:tool_choice])}"
-      )
-
-      case call_consolidation_llm(
-             messages,
-             llm_opts,
-             llm_call_fun,
-             provider,
-             prompt_memory,
-             lines
-           ) do
-        {:ok, result} ->
-          Logger.info(
-            "[Memory] Consolidation LLM returned tool args: #{inspect(result, limit: 5, printable_limit: 200)}"
+        llm_opts =
+          [
+            provider: provider,
+            model: model,
+            api_key: api_key,
+            base_url: base_url,
+            tools: save_memory_tool(),
+            tool_choice: tool_choice_for(provider, "save_memory")
+          ]
+          |> maybe_put_llm_opt(
+            :req_llm_generate_text_fun,
+            Keyword.get(opts, :req_llm_generate_text_fun)
           )
 
-          case normalize_consolidation_args(result) do
-            {:ok, args} ->
-              apply_consolidation_result(
-                args,
-                session,
-                current_memory,
-                keep_count,
-                archive_all,
-                memory_opts,
-                provider,
-                model,
-                api_key,
-                base_url,
-                Keyword.get(opts, :req_llm_generate_text_fun)
-              )
+        llm_call_fun =
+          Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
 
-            {:error, reason} ->
-              Logger.warning(
-                "[Memory] Consolidation normalize_args failed: #{reason}, raw=#{inspect(result, limit: 200)}"
-              )
+        Logger.info(
+          "[Memory] Refresh LLM call: provider=#{provider} model=#{model} pending=#{length(pending_messages)} tool_choice=#{inspect(llm_opts[:tool_choice])}"
+        )
 
-              {:error, reason}
-          end
+        case call_consolidation_llm(
+               messages,
+               llm_opts,
+               llm_call_fun,
+               provider,
+               prompt_memory,
+               lines
+             ) do
+          {:ok, result} ->
+            case normalize_refresh_args(result) do
+              {:ok, %{"status" => "noop"}} ->
+                {:ok, mark_reviewed(session), :noop}
 
-        {:error, reason} ->
-          Logger.error("[Memory] Consolidation LLM call failed: #{inspect(reason, limit: 500)}")
+              {:ok, %{"status" => "update", "memory_update" => update}} ->
+                update = stringify_result(update)
 
-          {:error, reason}
+                if is_binary(update) and String.trim(update) != "" and
+                     normalize_memory_body(update) != normalize_memory_body(current_memory) do
+                  write_long_term(update, memory_opts)
+                  {:ok, mark_reviewed(session), :updated}
+                else
+                  {:ok, mark_reviewed(session), :noop}
+                end
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[Memory] Refresh normalize_args failed: #{reason}, raw=#{inspect(result, limit: 200)}"
+                )
+
+                {:error, reason}
+            end
+
+          {:error, reason} ->
+            Logger.error("[Memory] Refresh LLM call failed: #{inspect(reason, limit: 500)}")
+            {:error, reason}
+        end
       end
     end
   end
 
-  defp consolidation_messages(prompt_memory, lines) do
+  @doc """
+  Compatibility wrapper for the retired threshold-based consolidation API.
+  """
+  @spec consolidate(map(), atom(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def consolidate(session, provider, model, opts \\ []) do
+    case refresh(session, provider, model, opts) do
+      {:ok, updated_session, _status} -> {:ok, updated_session}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp refresh_messages(prompt_memory, lines) do
     prompt = """
-    Process this conversation and call the save_memory tool with your consolidation.
+    Review this newly completed conversation segment and call the save_memory tool.
 
     ## Current Long-term Memory
     #{prompt_memory}
 
-    ## Conversation to Process
+    ## Conversation Segment
     #{Enum.join(lines, "\n")}
+
+    Update MEMORY.md only when this segment contains durable information worth keeping:
+    - user preferences or stable expectations
+    - confirmed project/environment facts
+    - reusable lessons proven by successful or failed execution
+
+    Do not persist one-off requests, temporary investigation notes, raw TODO lists, or transient outputs.
+    If nothing durable was learned, return status=noop.
+    If updating memory, return the full updated MEMORY.md markdown.
     """
 
     [
       %{
         "role" => "system",
         "content" =>
-          "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."
+          "You are a memory refresh agent. Call the save_memory tool with either noop or a full updated MEMORY.md."
       },
       %{"role" => "user", "content" => prompt}
     ]
@@ -298,7 +263,7 @@ defmodule Nex.Agent.Memory do
             "[Memory] Consolidation compatibility fallback triggered after Anthropic empty/non-JSON success response, retrying with empty memory context"
           )
 
-          llm_call_fun.(consolidation_messages(@empty_memory_context, lines), llm_opts)
+          llm_call_fun.(refresh_messages(@empty_memory_context, lines), llm_opts)
         else
           error
         end
@@ -402,135 +367,117 @@ defmodule Nex.Agent.Memory do
         "type" => "function",
         "function" => %{
           "name" => "save_memory",
-          "description" => "Save the memory consolidation result to persistent storage.",
+          "description" => "Return either noop or the full updated MEMORY.md content.",
           "parameters" => %{
             "type" => "object",
             "properties" => %{
-              "history_entry" => %{
+              "status" => %{
                 "type" => "string",
-                "description" =>
-                  "A paragraph (2-5 sentences) summarizing key events/decisions/topics. Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search."
+                "enum" => ["noop", "update"],
+                "description" => "Use noop when no new durable memory should be written."
               },
               "memory_update" => %{
                 "type" => "string",
                 "description" =>
-                  "Full updated long-term memory as markdown. Include all existing facts plus new ones. Return unchanged if nothing new."
-              },
-              "patterns_noticed" => %{
-                "type" => "string",
-                "description" =>
-                  "Any recurring patterns, repeated failures, user corrections, or notable behavioral trends in this conversation segment. Empty string if none."
+                  "Full updated MEMORY.md as markdown. Required only when status=update."
               }
             },
-            "required" => ["history_entry", "memory_update"]
+            "required" => ["status"]
           }
         }
       }
     ]
   end
 
-  defp normalize_consolidation_args(args) when is_map(args) do
+  defp pending_memory_messages(session) do
+    start_idx = max(Map.get(session, :last_consolidated, 0), 0)
+    Enum.drop(Map.get(session, :messages, []), start_idx)
+  end
+
+  defp render_memory_lines(messages) do
+    messages
+    |> Enum.reduce([], fn m, acc ->
+      content = Map.get(m, "content")
+      tool_calls = Map.get(m, "tool_calls")
+
+      has_content? = is_binary(content) and content != ""
+      has_tool_calls? = is_list(tool_calls) and tool_calls != []
+
+      if not has_content? and not has_tool_calls? do
+        acc
+      else
+        tools =
+          case Map.get(m, "tools_used") do
+            tools when is_list(tools) and tools != [] -> " [tools: #{Enum.join(tools, ", ")}]"
+            _ -> ""
+          end
+
+        tool_info =
+          if has_tool_calls? do
+            call_names =
+              Enum.map(tool_calls, fn tc ->
+                func = Map.get(tc, "function") || %{}
+                Map.get(func, "name", "unknown")
+              end)
+
+            " [called: #{Enum.join(call_names, ", ")}]"
+          else
+            ""
+          end
+
+        timestamp = Map.get(m, "timestamp", "?") |> to_string() |> String.slice(0, 16)
+        role = Map.get(m, "role", "") |> to_string() |> String.upcase()
+        display_content = if has_content?, do: content, else: "(tool call)"
+        acc ++ ["[#{timestamp}] #{role}#{tools}#{tool_info}: #{display_content}"]
+      end
+    end)
+  end
+
+  defp normalize_refresh_args(args) when is_map(args) do
     normalized =
       args
       |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
 
-    cond do
-      map_size(normalized) == 0 ->
-        {:error, "missing save_memory payload"}
-
-      Map.get(normalized, "history_entry") in [nil, ""] ->
-        {:error, "save_memory payload missing history_entry"}
-
-      Map.get(normalized, "memory_update") in [nil, ""] ->
-        {:error, "save_memory payload missing memory_update"}
-
-      true ->
+    case Map.get(normalized, "status") do
+      "noop" ->
         {:ok, normalized}
+
+      "update" ->
+        if Map.get(normalized, "memory_update") in [nil, ""] do
+          {:error, "save_memory payload missing memory_update for update"}
+        else
+          {:ok, normalized}
+        end
+
+      nil ->
+        {:error, "save_memory payload missing status"}
+
+      other ->
+        {:error, "unexpected save_memory status #{inspect(other)}"}
     end
   end
 
-  defp normalize_consolidation_args(args) when is_binary(args) do
+  defp normalize_refresh_args(args) when is_binary(args) do
     case Jason.decode(args) do
-      {:ok, decoded} when is_map(decoded) ->
-        {:ok, decoded}
-
-      {:ok, decoded} when is_list(decoded) ->
-        normalize_consolidation_args(decoded)
-
-      _ ->
-        {:error, "unexpected arguments type string"}
+      {:ok, decoded} when is_map(decoded) -> normalize_refresh_args(decoded)
+      {:ok, decoded} when is_list(decoded) -> normalize_refresh_args(decoded)
+      _ -> {:error, "unexpected arguments type string"}
     end
   end
 
-  defp normalize_consolidation_args([first | _rest]) when is_map(first), do: {:ok, first}
+  defp normalize_refresh_args([first | _rest]) when is_map(first), do: normalize_refresh_args(first)
+  defp normalize_refresh_args([]), do: {:error, "unexpected arguments as empty list"}
+  defp normalize_refresh_args(_), do: {:error, "unexpected arguments type"}
 
-  defp normalize_consolidation_args([]),
-    do: {:error, "unexpected arguments as empty or non-dict list"}
+  defp normalize_memory_body(content) do
+    content
+    |> to_string()
+    |> String.replace("\r\n", "\n")
+    |> String.trim()
+  end
 
-  defp normalize_consolidation_args(_), do: {:error, "unexpected arguments type"}
-
-  defp apply_consolidation_result(
-         args,
-         session,
-         current_memory,
-         keep_count,
-         archive_all,
-         memory_opts,
-         provider,
-         model,
-         api_key,
-         base_url,
-         req_llm_generate_text_fun
-       ) do
-    entry = stringify_result(Map.get(args, "history_entry"))
-    update = stringify_result(Map.get(args, "memory_update"))
-    patterns = stringify_result(Map.get(args, "patterns_noticed"))
-
-    if entry != nil do
-      append_history(entry, memory_opts)
-    end
-
-    if update != nil and update != current_memory do
-      write_long_term(update, memory_opts)
-    end
-
-    # Record patterns noticed during consolidation as evolution signals
-    if patterns != nil and String.trim(patterns) != "" do
-      Nex.Agent.Evolution.record_signal(
-        %{
-          source: "consolidation",
-          signal: patterns,
-          context: %{message_count: length(session.messages)}
-        },
-        memory_opts
-      )
-    end
-
-    updated_session = %{
-      session
-      | last_consolidated:
-          if(archive_all,
-            do: length(session.messages),
-            else: length(session.messages) - keep_count
-          )
-    }
-
-    Logger.info(
-      "Memory consolidation done: #{length(session.messages)} messages, last_consolidated=#{updated_session.last_consolidated}"
-    )
-
-    # Maybe trigger evolution cycle after N consolidations.
-    evolution_opts =
-      memory_opts
-      |> Keyword.put(:provider, provider)
-      |> Keyword.put(:model, model)
-      |> maybe_put_llm_opt(:api_key, api_key)
-      |> maybe_put_llm_opt(:base_url, base_url)
-      |> maybe_put_llm_opt(:req_llm_generate_text_fun, req_llm_generate_text_fun)
-
-    Nex.Agent.Evolution.maybe_trigger_after_consolidation(evolution_opts)
-
-    {:ok, updated_session}
+  defp mark_reviewed(session) do
+    %{session | last_consolidated: length(Map.get(session, :messages, []))}
   end
 
   defp stringify_result(nil), do: nil
@@ -621,7 +568,7 @@ defmodule Nex.Agent.Memory do
     {:ok, %{target: target, action: "set"}}
   end
 
-  defp tool_choice_for(_provider, _name), do: nil
+  defp tool_choice_for(_provider, name), do: %{type: "function", function: %{name: name}}
 
   defp maybe_put_llm_opt(opts, _key, nil), do: opts
   defp maybe_put_llm_opt(opts, key, value), do: Keyword.put(opts, key, value)

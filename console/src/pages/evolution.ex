@@ -6,11 +6,12 @@ defmodule NexAgentConsole.Pages.Evolution do
 
   def mount(_params) do
     %{
-      title: "NexAgent Console | Evolution",
-      eyebrow: "Evolution",
-      subtitle: "观察 signals、审计时间线，并手动触发 evolution cycle。",
+      title: "NexAgent Console | 分层进化",
+      subtitle: "这里先判断变化该落到 SOUL、USER、MEMORY、SKILL、TOOL 还是 CODE，再决定是否手动运行。",
       current_path: "/evolution",
-      panel_path: "/api/admin/panels/evolution"
+      panel_path: "/api/admin/panels/evolution",
+      primary_action_label: "跳到手动运行",
+      primary_action_href: "#manual-cycle"
     }
   end
 
@@ -20,16 +21,19 @@ defmodule NexAgentConsole.Pages.Evolution do
     case Admin.run_evolution_cycle() do
       {:ok, result} ->
         AdminUI.notice(%{
-          title: "Evolution cycle completed",
+          title: "Evolution cycle 已完成",
           body:
             "Soul #{result.soul_updates} / Memory #{result.memory_updates} / Skill drafts #{result.skill_candidates}",
           tone: "ok"
         })
-        |> trigger("admin-event", %{topic: "evolution", summary: "Manual evolution cycle completed"})
+        |> trigger("admin-event", %{
+          topic: "evolution",
+          summary: "Manual evolution cycle completed"
+        })
 
       {:error, reason} ->
         AdminUI.notice(%{
-          title: "Evolution cycle failed",
+          title: "Evolution cycle 失败",
           body: inspect(reason),
           tone: "danger"
         })

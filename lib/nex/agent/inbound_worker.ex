@@ -8,7 +8,7 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config, Workspace}
+  alias Nex.Agent.{Bus, Config, MemoryUpdater, Workspace}
 
   defstruct [
     :config,
@@ -83,6 +83,7 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
 
     # Don't overwrite user agent with cron's ephemeral agent
     state =
@@ -94,12 +95,15 @@ defmodule Nex.Agent.InboundWorker do
       publish_outbound(payload, result)
     end
 
+    maybe_enqueue_memory_refresh(updated_agent, payload, from_cron, from_subagent)
+
     {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
   def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
 
     state =
       if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
@@ -109,6 +113,8 @@ defmodule Nex.Agent.InboundWorker do
     unless from_cron do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
+
+    maybe_enqueue_memory_refresh(updated_agent, payload, from_cron, from_subagent)
 
     {:noreply, maybe_drain_pending(state, key)}
   end
@@ -299,7 +305,13 @@ defmodule Nex.Agent.InboundWorker do
             state.agent_prompt_fun.(
               agent,
               content,
-              [channel: channel, chat_id: chat_id, on_progress: on_progress, workspace: workspace]
+              [
+                channel: channel,
+                chat_id: chat_id,
+                on_progress: on_progress,
+                workspace: workspace,
+                schedule_memory_refresh: false
+              ]
               |> maybe_put_opt(:media, media)
               |> Kernel.++(cron_opts)
             )
@@ -596,6 +608,20 @@ defmodule Nex.Agent.InboundWorker do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent), do: :ok
+  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true), do: :ok
+
+  defp maybe_enqueue_memory_refresh(%Nex.Agent{} = agent, _payload, false, false) do
+    MemoryUpdater.enqueue(
+      agent.session,
+      provider: agent.provider,
+      model: agent.model,
+      api_key: agent.api_key,
+      base_url: agent.base_url,
+      workspace: agent.workspace
+    )
+  end
 
   # Suppress LLM outputs that are clearly not real replies to the user.
   # Uses structural checks rather than keyword blocklists.

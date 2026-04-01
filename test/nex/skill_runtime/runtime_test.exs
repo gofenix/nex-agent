@@ -217,6 +217,94 @@ defmodule Nex.SkillRuntimeTest do
     assert [_ | _] = Path.wildcard(Path.join(runs_dir, "*.jsonl"))
   end
 
+  test "prepare_run prefers poster skill over URL noise for Chinese poster prompts", %{
+    workspace: workspace
+  } do
+    poster_dir = Path.join(workspace, "skills/rt__article_poster")
+    File.mkdir_p!(poster_dir)
+
+    File.write!(
+      Path.join(poster_dir, "SKILL.md"),
+      """
+      ---
+      name: article-poster
+      description: Trigger when user says "文章海报", "信息图", or "生成海报".
+      ---
+
+      Use this skill to turn an article or URL into a poster image.
+      """
+    )
+
+    github_dir = Path.join(workspace, "skills/rt__github_deep_research")
+    File.mkdir_p!(github_dir)
+
+    File.write!(
+      Path.join(github_dir, "SKILL.md"),
+      """
+      ---
+      name: github-deep-research
+      description: Research GitHub repositories and pull requests.
+      ---
+
+      This skill explains how to inspect https://github.com links, compare commits,
+      review pull requests, and fetch screenshots from repository pages.
+      """
+    )
+
+    assert {:ok, prepared_run} =
+             SkillRuntime.prepare_run("生成海报 https://github.com/HKUDS/nanobot 16:9 三列",
+               workspace: workspace,
+               project_root: workspace,
+               skill_runtime: %{"enabled" => true}
+             )
+
+    assert [first | _] = prepared_run.selected_packages
+    assert first.name == "article-poster"
+  end
+
+  test "runner adds authoritative guard when a knowledge skill is selected", %{workspace: workspace} do
+    package_dir = Path.join(workspace, "skills/rt__article_poster")
+    File.mkdir_p!(package_dir)
+
+    File.write!(
+      Path.join(package_dir, "SKILL.md"),
+      """
+      ---
+      name: article-poster
+      description: Trigger when user says "生成海报".
+      ---
+
+      Render the poster with render.mjs and deliver the PNG artifact.
+      """
+    )
+
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("skill-runtime-guard"), "生成海报",
+               llm_client: llm_client,
+               workspace: workspace,
+               cwd: workspace,
+               skill_runtime: %{"enabled" => true},
+               skip_consolidation: true
+             )
+
+    assert_receive {:messages, messages}
+
+    assert Enum.any?(messages, fn message ->
+             message["role"] == "system" and
+               String.contains?(
+                 message["content"],
+                 "Selected skill packages for this turn are authoritative: article-poster"
+               )
+           end)
+  end
+
   defp fake_http_get(skill_md, script, entry) do
     fn url, _opts ->
       body =

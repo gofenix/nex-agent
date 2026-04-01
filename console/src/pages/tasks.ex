@@ -6,11 +6,12 @@ defmodule NexAgentConsole.Pages.Tasks do
 
   def mount(_params) do
     %{
-      title: "NexAgent Console | Tasks",
-      eyebrow: "Tasks",
-      subtitle: "任务摘要、cron job 启停，以及手动 run。",
+      title: "NexAgent Console | 任务",
+      subtitle: "任务页只处理调度执行与 cron，不负责解释进化层该怎么分流。",
       current_path: "/tasks",
-      panel_path: "/api/admin/panels/tasks"
+      panel_path: "/api/admin/panels/tasks",
+      primary_action_label: "查看运行时",
+      primary_action_href: "/runtime"
     }
   end
 
@@ -23,11 +24,11 @@ defmodule NexAgentConsole.Pages.Tasks do
   defp cron_action(job_id, :run) do
     case Admin.run_cron_job(job_id) do
       {:ok, _job} ->
-        AdminUI.notice(%{title: "Cron triggered", body: job_id, tone: "ok"})
+        AdminUI.notice(%{title: "计划任务已触发", body: job_id, tone: "ok"})
         |> trigger("admin-event", %{topic: "tasks", summary: "Cron job triggered"})
 
       {:error, reason} ->
-        AdminUI.notice(%{title: "Cron trigger failed", body: inspect(reason), tone: "danger"})
+        AdminUI.notice(%{title: "触发失败", body: inspect(reason), tone: "danger"})
     end
   end
 
@@ -37,7 +38,7 @@ defmodule NexAgentConsole.Pages.Tasks do
     case Admin.enable_cron_job(job_id, enabled) do
       {:ok, _job} ->
         AdminUI.notice(%{
-          title: if(enabled, do: "Cron enabled", else: "Cron disabled"),
+          title: if(enabled, do: "计划任务已启用", else: "计划任务已停用"),
           body: job_id,
           tone: if(enabled, do: "ok", else: "warn")
         })
@@ -45,7 +46,7 @@ defmodule NexAgentConsole.Pages.Tasks do
 
       {:error, reason} ->
         AdminUI.notice(%{
-          title: "Cron update failed",
+          title: "更新失败",
           body: inspect(reason),
           tone: "danger"
         })

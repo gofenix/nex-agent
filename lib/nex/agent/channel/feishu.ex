@@ -28,6 +28,7 @@ defmodule Nex.Agent.Channel.Feishu do
     :react_emoji,
     :enabled,
     :http_post_fun,
+    :http_post_multipart_fun,
     :http_get_fun,
     :tenant_access_token,
     :tenant_access_token_expire_at,
@@ -50,6 +51,8 @@ defmodule Nex.Agent.Channel.Feishu do
           react_emoji: String.t(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_post_multipart_fun: (String.t(), keyword(), keyword() ->
+                                      {:ok, map()} | {:error, term()}),
           http_get_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
           tenant_access_token: String.t() | nil,
           tenant_access_token_expire_at: integer() | nil,
@@ -76,6 +79,26 @@ defmodule Nex.Agent.Channel.Feishu do
       content: content,
       metadata: metadata
     })
+  end
+
+  @doc "Send a message synchronously and confirm whether Feishu accepted it."
+  @spec deliver_message(String.t(), String.t() | nil, map()) :: :ok | {:error, term()}
+  def deliver_message(chat_id, content, metadata \\ %{}) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:send_message, chat_id, content, metadata}, 15_000)
+    else
+      {:error, :feishu_not_running}
+    end
+  end
+
+  @doc "Upload a local image and send it as a native Feishu image message."
+  @spec deliver_local_image(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def deliver_local_image(chat_id, image_path, metadata \\ %{}) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:send_local_image, chat_id, image_path, metadata}, 30_000)
+    else
+      {:error, :feishu_not_running}
+    end
   end
 
   @doc "Send an interactive card and return its message_id for subsequent PATCH updates."
@@ -129,6 +152,8 @@ defmodule Nex.Agent.Channel.Feishu do
       react_emoji: Config.feishu_react_emoji(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
+      http_post_multipart_fun:
+        Keyword.get(opts, :http_post_multipart_fun, &default_http_post_multipart/3),
       http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/2),
       tenant_access_token: nil,
       tenant_access_token_expire_at: nil,
@@ -179,6 +204,34 @@ defmodule Nex.Agent.Channel.Feishu do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:send_message, chat_id, content, metadata}, _from, state) do
+    payload = %{
+      chat_id: to_string(chat_id),
+      content: content,
+      metadata: metadata
+    }
+
+    case do_send(payload, state) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:send_local_image, chat_id, image_path, metadata}, _from, state) do
+    case do_send_local_image(chat_id, image_path, metadata, state) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1106,6 +1159,34 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp headers_content_type(_), do: "image/jpeg"
 
+  defp do_send_local_image(chat_id, image_path, metadata, state) do
+    metadata = stringify_keys(metadata || %{})
+
+    with {:ok, image_key, state} <- upload_local_image(image_path, state),
+         payload <- %{
+           chat_id: to_string(chat_id),
+           content: nil,
+           metadata:
+             metadata
+             |> Map.put("msg_type", "image")
+             |> Map.put("content_json", %{"image_key" => image_key})
+         },
+         {:ok, new_state} <-
+           send_explicit_message(
+             payload,
+             to_string(chat_id),
+             nil,
+             "image",
+             %{"image_key" => image_key},
+             state
+           ) do
+      {:ok, new_state}
+    else
+      {:error, reason} -> {:error, reason, state}
+      {:error, reason, new_state} -> {:error, reason, new_state}
+    end
+  end
+
   defp do_send(_payload, %{enabled: false} = state), do: {:ok, state}
 
   defp do_send(payload, state) do
@@ -1502,6 +1583,12 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
+  defp feishu_post_multipart(state, path, body, headers) do
+    state.http_post_multipart_fun.(@feishu_api <> path, body, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
   defp feishu_patch(_state, path, body, headers) do
     url = @feishu_api <> path
 
@@ -1557,6 +1644,16 @@ defmodule Nex.Agent.Channel.Feishu do
     )
   end
 
+  defp default_http_post_multipart(url, body, headers) do
+    Req.post(url,
+      form_multipart: body,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms,
+      retry: false,
+      finch: Req.Finch
+    )
+  end
+
   defp default_http_get(url, headers) do
     Req.get(url,
       headers: headers,
@@ -1598,6 +1695,44 @@ defmodule Nex.Agent.Channel.Feishu do
   defp stringify_value(value) when is_map(value), do: stringify_keys(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
+
+  defp upload_local_image(image_path, state) when is_binary(image_path) and image_path != "" do
+    expanded_path = Path.expand(image_path)
+
+    cond do
+      not File.exists?(expanded_path) ->
+        {:error, {:local_image_not_found, expanded_path}, state}
+
+      not File.regular?(expanded_path) ->
+        {:error, {:local_image_not_regular_file, expanded_path}, state}
+
+      true ->
+        multipart = [
+          image_type: "message",
+          image:
+            {File.stream!(expanded_path, [], 2048),
+             filename: Path.basename(expanded_path), content_type: MIME.from_path(expanded_path)}
+        ]
+
+        with {:ok, token, state} <- get_tenant_access_token(state),
+             {:ok, body} <-
+               feishu_post_multipart(
+                 state,
+                 "/im/v1/images",
+                 multipart,
+                 [{"Authorization", "Bearer #{token}"}]
+               ),
+             image_key when is_binary(image_key) and image_key != "" <-
+               get_in(body, ["data", "image_key"]) do
+          {:ok, image_key, state}
+        else
+          {:error, reason} -> {:error, reason, state}
+          other -> {:error, {:missing_image_key, other}, state}
+        end
+    end
+  end
+
+  defp upload_local_image(_, state), do: {:error, :invalid_local_image_path, state}
 
   defp calendar_summary(content_json, label) do
     summary = Map.get(content_json, "summary", "")
