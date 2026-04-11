@@ -1,0 +1,51 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="28" fill="#08101F"/>
+  <rect x="50" y="50" width="1100" height="620" rx="28" fill="#0F1730" stroke="#223253" stroke-width="2"/>
+
+  <text x="82" y="106" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">一个长期 Agent 系统的五层结构</text>
+  <text x="82" y="140" fill="#98A9CC" font-family="Inter, Arial, sans-serif" font-size="18">入口、运行、状态、后台和进化不是散落的功能，而是一个连续的 runtime。</text>
+
+  <rect x="88" y="198" width="214" height="120" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="120" y="236" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">ENTRY</text>
+  <text x="120" y="274" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">入口层</text>
+  <text x="120" y="304" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">Gateway + Channels</text>
+
+  <rect x="334" y="198" width="214" height="120" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="366" y="236" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">RUNTIME</text>
+  <text x="366" y="274" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">运行层</text>
+  <text x="366" y="304" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">InboundWorker + Runner</text>
+
+  <rect x="580" y="198" width="258" height="120" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="612" y="236" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">STATE + CAPABILITY</text>
+  <text x="612" y="274" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">状态与能力层</text>
+  <text x="612" y="304" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">SessionManager / Memory / Skills</text>
+
+  <rect x="870" y="198" width="242" height="120" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="902" y="236" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">BACKGROUND</text>
+  <text x="902" y="274" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">后台执行层</text>
+  <text x="902" y="304" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">Cron / Subagent</text>
+
+  <rect x="120" y="414" width="960" height="176" rx="28" fill="#0C1428" stroke="#2E436E" stroke-width="2"/>
+  <text x="156" y="458" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">EVOLUTION</text>
+  <text x="156" y="498" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">进化层</text>
+  <text x="156" y="530" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">系统不会把所有变化都混成一个模糊的 memory，而是把变化送进不同层级。</text>
+
+  <rect x="156" y="548" width="108" height="30" rx="15" fill="#152545" stroke="#36527F"/>
+  <text x="187" y="569" fill="#BBD9FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">SOUL</text>
+  <rect x="278" y="548" width="108" height="30" rx="15" fill="#152545" stroke="#36527F"/>
+  <text x="309" y="569" fill="#BBD9FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">USER</text>
+  <rect x="400" y="548" width="126" height="30" rx="15" fill="#152545" stroke="#36527F"/>
+  <text x="429" y="569" fill="#BBD9FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">MEMORY</text>
+  <rect x="540" y="548" width="110" height="30" rx="15" fill="#152545" stroke="#36527F"/>
+  <text x="571" y="569" fill="#BBD9FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">SKILL</text>
+  <rect x="664" y="548" width="102" height="30" rx="15" fill="#152545" stroke="#36527F"/>
+  <text x="694" y="569" fill="#BBD9FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">TOOL</text>
+  <rect x="780" y="548" width="98" height="30" rx="15" fill="#24192C" stroke="#5A3E68"/>
+  <text x="810" y="569" fill="#EDC6FF" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">CODE</text>
+
+  <path d="M302 258H334" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M548 258H580" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M838 258H870" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M991 318V374C991 396.091 973.091 414 951 414H600" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M195 318V374C195 396.091 212.909 414 235 414H600" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+</svg>

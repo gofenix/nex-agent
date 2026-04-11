@@ -2,6 +2,11 @@
 
 Load the repo-local skills before you start changing code when they match the task.
 
+## Collaboration Preferences
+
+- Do not end responses with soft follow-up prompts like “if you want” / “if you’d like” / “if you愿意”.
+- Distinguish clearly between a working draft for internal thinking and a polished document that can be shared directly. Do not leave meta-writing scaffolding in shareable docs.
+
 ## Browser Automation
 
 Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.

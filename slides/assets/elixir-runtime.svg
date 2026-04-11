@@ -1,0 +1,36 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="28" fill="#08101F"/>
+  <rect x="50" y="50" width="1100" height="620" rx="28" fill="#0F1730" stroke="#223253" stroke-width="2"/>
+
+  <text x="82" y="106" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">为什么是 Elixir / OTP</text>
+  <text x="82" y="140" fill="#98A9CC" font-family="Inter, Arial, sans-serif" font-size="18">因为我们要承载的不是一次性的模型调用，而是一套长期活着的 agent runtime。</text>
+
+  <rect x="92" y="208" width="222" height="146" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="124" y="250" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">RECOVERY</text>
+  <text x="124" y="292" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">监督树</text>
+  <text x="124" y="326" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">把失败当成常态处理</text>
+
+  <rect x="356" y="208" width="222" height="146" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="388" y="250" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">BOUNDARY</text>
+  <text x="388" y="292" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">进程隔离</text>
+  <text x="388" y="326" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">会话 / 任务天然有边界</text>
+
+  <rect x="620" y="208" width="222" height="146" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="652" y="250" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">CONCURRENCY</text>
+  <text x="652" y="292" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">并发模型</text>
+  <text x="652" y="326" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">多入口 / 多任务更自然</text>
+
+  <rect x="884" y="208" width="224" height="146" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="916" y="250" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">UPGRADE</text>
+  <text x="916" y="292" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">热代码加载</text>
+  <text x="916" y="326" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">为运行时升级留下空间</text>
+
+  <rect x="168" y="464" width="864" height="132" rx="26" fill="#0C1428" stroke="#2E436E" stroke-width="2"/>
+  <text x="206" y="514" fill="#67B7FF" font-family="Inter, Arial, sans-serif" font-size="18" letter-spacing="4">WHY IT FITS</text>
+  <text x="206" y="556" fill="#F7FBFF" font-family="Inter, Arial, sans-serif" font-size="32" font-weight="700">长期在线、可恢复、可拆分、可热更新</text>
+  <text x="206" y="590" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">这不是“工程师喜欢什么语言”的问题，而是 agent runtime 需要什么运行模型的问题。</text>
+
+  <path d="M314 281H356" stroke="#35517F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M578 281H620" stroke="#35517F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M842 281H884" stroke="#35517F" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,35 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="28" fill="#08101F"/>
+  <rect x="50" y="50" width="1100" height="620" rx="28" fill="#0F1730" stroke="#223253" stroke-width="2"/>
+
+  <text x="82" y="106" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">NexAgent 的六层进化结构</text>
+  <text x="82" y="140" fill="#98A9CC" font-family="Inter, Arial, sans-serif" font-size="18">变化优先落在更轻、更高的层。先记住事实，再沉淀方法，再扩展能力，最后才进入代码。</text>
+
+  <rect x="108" y="188" width="984" height="58" rx="18" fill="#122145" stroke="#35527F" stroke-width="2"/>
+  <text x="142" y="225" fill="#B9D9FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">SOUL</text>
+  <text x="320" y="225" fill="#C8D7F4" font-family="Inter, Arial, sans-serif" font-size="18">身份、价值观、长期行为原则</text>
+
+  <rect x="132" y="266" width="936" height="58" rx="18" fill="#122145" stroke="#35527F" stroke-width="2"/>
+  <text x="166" y="303" fill="#B9D9FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">USER</text>
+  <text x="344" y="303" fill="#C8D7F4" font-family="Inter, Arial, sans-serif" font-size="18">用户画像、协作偏好</text>
+
+  <rect x="156" y="344" width="888" height="58" rx="18" fill="#122145" stroke="#35527F" stroke-width="2"/>
+  <text x="190" y="381" fill="#B9D9FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">MEMORY</text>
+  <text x="368" y="381" fill="#C8D7F4" font-family="Inter, Arial, sans-serif" font-size="18">环境、项目和上下文中的长期事实</text>
+
+  <rect x="180" y="422" width="840" height="58" rx="18" fill="#122145" stroke="#35527F" stroke-width="2"/>
+  <text x="214" y="459" fill="#B9D9FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">SKILL</text>
+  <text x="392" y="459" fill="#C8D7F4" font-family="Inter, Arial, sans-serif" font-size="18">稳定的方法和流程，能够复用的程序性知识</text>
+
+  <rect x="204" y="500" width="792" height="50" rx="16" fill="#122145" stroke="#35527F" stroke-width="2"/>
+  <text x="238" y="532" fill="#B9D9FF" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">TOOL</text>
+  <text x="392" y="532" fill="#C8D7F4" font-family="Inter, Arial, sans-serif" font-size="18">确定性的可执行能力</text>
+
+  <rect x="228" y="570" width="744" height="50" rx="16" fill="#24192C" stroke="#5A3E68" stroke-width="2"/>
+  <text x="262" y="602" fill="#EDC6FF" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">CODE</text>
+  <text x="416" y="602" fill="#D7B7E7" font-family="Inter, Arial, sans-serif" font-size="18">系统内部实现的变化，最后才进入这一层</text>
+
+  <path d="M996 196V608" stroke="#36527F" stroke-width="4" stroke-linecap="round" stroke-dasharray="7 10"/>
+  <text x="930" y="182" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="15">更高 / 更轻</text>
+  <text x="930" y="638" fill="#D6B8E7" font-family="Inter, Arial, sans-serif" font-size="15">更低 / 更重</text>
+</svg>

@@ -1,0 +1,35 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="28" fill="#08101F"/>
+  <rect x="50" y="50" width="1100" height="620" rx="28" fill="#0F1730" stroke="#223253" stroke-width="2"/>
+
+  <text x="82" y="106" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">进入 CODE 层时怎么做</text>
+  <text x="82" y="140" fill="#98A9CC" font-family="Inter, Arial, sans-serif" font-size="18">系统允许 code-level evolution，但它必须是一条有入口、有过程、有边界的路径。</text>
+
+  <rect x="86" y="274" width="218" height="128" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="118" y="314" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">INSPECT</text>
+  <text x="118" y="354" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">reflect</text>
+  <text x="118" y="386" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">看源码 / 历史 / 差异</text>
+
+  <rect x="344" y="274" width="218" height="128" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="376" y="314" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">SUBMIT</text>
+  <text x="376" y="354" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">upgrade_code</text>
+  <text x="376" y="386" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">提交新的模块实现</text>
+
+  <rect x="602" y="274" width="218" height="128" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="634" y="314" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">VALIDATE</text>
+  <text x="634" y="354" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">CodeUpgrade</text>
+  <text x="634" y="386" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">备份 / 验证 / 编译 / 加载</text>
+
+  <rect x="860" y="274" width="252" height="128" rx="24" fill="#121631" stroke="#435895" stroke-width="2"/>
+  <text x="892" y="314" fill="#69E0FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">APPLY</text>
+  <text x="892" y="354" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">UpgradeManager</text>
+  <text x="892" y="386" fill="#9AAED4" font-family="Inter, Arial, sans-serif" font-size="18">热更新 / 版本保存 / 回滚保护</text>
+
+  <path d="M304 338H344" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M562 338H602" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M820 338H860" stroke="#36527F" stroke-width="4" stroke-linecap="round"/>
+
+  <rect x="188" y="500" width="824" height="104" rx="24" fill="#0C1428" stroke="#2E436E" stroke-width="2"/>
+  <text x="224" y="544" fill="#67B7FF" font-family="Inter, Arial, sans-serif" font-size="18" letter-spacing="4">BOUNDARY</text>
+  <text x="224" y="582" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">系统不回避代码升级，但它拒绝无边界地乱改</text>
+</svg>

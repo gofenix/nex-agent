@@ -1,0 +1,28 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="28" fill="#08101F"/>
+  <rect x="50" y="50" width="1100" height="620" rx="28" fill="#0F1730" stroke="#223253" stroke-width="2"/>
+  <path d="M98 114H466" stroke="#223253" stroke-width="2"/>
+  <path d="M98 154H332" stroke="#223253" stroke-width="2"/>
+  <path d="M1036 114H1098" stroke="#37517F" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1036 134H1098" stroke="#37517F" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1036 154H1098" stroke="#37517F" stroke-width="3" stroke-linecap="round"/>
+  <rect x="92" y="592" width="164" height="24" rx="12" fill="#0C1428" stroke="#223253"/>
+  <rect x="274" y="592" width="112" height="24" rx="12" fill="#0C1428" stroke="#223253"/>
+
+  <rect x="710" y="144" width="276" height="124" rx="24" fill="#111D37" stroke="#2E436E" stroke-width="2"/>
+  <text x="742" y="188" fill="#6FE1FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">ENTRY</text>
+  <text x="742" y="228" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">真实消息入口</text>
+  <text x="742" y="258" fill="#99ACD2" font-family="Inter, Arial, sans-serif" font-size="18">Telegram / Feishu / Discord</text>
+
+  <rect x="638" y="318" width="348" height="156" rx="24" fill="#101A31" stroke="#2E436E" stroke-width="2"/>
+  <text x="670" y="362" fill="#6FE1FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">RUNTIME</text>
+  <text x="670" y="404" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">长期运行的 Agent 系统</text>
+  <text x="670" y="438" fill="#99ACD2" font-family="Inter, Arial, sans-serif" font-size="18">InboundWorker / Runner / Memory / Skills</text>
+
+  <rect x="566" y="520" width="420" height="108" rx="24" fill="#0C1428" stroke="#2E436E" stroke-width="2"/>
+  <text x="598" y="564" fill="#6FE1FF" font-family="Inter, Arial, sans-serif" font-size="16" letter-spacing="4">EVOLUTION</text>
+  <text x="598" y="602" fill="#F2F7FF" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">SOUL / USER / MEMORY / SKILL / TOOL / CODE</text>
+
+  <path d="M670 206H710" stroke="#385281" stroke-width="4" stroke-linecap="round"/>
+  <path d="M638 396H508C478 396 454 420 454 450V538" stroke="#385281" stroke-width="4" stroke-linecap="round"/>
+</svg>
