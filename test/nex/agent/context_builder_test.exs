@@ -380,4 +380,30 @@ defmodule Nex.Agent.ContextBuilderTest do
     refute runtime_context =~ "Mode:"
     refute runtime_context =~ "Secondary Modes:"
   end
+
+  test "runtime context uses explicit local timezone and UTC reference", %{workspace: workspace} do
+    runtime_context =
+      ContextBuilder.build_runtime_context("feishu", "oc_1",
+        workspace: workspace,
+        now: ~U[2026-05-05 01:08:00Z],
+        timezone: "Asia/Shanghai"
+      )
+
+    assert runtime_context =~ "Current Time: 2026-05-05 09:08"
+    assert runtime_context =~ "Asia/Shanghai (UTC+08:00)"
+    assert runtime_context =~ "UTC: 2026-05-05 01:08Z"
+  end
+
+  test "runtime context reads timezone from USER.md", %{workspace: workspace} do
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n- **Timezone**: UTC+8\n")
+
+    runtime_context =
+      ContextBuilder.build_runtime_context("feishu", "oc_1",
+        workspace: workspace,
+        now: ~U[2026-05-05 01:08:00Z]
+      )
+
+    assert runtime_context =~ "Current Time: 2026-05-05 09:08"
+    assert runtime_context =~ "UTC+8 (UTC+08:00)"
+  end
 end

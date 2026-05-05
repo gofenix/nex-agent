@@ -18,6 +18,9 @@ defmodule Nex.Agent.Channel.FeishuTest do
         String.contains?(url, "/auth/v3/tenant_access_token/internal") ->
           {:ok, %{"code" => 0, "tenant_access_token" => "tenant-token", "expire" => 7200}}
 
+        String.contains?(url, "/reactions") ->
+          {:ok, %{"code" => 0, "data" => %{"reaction_id" => "re_123"}}}
+
         String.contains?(url, "/im/v1/messages") ->
           {:ok, %{"code" => 0, "data" => %{"message_id" => "om_123"}}}
 
@@ -51,6 +54,11 @@ defmodule Nex.Agent.Channel.FeishuTest do
       end
     end
 
+    http_delete_fun = fn url, headers ->
+      send(parent, {:http_delete, url, headers})
+      {:ok, %{"code" => 0}}
+    end
+
     config = %Config{Config.default() | feishu: %{"enabled" => false}}
     name = String.to_atom("feishu_test_#{System.unique_integer([:positive])}")
 
@@ -61,11 +69,18 @@ defmodule Nex.Agent.Channel.FeishuTest do
          config: config,
          http_post_fun: http_post_fun,
          http_post_multipart_fun: http_post_multipart_fun,
-         http_get_fun: http_get_fun}
+         http_get_fun: http_get_fun,
+         http_delete_fun: http_delete_fun}
       )
 
     :sys.replace_state(pid, fn state ->
-      %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
+      %{
+        state
+        | enabled: true,
+          app_id: "cli_test",
+          app_secret: "sec_test",
+          bot_open_id: "ou_bot"
+      }
     end)
 
     Bus.subscribe(:inbound)
@@ -77,7 +92,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     {:ok, pid: pid}
   end
 
-  test "legacy outbound still defaults to interactive card", %{pid: _pid} do
+  test "plain outbound defaults to native text message", %{pid: _pid} do
     Bus.publish_sync(:feishu_outbound, %{
       chat_id: "ou_123",
       content: "hello world",
@@ -89,9 +104,27 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     assert_receive {:http_post, url2, body2, _headers2}
     assert url2 =~ "/im/v1/messages"
-    assert body2["msg_type"] == "interactive"
+    assert body2["msg_type"] == "text"
     assert body2["receive_id"] == "ou_123"
-    assert is_binary(body2["content"])
+    assert Jason.decode!(body2["content"]) == %{"text" => "hello world"}
+  end
+
+  test "markdown outbound defaults to native post message", %{pid: _pid} do
+    Bus.publish_sync(:feishu_outbound, %{
+      chat_id: "ou_123",
+      content: "# 标题\n- a\n- b",
+      metadata: %{}
+    })
+
+    assert_receive {:http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages"
+    assert body2["msg_type"] == "post"
+
+    post = Jason.decode!(body2["content"])
+    assert get_in(post, ["zh_cn", "content"]) |> List.flatten() |> Enum.any?(&(&1["tag"] == "md"))
   end
 
   test "explicit image msg_type sends raw feishu payload", %{pid: _pid} do
@@ -122,8 +155,105 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert_receive {:http_post, url2, body2, _headers2}
     assert url2 =~ "/im/v1/messages"
     assert body2["receive_id"] == "ou_123"
-    assert body2["msg_type"] == "interactive"
-    assert is_binary(body2["content"])
+    assert body2["msg_type"] == "text"
+    assert Jason.decode!(body2["content"]) == %{"text" => "hello sync"}
+  end
+
+  test "post send falls back to text when Feishu rejects post payload", %{pid: pid} do
+    parent = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | http_post_fun: fn url, body, headers ->
+            send(parent, {:fallback_http_post, url, body, headers})
+
+            cond do
+              String.contains?(url, "/auth/v3/tenant_access_token/internal") ->
+                {:ok, %{"code" => 0, "tenant_access_token" => "tenant-token", "expire" => 7200}}
+
+              body["msg_type"] == "post" ->
+                {:ok,
+                 %{"code" => 230_001, "msg" => "content format of the post type is incorrect"}}
+
+              body["msg_type"] == "text" ->
+                {:ok, %{"code" => 0, "data" => %{"message_id" => "om_text"}}}
+
+              true ->
+                {:ok, %{"code" => 1, "msg" => "unexpected"}}
+            end
+          end
+      }
+    end)
+
+    assert :ok = GenServer.call(pid, {:send_message, "ou_123", "# 标题", %{}})
+
+    assert_receive {:fallback_http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:fallback_http_post, _url2, %{"msg_type" => "post"}, _headers2}
+    assert_receive {:fallback_http_post, _url3, body3, _headers3}
+    assert body3["msg_type"] == "text"
+    assert Jason.decode!(body3["content"]) == %{"text" => "# 标题"}
+  end
+
+  test "outbound replies to original Feishu message when metadata has message_id", %{pid: _pid} do
+    Bus.publish_sync(:feishu_outbound, %{
+      chat_id: "oc_chat_123",
+      content: "reply",
+      metadata: %{"message_id" => "om_original", "receive_id_type" => "chat_id"}
+    })
+
+    assert_receive {:http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages/om_original/reply"
+    assert body2["msg_type"] == "text"
+    refute Map.has_key?(body2, "receive_id")
+  end
+
+  test "reply falls back to new chat message when original message is missing", %{pid: pid} do
+    parent = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | http_post_fun: fn url, body, headers ->
+            send(parent, {:reply_fallback_http_post, url, body, headers})
+
+            cond do
+              String.contains?(url, "/auth/v3/tenant_access_token/internal") ->
+                {:ok, %{"code" => 0, "tenant_access_token" => "tenant-token", "expire" => 7200}}
+
+              String.ends_with?(url, "/reply") ->
+                {:ok, %{"code" => 230_011, "msg" => "message not found"}}
+
+              String.contains?(url, "/im/v1/messages") ->
+                {:ok, %{"code" => 0, "data" => %{"message_id" => "om_new"}}}
+
+              true ->
+                {:ok, %{"code" => 1, "msg" => "unexpected"}}
+            end
+          end
+      }
+    end)
+
+    assert :ok =
+             GenServer.call(
+               pid,
+               {:send_message, "oc_chat_123", "reply", %{"message_id" => "om_missing"}}
+             )
+
+    assert_receive {:reply_fallback_http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:reply_fallback_http_post, url2, _body2, _headers2}
+    assert url2 =~ "/im/v1/messages/om_missing/reply"
+
+    assert_receive {:reply_fallback_http_post, url3, body3, _headers3}
+    assert url3 =~ "receive_id_type=chat_id"
+    assert body3["receive_id"] == "oc_chat_123"
   end
 
   test "synchronous local image send uploads and delivers native image message", %{pid: pid} do
@@ -164,6 +294,57 @@ defmodule Nex.Agent.Channel.FeishuTest do
     refute_receive {:http_post, _, _, _}, 100
   end
 
+  test "group message without a real bot mention is ignored", %{pid: pid} do
+    payload = %{
+      "event" => %{
+        "sender" => %{
+          "sender_id" => %{"open_id" => "ou_sender"},
+          "sender_type" => "user"
+        },
+        "message" => %{
+          "message_id" => "om_group_plain",
+          "chat_id" => "oc_group",
+          "chat_type" => "group",
+          "message_type" => "text",
+          "content" => Jason.encode!(%{"text" => "hello"})
+        }
+      }
+    }
+
+    assert :ok = GenServer.call(pid, {:ingest_event, payload})
+    refute_receive {:bus_message, :inbound, _inbound}, 100
+  end
+
+  test "group message with a real bot mention is accepted", %{pid: pid} do
+    payload = %{
+      "event" => %{
+        "sender" => %{
+          "sender_id" => %{"open_id" => "ou_sender"},
+          "sender_type" => "user"
+        },
+        "message" => %{
+          "message_id" => "om_group_mention",
+          "chat_id" => "oc_group",
+          "chat_type" => "group",
+          "message_type" => "text",
+          "mentions" => [
+            %{"id" => %{"open_id" => "ou_bot"}, "name" => "Nex"}
+          ],
+          "content" => Jason.encode!(%{"text" => "@Nex hello"})
+        }
+      }
+    }
+
+    assert :ok = GenServer.call(pid, {:ingest_event, payload})
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.chat_id == "oc_group"
+    assert inbound.content == "@Nex hello"
+    assert [mention] = inbound.metadata["mentions"]
+    assert mention["open_id"] == "ou_bot"
+    assert mention["name"] == "Nex"
+  end
+
   test "ingest_event keeps structured normalized metadata for location messages", %{pid: pid} do
     payload = %{
       "event" => %{
@@ -173,8 +354,8 @@ defmodule Nex.Agent.Channel.FeishuTest do
         },
         "message" => %{
           "message_id" => "om_loc",
-          "chat_id" => "oc_group",
-          "chat_type" => "group",
+          "chat_id" => "ou_sender",
+          "chat_type" => "p2p",
           "message_type" => "location",
           "content" =>
             Jason.encode!(%{

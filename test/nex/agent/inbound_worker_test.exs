@@ -1,7 +1,7 @@
 defmodule Nex.Agent.InboundWorkerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, InboundWorker, Memory, MemoryUpdater, Runner, Session, SessionManager, Skills}
+  alias Nex.Agent.{Bus, InboundWorker, Memory, Runner, Session, Skills}
 
   setup do
     workspace =
@@ -108,7 +108,12 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-1", content: "hello"}
+      %{
+        channel: "feishu",
+        chat_id: "chat-1",
+        content: "hello",
+        metadata: %{"_from_subagent" => true}
+      }
     })
 
     assert_receive :llm_finished, 1_000
@@ -146,6 +151,7 @@ defmodule Nex.Agent.InboundWorkerTest do
         chat_id: "chat-1",
         content: "看图",
         metadata: %{
+          "_from_subagent" => true,
           "media" => [
             %{
               "type" => "image",
@@ -223,7 +229,12 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-1", content: "123"}
+      %{
+        channel: "feishu",
+        chat_id: "chat-1",
+        content: "123",
+        metadata: %{"_from_subagent" => true}
+      }
     })
 
     assert_receive :message_tool_turn_finished, 1_000
@@ -252,18 +263,17 @@ defmodule Nex.Agent.InboundWorkerTest do
         |> then(fn session ->
           metadata =
             Map.merge(session.metadata || %{}, %{
-              "memory_refresh_llm_call_fun" =>
-                fn _messages, _llm_opts ->
-                  send(parent, :memory_refresh_started)
-                  Process.sleep(200)
+              "memory_refresh_llm_call_fun" => fn _messages, _llm_opts ->
+                send(parent, :memory_refresh_started)
+                Process.sleep(200)
 
-                  {:ok,
-                   %{
-                     "status" => "update",
-                     "memory_update" =>
-                       "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
-                   }}
-                end
+                {:ok,
+                 %{
+                   "status" => "update",
+                   "memory_update" =>
+                     "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+                 }}
+              end
             })
 
           %{session | metadata: metadata}
@@ -291,6 +301,108 @@ defmodule Nex.Agent.InboundWorkerTest do
     end)
   end
 
+  test "feishu inbound uses processing reactions without creating a thinking card" do
+    parent = self()
+
+    start_feishu_for_reaction_test(parent)
+
+    worker_name = String.to_atom("inbound_worker_reaction_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, opts ->
+      send(parent, {:prompt_opts, Keyword.get(opts, :on_progress)})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "feishu",
+        chat_id: "oc_chat",
+        content: "hello",
+        message_id: "om_inbound",
+        metadata: %{
+          "_from_subagent" => true,
+          "message_id" => "om_inbound",
+          "chat_type" => "group"
+        }
+      }
+    })
+
+    assert_receive {:prompt_opts, nil}, 1_000
+
+    assert_receive {:feishu_http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:feishu_http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages/om_inbound/reactions"
+    assert body2 == %{"reaction_type" => %{"emoji_type" => "Typing"}}
+
+    assert_receive {:feishu_http_delete, url3, _headers3}
+    assert url3 =~ "/im/v1/messages/om_inbound/reactions/re_typing"
+
+    payloads = collect_feishu_payloads([])
+    assert Enum.any?(payloads, &(&1.content == "done"))
+
+    refute Enum.any?(
+             payloads,
+             &(is_binary(&1.content) and String.contains?(&1.content, "Thinking"))
+           )
+  end
+
+  test "feishu inbound marks failed turns with failure reaction" do
+    parent = self()
+
+    start_feishu_for_reaction_test(parent)
+
+    worker_name = String.to_atom("inbound_worker_failure_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, _opts ->
+      {:error, :boom, agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "feishu",
+        chat_id: "oc_chat",
+        content: "hello",
+        message_id: "om_failed",
+        metadata: %{
+          "_from_subagent" => true,
+          "message_id" => "om_failed",
+          "chat_type" => "group"
+        }
+      }
+    })
+
+    assert_receive {:feishu_http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:feishu_http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages/om_failed/reactions"
+    assert body2 == %{"reaction_type" => %{"emoji_type" => "Typing"}}
+
+    assert_receive {:feishu_http_delete, url3, _headers3}
+    assert url3 =~ "/im/v1/messages/om_failed/reactions/re_typing"
+
+    assert_receive {:feishu_http_post, url4, body4, _headers4}
+    assert url4 =~ "/im/v1/messages/om_failed/reactions"
+    assert body4 == %{"reaction_type" => %{"emoji_type" => "CrossMark"}}
+
+    payloads = collect_feishu_payloads([])
+
+    assert Enum.any?(
+             payloads,
+             &(is_binary(&1.content) and String.contains?(&1.content, "Error:"))
+           )
+  end
+
   defp collect_feishu_payloads(acc) do
     receive do
       {:bus_message, :feishu_outbound, payload} ->
@@ -298,6 +410,50 @@ defmodule Nex.Agent.InboundWorkerTest do
     after
       200 -> Enum.reverse(acc)
     end
+  end
+
+  defp start_feishu_for_reaction_test(parent) do
+    http_post_fun = fn url, body, headers ->
+      send(parent, {:feishu_http_post, url, body, headers})
+
+      cond do
+        String.contains?(url, "/auth/v3/tenant_access_token/internal") ->
+          {:ok, %{"code" => 0, "tenant_access_token" => "tenant-token", "expire" => 7200}}
+
+        String.contains?(url, "/reactions") ->
+          {:ok, %{"code" => 0, "data" => %{"reaction_id" => "re_typing"}}}
+
+        String.contains?(url, "/im/v1/messages") ->
+          {:ok, %{"code" => 0, "data" => %{"message_id" => "om_reply"}}}
+
+        true ->
+          {:ok, %{"code" => 1, "msg" => "unexpected"}}
+      end
+    end
+
+    http_delete_fun = fn url, headers ->
+      send(parent, {:feishu_http_delete, url, headers})
+      {:ok, %{"code" => 0}}
+    end
+
+    config = %Nex.Agent.Config{Nex.Agent.Config.default() | feishu: %{"enabled" => false}}
+
+    pid =
+      start_supervised!(
+        {Nex.Agent.Channel.Feishu,
+         name: Nex.Agent.Channel.Feishu,
+         config: config,
+         http_post_fun: http_post_fun,
+         http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unexpected} end,
+         http_get_fun: fn _url, _headers -> {:error, :unexpected} end,
+         http_delete_fun: http_delete_fun}
+      )
+
+    :sys.replace_state(pid, fn state ->
+      %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
+    end)
+
+    pid
   end
 
   defp wait_for(predicate, attempts \\ 50)

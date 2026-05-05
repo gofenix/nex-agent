@@ -275,9 +275,11 @@ defmodule Nex.Agent.ContextBuilder do
 
   @spec build_runtime_context(String.t() | nil, String.t() | nil, keyword()) :: String.t()
   def build_runtime_context(channel, chat_id, opts) do
-    now = DateTime.utc_now()
-    time_str = Calendar.strftime(now, "%Y-%m-%d %H:%M (%A)")
     cwd = Keyword.get(opts, :cwd)
+    workspace = Keyword.get(opts, :workspace) || default_workspace()
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+    timezone = runtime_timezone(opts, workspace)
+    time_str = format_runtime_time(now, timezone)
     repo_root = git_root(cwd)
 
     lines =
@@ -386,7 +388,122 @@ defmodule Nex.Agent.ContextBuilder do
       nil -> cleaned
       reasoning_content -> Map.put(cleaned, "reasoning_content", reasoning_content)
     end
+    |> then(fn cleaned ->
+      case Map.get(entry, "reasoning_details") || Map.get(entry, :reasoning_details) do
+        details when is_list(details) and details != [] ->
+          Map.put(cleaned, "reasoning_details", details)
+
+        _ ->
+          cleaned
+      end
+    end)
   end
+
+  defp runtime_timezone(opts, workspace) do
+    Keyword.get(opts, :timezone) ||
+      Keyword.get(opts, :time_zone) ||
+      user_profile_timezone(workspace) ||
+      System.get_env("TZ") ||
+      "Asia/Shanghai"
+  end
+
+  defp user_profile_timezone(workspace) do
+    path = Path.join(workspace || "", "USER.md")
+
+    with true <- File.exists?(path),
+         {:ok, content} <- File.read(path),
+         [timezone] <-
+           Regex.run(~r/(?:^|\n)\s*-?\s*(?:\*\*)?Timezone(?:\*\*)?\s*[:：]\s*([^\n]+)/i, content,
+             capture: :all_but_first
+           ) do
+      timezone
+      |> String.trim()
+      |> String.trim_trailing()
+    else
+      _ -> nil
+    end
+  end
+
+  defp format_runtime_time(%DateTime{} = utc_now, timezone) do
+    {label, offset_seconds} = normalize_timezone(timezone)
+    local_now = DateTime.add(utc_now, offset_seconds, :second)
+    offset = format_utc_offset(offset_seconds)
+
+    local_time = Calendar.strftime(local_now, "%Y-%m-%d %H:%M (%A)")
+    utc_time = Calendar.strftime(utc_now, "%Y-%m-%d %H:%MZ (%A)")
+
+    "#{local_time} #{label} (#{offset}); UTC: #{utc_time}"
+  end
+
+  defp format_runtime_time(other, timezone) do
+    other
+    |> to_string()
+    |> then(fn value -> "#{value} #{timezone}" end)
+  end
+
+  defp normalize_timezone(timezone) when is_binary(timezone) do
+    timezone = String.trim(timezone)
+    normalized = String.downcase(timezone)
+
+    cond do
+      normalized in ["asia/shanghai", "asia/chongqing", "asia/harbin", "asia/urumqi", "cst"] ->
+        {"Asia/Shanghai", 8 * 3600}
+
+      normalized in ["utc", "etc/utc", "z"] ->
+        {"UTC", 0}
+
+      normalized in ["america/los_angeles", "us/pacific", "pst", "pdt"] ->
+        {"America/Los_Angeles", -8 * 3600}
+
+      normalized in ["america/new_york", "us/eastern", "est", "edt"] ->
+        {"America/New_York", -5 * 3600}
+
+      true ->
+        case parse_utc_offset(timezone) do
+          {:ok, seconds} -> {timezone, seconds}
+          :error -> {"Asia/Shanghai", 8 * 3600}
+        end
+    end
+  end
+
+  defp normalize_timezone(_timezone), do: {"Asia/Shanghai", 8 * 3600}
+
+  defp parse_utc_offset(value) do
+    case Regex.run(~r/^UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$/i, String.trim(value)) do
+      [_, sign, hours, minutes] ->
+        offset_seconds(sign, hours, minutes)
+
+      [_, sign, hours] ->
+        offset_seconds(sign, hours, "00")
+
+      _ ->
+        :error
+    end
+  end
+
+  defp offset_seconds(sign, hours, minutes) do
+    with {hours, ""} <- Integer.parse(hours),
+         {minutes, ""} <- Integer.parse(minutes),
+         true <- hours <= 14 and minutes <= 59 do
+      seconds = hours * 3600 + minutes * 60
+      {:ok, if(sign == "-", do: -seconds, else: seconds)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp format_utc_offset(0), do: "UTC+00:00"
+
+  defp format_utc_offset(seconds) do
+    sign = if seconds < 0, do: "-", else: "+"
+    abs_seconds = abs(seconds)
+    hours = div(abs_seconds, 3600)
+    minutes = div(rem(abs_seconds, 3600), 60)
+    "UTC#{sign}#{pad2(hours)}:#{pad2(minutes)}"
+  end
+
+  defp pad2(value) when value < 10, do: "0#{value}"
+  defp pad2(value), do: Integer.to_string(value)
 
   defp build_user_content(text, nil), do: text
 
@@ -434,10 +551,20 @@ defmodule Nex.Agent.ContextBuilder do
   @doc """
   Add assistant message to messages list.
   """
-  @spec add_assistant_message([message()], String.t() | nil, [map()] | nil, String.t() | nil) :: [
-          message()
-        ]
-  def add_assistant_message(messages, content, tool_calls \\ nil, reasoning_content \\ nil) do
+  @spec add_assistant_message(
+          [message()],
+          String.t() | nil,
+          [map()] | nil,
+          String.t() | nil,
+          [map()] | nil
+        ) :: [message()]
+  def add_assistant_message(
+        messages,
+        content,
+        tool_calls \\ nil,
+        reasoning_content \\ nil,
+        reasoning_details \\ nil
+      ) do
     message = %{"role" => "assistant", "content" => content || ""}
 
     message =
@@ -451,6 +578,15 @@ defmodule Nex.Agent.ContextBuilder do
         nil -> message
         "" -> message
         value -> Map.put(message, "reasoning_content", value)
+      end
+
+    message =
+      case reasoning_details do
+        details when is_list(details) and details != [] ->
+          Map.put(message, "reasoning_details", details)
+
+        _ ->
+          message
       end
 
     messages ++ [message]

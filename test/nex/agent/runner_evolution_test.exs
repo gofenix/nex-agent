@@ -796,6 +796,47 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     refute Keyword.has_key?(second_opts, :tool_choice)
   end
 
+  test "call_llm_for_consolidation omits forced tool_choice for DeepSeek Anthropic endpoint" do
+    parent = self()
+
+    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:consolidation_opts, opts})
+
+      {:ok,
+       %{
+         tool_calls: [
+           %{
+             function: %{
+               name: "save_memory",
+               arguments: %{
+                 "history_entry" => "[2026-05-05 08:30] DeepSeek consolidation worked.",
+                 "memory_update" => "# Memory\n\nDeepSeek path succeeded.\n"
+               }
+             }
+           }
+         ]
+       }}
+    end
+
+    assert {:ok,
+            %{
+              "history_entry" => "[2026-05-05 08:30] DeepSeek consolidation worked.",
+              "memory_update" => "# Memory\n\nDeepSeek path succeeded.\n"
+            }} =
+             Runner.call_llm_for_consolidation(consolidation_messages(),
+               provider: :anthropic,
+               model: "deepseek-reasoner",
+               base_url: "https://api.deepseek.com/anthropic",
+               tools: [save_memory_tool_definition()],
+               tool_choice: %{type: "tool", name: "save_memory"},
+               req_llm_generate_text_fun: llm_generate_text_fun
+             )
+
+    assert_receive {:consolidation_opts, opts}
+    refute Keyword.has_key?(opts, :tool_choice)
+    refute_receive {:consolidation_opts, _}
+  end
+
   test "call_llm_for_consolidation returns non-retryable errors unchanged" do
     parent = self()
 

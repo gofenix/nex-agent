@@ -239,6 +239,50 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
+  Whether Feishu group messages must mention this bot.
+  """
+  @spec feishu_require_mention?(t()) :: boolean()
+  def feishu_require_mention?(%__MODULE__{} = config) do
+    config
+    |> feishu()
+    |> Map.get("require_mention", true)
+    |> Kernel.==(true)
+  end
+
+  @doc """
+  Get the Feishu bot open_id used for group mention gating.
+  """
+  @spec feishu_bot_open_id(t()) :: String.t() | nil
+  def feishu_bot_open_id(%__MODULE__{} = config) do
+    case Map.get(feishu(config), "bot_open_id") do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Get the Feishu bot user_id used for group mention gating.
+  """
+  @spec feishu_bot_user_id(t()) :: String.t() | nil
+  def feishu_bot_user_id(%__MODULE__{} = config) do
+    case Map.get(feishu(config), "bot_user_id") do
+      id when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Get the Feishu bot display name used as a mention fallback.
+  """
+  @spec feishu_bot_name(t()) :: String.t() | nil
+  def feishu_bot_name(%__MODULE__{} = config) do
+    case Map.get(feishu(config), "bot_name") do
+      name when is_binary(name) and name != "" -> name
+      _ -> nil
+    end
+  end
+
+  @doc """
   Get the Feishu reaction emoji.
   """
   @spec feishu_react_emoji(t()) :: String.t()
@@ -804,6 +848,10 @@ defmodule Nex.Agent.Config do
       "encrypt_key" => "",
       "verification_token" => "",
       "allow_from" => [],
+      "require_mention" => true,
+      "bot_open_id" => "",
+      "bot_user_id" => "",
+      "bot_name" => "",
       "react_emoji" => "THUMBSUP"
     }
   end

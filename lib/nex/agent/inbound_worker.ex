@@ -277,30 +277,13 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        # For Feishu channels: send initial "thinking" card and get message_id for updates
-        card_message_id =
-          if channel == "feishu" and not from_cron do
-            case Nex.Agent.Channel.Feishu.send_card(
-                   chat_id,
-                   "✨ Thinking...",
-                   extract_metadata(payload)
-                 ) do
-              {:ok, mid} when is_binary(mid) and mid != "" ->
-                mid
+        inbound_message_id = inbound_message_id(payload)
 
-              _ ->
-                nil
-            end
-          else
-            nil
-          end
+        if channel == "feishu" and not from_cron do
+          _ = Nex.Agent.Channel.Feishu.start_processing_reaction(inbound_message_id)
+        end
 
         try do
-          on_progress =
-            if from_cron,
-              do: nil,
-              else: build_progress_callback(channel, card_message_id)
-
           result =
             state.agent_prompt_fun.(
               agent,
@@ -308,7 +291,7 @@ defmodule Nex.Agent.InboundWorker do
               [
                 channel: channel,
                 chat_id: chat_id,
-                on_progress: on_progress,
+                on_progress: nil,
                 workspace: workspace,
                 schedule_memory_refresh: false
               ]
@@ -316,24 +299,28 @@ defmodule Nex.Agent.InboundWorker do
               |> Kernel.++(cron_opts)
             )
 
-          # Finalize progress card with all accumulated tool hints (card stays as execution log)
-          if is_binary(card_message_id) and card_message_id != "" do
-            finalize_progress_card(card_message_id)
+          if channel == "feishu" and not from_cron do
+            outcome =
+              case result do
+                {:ok, _result, _updated_agent} -> :ok
+                _ -> :error
+              end
+
+            _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, outcome)
           end
 
-          # Send original payload (no _card_message_id) so the final result goes as a new message
           send(parent, {:async_result, key, result, payload})
         rescue
           e ->
-            if is_binary(card_message_id) and card_message_id != "" do
-              finalize_progress_card(card_message_id)
+            if channel == "feishu" and not from_cron do
+              _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
             end
 
             send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
         catch
           kind, reason ->
-            if is_binary(card_message_id) and card_message_id != "" do
-              finalize_progress_card(card_message_id)
+            if channel == "feishu" and not from_cron do
+              _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
             end
 
             send(
@@ -351,57 +338,6 @@ defmodule Nex.Agent.InboundWorker do
       | active_tasks: Map.put(state.active_tasks, key, pid),
         agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
     }
-  end
-
-  defp build_progress_callback(channel, card_message_id) do
-    fn type, progress_content ->
-      cond do
-        # Feishu with active card: accumulate tool hints on the card
-        channel == "feishu" and is_binary(card_message_id) and card_message_id != "" ->
-          case type do
-            :tool_hint ->
-              hints = Process.get(:tool_hints, [])
-              hints = hints ++ [progress_content]
-              Process.put(:tool_hints, hints)
-
-              text = Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end)
-              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
-
-            :thinking ->
-              hints = Process.get(:tool_hints, [])
-
-              text =
-                if hints == [] do
-                  "💡 Thinking..."
-                else
-                  Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n💡 Thinking..."
-                end
-
-              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
-
-            _ ->
-              :ok
-          end
-
-          :ok
-
-        true ->
-          :ok
-      end
-    end
-  end
-
-  defp finalize_progress_card(card_message_id) do
-    hints = Process.get(:tool_hints, [])
-
-    text =
-      if hints == [] do
-        "✅ Done"
-      else
-        Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n✅ Done"
-      end
-
-    Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
   end
 
   defp maybe_drain_pending(state, key) do
@@ -593,6 +529,14 @@ defmodule Nex.Agent.InboundWorker do
     else
       base
     end
+  end
+
+  defp inbound_message_id(payload) do
+    metadata = extract_metadata(payload)
+
+    Map.get(metadata, "message_id") ||
+      Map.get(payload, :message_id) ||
+      Map.get(payload, "message_id")
   end
 
   defp extract_media(payload) do

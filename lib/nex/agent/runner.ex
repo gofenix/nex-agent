@@ -6,7 +6,6 @@ defmodule Nex.Agent.Runner do
   alias Nex.Agent.{
     Bus,
     ContextBuilder,
-    Memory,
     MemoryUpdater,
     RequestTrace,
     Session
@@ -20,7 +19,6 @@ defmodule Nex.Agent.Runner do
   @memory_window 50
   @max_tool_result_length 8000
   @tool_hint_preview_length 220
-  @memory_flush_min_messages 12
   @skill_complexity_tool_calls 4
   @skill_complexity_tool_rounds 2
   @user_correction_terms [
@@ -266,8 +264,8 @@ defmodule Nex.Agent.Runner do
             {:error, "LLM call failed: #{Exception.message(e)}"}
         catch
           kind, reason ->
-            Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
-            {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
+            Logger.error("[Runner] LLM call crashed: #{kind} #{safe_inspect_error(reason)}")
+            {:error, "LLM call failed: #{kind} #{safe_inspect_error(reason)}"}
         end
 
       llm_duration = System.monotonic_time(:millisecond) - llm_start
@@ -281,6 +279,9 @@ defmodule Nex.Agent.Runner do
 
           reasoning_content =
             Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
+
+          reasoning_details =
+            Map.get(response, :reasoning_details) || Map.get(response, "reasoning_details")
 
           tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
@@ -302,6 +303,7 @@ defmodule Nex.Agent.Runner do
                 content,
                 tool_calls,
                 reasoning_content,
+                reasoning_details,
                 iteration,
                 max_iterations,
                 on_progress,
@@ -314,7 +316,7 @@ defmodule Nex.Agent.Runner do
           end
 
         {:error, reason} ->
-          Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
+          Logger.error("[Runner] LLM call failed: #{safe_inspect_error(reason)}")
           iter_total = System.monotonic_time(:millisecond) - iter_start
 
           Logger.info(
@@ -334,6 +336,7 @@ defmodule Nex.Agent.Runner do
          content,
          tool_calls,
          reasoning_content,
+         reasoning_details,
          iteration,
          max_iterations,
          on_progress,
@@ -377,13 +380,15 @@ defmodule Nex.Agent.Runner do
           messages,
           content,
           tool_call_dicts,
-          reasoning_content
+          reasoning_content,
+          reasoning_details
         )
 
       session =
         Session.add_message(session, "assistant", content,
           tool_calls: tool_call_dicts,
-          reasoning_content: reasoning_content
+          reasoning_content: reasoning_content,
+          reasoning_details: reasoning_details
         )
 
       {new_messages, results, session, opts} =
@@ -428,6 +433,7 @@ defmodule Nex.Agent.Runner do
          content,
          _tool_calls,
          reasoning_content,
+         reasoning_details,
          _iteration,
          _max_iterations,
          _on_progress,
@@ -439,7 +445,8 @@ defmodule Nex.Agent.Runner do
 
     session =
       Session.add_message(session, "assistant", content_text,
-        reasoning_content: reasoning_content
+        reasoning_content: reasoning_content,
+        reasoning_details: reasoning_details
       )
 
     {:ok, content_text, session}
@@ -609,7 +616,10 @@ defmodule Nex.Agent.Runner do
       {:error, reason} = error ->
         cond do
           retries_left > 0 and transient_error?(reason) ->
-            Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
+            Logger.warning(
+              "[Runner] LLM transient error, retrying in 2s: #{safe_inspect_error(reason)}"
+            )
+
             Process.sleep(2_000)
             call_llm_with_retry(messages, opts, retries_left - 1)
 
@@ -657,11 +667,48 @@ defmodule Nex.Agent.Runner do
 
   defp extract_error_message(%{error: %{"error" => %{"message" => msg}}}), do: msg
   defp extract_error_message(%{error: %{message: msg}}), do: msg
+  defp extract_error_message(%{reason: msg}) when is_binary(msg), do: msg
+  defp extract_error_message(%{"reason" => msg}) when is_binary(msg), do: msg
+  defp extract_error_message(%{message: msg}) when is_binary(msg), do: msg
+  defp extract_error_message(%{"message" => msg}) when is_binary(msg), do: msg
   defp extract_error_message(msg) when is_binary(msg), do: msg
-  defp extract_error_message(other), do: inspect(other)
+  defp extract_error_message(other), do: safe_inspect_error(other)
 
   defp extract_error_status(%{status: status}), do: status
+  defp extract_error_status(%{"status" => status}), do: status
   defp extract_error_status(_), do: nil
+
+  defp safe_inspect_error(error) do
+    error
+    |> scrub_error_for_log()
+    |> inspect(limit: 50, printable_limit: 1_000)
+    |> redact_sensitive()
+  end
+
+  defp scrub_error_for_log(%{__struct__: _} = error),
+    do: error |> Map.from_struct() |> scrub_error_for_log()
+
+  defp scrub_error_for_log(error) when is_map(error) do
+    error
+    |> Map.drop([:request_body, "request_body"])
+    |> Enum.map(fn {key, value} -> {key, scrub_error_for_log(value)} end)
+    |> Map.new()
+  end
+
+  defp scrub_error_for_log(error) when is_list(error), do: Enum.map(error, &scrub_error_for_log/1)
+  defp scrub_error_for_log(error), do: error
+
+  defp redact_sensitive(value) when is_binary(value) do
+    value
+    |> String.replace(~r/(postgres(?:ql)?:\/\/[^:\s\/]+):[^@\s]+@/i, "\\1:[REDACTED]@")
+    |> String.replace(~r/\bAKIA[0-9A-Z]{16}\b/, "AKIA[REDACTED]")
+    |> String.replace(~r/\b(sk|cr|vck)-?[A-Za-z0-9_\/+=-]{12,}\b/, "\\1-[REDACTED]")
+    |> String.replace(~r/\bAIza[0-9A-Za-z_-]{20,}\b/, "AIza[REDACTED]")
+    |> String.replace(
+      ~r/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|GEMINI_API_KEY|AI_GATEWAY_API_KEY|VERCEL_ANTHROPIC_API_KEY)(\\?["']?\s*[:=]\s*\\?["']?)[^\\\s"',}]+/i,
+      "\\1\\2[REDACTED]"
+    )
+  end
 
   defp context_length_error?(msg) do
     String.contains?(msg, "context_length") or
@@ -999,17 +1046,26 @@ defmodule Nex.Agent.Runner do
   """
   def call_llm_for_consolidation(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)
-    tool_choice = Keyword.get(opts, :tool_choice)
+    model = Keyword.get(opts, :model)
+    base_url = Keyword.get(opts, :base_url)
+
+    tool_choice =
+      effective_consolidation_tool_choice(
+        provider,
+        model,
+        base_url,
+        Keyword.get(opts, :tool_choice)
+      )
 
     call_opts =
       [
         provider: provider,
-        model: Keyword.get(opts, :model),
+        model: model,
         api_key: Keyword.get(opts, :api_key),
         base_url: Keyword.get(opts, :base_url),
-        tools: Keyword.get(opts, :tools, []),
-        tool_choice: tool_choice
+        tools: Keyword.get(opts, :tools, [])
       ]
+      |> maybe_put_opt(:tool_choice, tool_choice)
       |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
 
     Logger.info(
@@ -1075,6 +1131,32 @@ defmodule Nex.Agent.Runner do
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp effective_consolidation_tool_choice(_provider, _model, _base_url, nil), do: nil
+
+  defp effective_consolidation_tool_choice(provider, model, base_url, tool_choice) do
+    if deepseek_anthropic_endpoint?(provider, base_url) or deepseek_reasoner_model?(model) do
+      nil
+    else
+      tool_choice
+    end
+  end
+
+  defp deepseek_anthropic_endpoint?(:anthropic, base_url) when is_binary(base_url) do
+    base_url
+    |> String.downcase()
+    |> String.contains?("api.deepseek.com")
+  end
+
+  defp deepseek_anthropic_endpoint?(_, _), do: false
+
+  defp deepseek_reasoner_model?(model) when is_binary(model) do
+    model
+    |> String.downcase()
+    |> String.contains?("deepseek-reasoner")
+  end
+
+  defp deepseek_reasoner_model?(_), do: false
 
   defp consolidation_tool_choice_retry_reason(_provider, nil, _err), do: nil
 
@@ -1242,82 +1324,6 @@ defmodule Nex.Agent.Runner do
     }
   end
 
-  defp maybe_flush_memory_before_consolidation(session, provider, model, api_key, base_url, opts) do
-    unconsolidated = length(session.messages) - session.last_consolidated
-
-    if unconsolidated < @memory_flush_min_messages do
-      :ok
-    else
-      lines =
-        session.messages
-        |> Enum.drop(session.last_consolidated)
-        |> Enum.take(-@memory_window)
-        |> Enum.map(fn msg ->
-          role = Map.get(msg, "role", "unknown")
-          content = Map.get(msg, "content", "") |> render_text()
-          "[#{role}] #{content}"
-        end)
-        |> Enum.reject(&(&1 == "[unknown] "))
-
-      if lines == [] do
-        :ok
-      else
-        prompt = """
-        Review this conversation excerpt before archival. If it contains one durable fact worth saving,
-        call memory_write exactly once with action=append or action=set for durable project/environment/workflow knowledge.
-        Do not write user profile facts here. If nothing is worth saving, do not call any tool.
-
-        ## USER.md
-        #{Memory.read_user_profile(workspace: Keyword.get(opts, :workspace))}
-
-        ## MEMORY.md
-        #{Memory.read_long_term(workspace: Keyword.get(opts, :workspace))}
-
-        ## Recent Conversation
-        #{Enum.join(lines, "\n")}
-        """
-
-        messages = [
-          %{
-            "role" => "system",
-            "content" =>
-              "You are a memory flush agent. Only call memory_write when the conversation contains durable long-term knowledge worth saving."
-          },
-          %{"role" => "user", "content" => prompt}
-        ]
-
-        case call_llm_for_consolidation(messages,
-               provider: provider,
-               model: model,
-               api_key: api_key,
-               base_url: base_url,
-               tools: [
-                 %{
-                   "type" => "function",
-                   "function" => Nex.Agent.Tool.MemoryWrite.definition()
-                 }
-               ],
-               tool_choice: tool_choice_for_memory_write(provider),
-               req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun)
-             ) do
-          {:ok, %{} = args} when map_size(args) > 0 ->
-            _ =
-              Memory.apply_memory_write(
-                Map.get(args, "action"),
-                "memory",
-                Map.get(args, "content"),
-                workspace: Keyword.get(opts, :workspace)
-              )
-
-            :ok
-
-          _ ->
-            :ok
-        end
-      end
-    end
-  end
-
   defp render_text(nil), do: ""
   defp render_text(text) when is_binary(text), do: text
 
@@ -1355,8 +1361,6 @@ defmodule Nex.Agent.Runner do
       _ -> inspect(content, printable_limit: 500, limit: 50)
     end
   end
-
-  defp tool_choice_for_memory_write(_provider), do: nil
 
   defp trace_request_started(
          prompt,
@@ -1464,11 +1468,4 @@ defmodule Nex.Agent.Runner do
   end
 
   defp trace_tool_definition(tool), do: %{"definition" => inspect(tool)}
-
-  defp workspace_opts(opts) do
-    case Keyword.get(opts, :workspace) do
-      nil -> []
-      workspace -> [workspace: workspace]
-    end
-  end
 end

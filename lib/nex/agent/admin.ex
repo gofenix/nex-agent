@@ -1081,8 +1081,6 @@ defmodule Nex.Agent.Admin do
   end
 
   defp external_gateway_running?(opts) do
-    config = Config.load(config_path: Keyword.get(opts, :config_path))
-
     pid_path =
       Path.join(
         Path.dirname(Config.config_path(config_path: Keyword.get(opts, :config_path))),

@@ -5,7 +5,9 @@ defmodule Nex.Agent.LLM.ReqLLM do
   require Logger
 
   alias ReqLLM.Context
+  alias ReqLLM.Message
   alias ReqLLM.Message.ContentPart
+  alias ReqLLM.Message.ReasoningDetails
   alias ReqLLM.Response
   alias ReqLLM.StreamChunk
   alias ReqLLM.StreamResponse
@@ -96,7 +98,15 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp sanitize_messages(messages) do
     Enum.map(messages, fn message ->
       message
-      |> Map.take(["role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"])
+      |> Map.take([
+        "role",
+        "content",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "reasoning_content",
+        "reasoning_details"
+      ])
       |> drop_nil_values()
     end)
   end
@@ -111,9 +121,16 @@ defmodule Nex.Agent.LLM.ReqLLM do
           content = message["content"]
           tool_calls = to_req_llm_tool_calls(message["tool_calls"] || [])
 
+          reasoning_details =
+            normalize_reasoning_details(
+              message["reasoning_details"],
+              message["reasoning_content"]
+            )
+
           opts =
             []
             |> maybe_put_keyword(:tool_calls, tool_calls != [], tool_calls)
+            |> maybe_put_keyword(:reasoning_details, reasoning_details != [], reasoning_details)
             |> maybe_put_keyword(
               :metadata,
               present?(message["reasoning_content"]),
@@ -254,11 +271,13 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp parse_response(%Response{} = response) do
     classified = Response.classify(response)
     reasoning_content = normalized_reasoning_content(classified.thinking, classified.text)
+    reasoning_details = response_reasoning_details(response, reasoning_content)
     content = sanitize_final_content(classified.text)
 
     %{
       content: content,
       reasoning_content: reasoning_content,
+      reasoning_details: reasoning_details,
       tool_calls: normalize_tool_calls(classified.tool_calls),
       finish_reason: normalize_finish_reason(classified.finish_reason),
       model: extract_model(response),
@@ -275,9 +294,18 @@ defmodule Nex.Agent.LLM.ReqLLM do
       Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content") ||
         Map.get(response, :thinking) || Map.get(response, "thinking")
 
+    reasoning_content = normalized_reasoning_content(raw_reasoning, raw_content)
+
+    reasoning_details =
+      normalize_response_reasoning_details(
+        Map.get(response, :reasoning_details) || Map.get(response, "reasoning_details"),
+        reasoning_content
+      )
+
     %{
       content: sanitize_final_content(raw_content),
-      reasoning_content: normalized_reasoning_content(raw_reasoning, raw_content),
+      reasoning_content: reasoning_content,
+      reasoning_details: reasoning_details,
       tool_calls:
         normalize_tool_calls(
           Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
@@ -449,9 +477,16 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp normalize_finish_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_finish_reason(reason), do: to_string(reason)
 
-  defp normalize_error(%{message: _} = error), do: error
-  defp normalize_error(error) when is_binary(error), do: error
-  defp normalize_error(error), do: inspect(error)
+  defp normalize_error(%{__struct__: module} = error) do
+    error
+    |> Map.from_struct()
+    |> Map.put(:exception, inspect(module))
+    |> normalize_error_map()
+  end
+
+  defp normalize_error(error) when is_map(error), do: normalize_error_map(error)
+  defp normalize_error(error) when is_binary(error), do: redact_sensitive(error)
+  defp normalize_error(error), do: error |> inspect() |> redact_sensitive()
 
   defp extract_model(%Response{model: model}), do: model
   defp extract_model(%{model: model}), do: model
@@ -484,7 +519,17 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp build_message(:assistant, content, opts) do
-    Context.assistant(to_req_llm_content(content), opts)
+    reasoning_details = Keyword.get(opts, :reasoning_details)
+    opts = Keyword.delete(opts, :reasoning_details)
+    message = Context.assistant(to_req_llm_content(content), opts)
+
+    case reasoning_details do
+      details when is_list(details) and details != [] ->
+        %Message{message | reasoning_details: details}
+
+      _ ->
+        message
+    end
   end
 
   defp drop_nil_values(map) do
@@ -542,6 +587,164 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp to_content_part(%ContentPart{} = part), do: part
   defp to_content_part(text) when is_binary(text), do: ContentPart.text(text)
   defp to_content_part(_), do: nil
+
+  defp response_reasoning_details(
+         %Response{message: %Message{reasoning_details: details}},
+         fallback
+       ) do
+    normalize_response_reasoning_details(details, fallback)
+  end
+
+  defp response_reasoning_details(_response, fallback) do
+    normalize_response_reasoning_details(nil, fallback)
+  end
+
+  defp normalize_response_reasoning_details(details, fallback) do
+    details
+    |> normalize_reasoning_details(fallback)
+    |> Enum.map(&serialize_reasoning_detail/1)
+  end
+
+  defp normalize_reasoning_details(details, fallback_reasoning) when is_list(details) do
+    normalized =
+      details
+      |> Enum.with_index()
+      |> Enum.map(fn {detail, index} -> to_reasoning_detail(detail, index) end)
+      |> Enum.reject(&is_nil/1)
+
+    if normalized == [] do
+      fallback_reasoning_details(fallback_reasoning)
+    else
+      normalized
+    end
+  end
+
+  defp normalize_reasoning_details(_details, fallback_reasoning),
+    do: fallback_reasoning_details(fallback_reasoning)
+
+  defp fallback_reasoning_details(reasoning) when is_binary(reasoning) do
+    reasoning = String.trim(reasoning)
+
+    if reasoning == "" do
+      []
+    else
+      [
+        %ReasoningDetails{
+          text: reasoning,
+          provider: :anthropic,
+          format: "anthropic-thinking-v1",
+          index: 0,
+          provider_data: %{"type" => "thinking"}
+        }
+      ]
+    end
+  end
+
+  defp fallback_reasoning_details(_reasoning), do: []
+
+  defp to_reasoning_detail(%ReasoningDetails{} = detail, _index), do: detail
+
+  defp to_reasoning_detail(detail, fallback_index) when is_map(detail) do
+    text = Map.get(detail, :text) || Map.get(detail, "text")
+
+    if present?(text) do
+      %ReasoningDetails{
+        text: text,
+        signature: Map.get(detail, :signature) || Map.get(detail, "signature"),
+        encrypted?:
+          Map.get(detail, :encrypted?) ||
+            Map.get(detail, "encrypted?") ||
+            Map.get(detail, :encrypted) ||
+            Map.get(detail, "encrypted") ||
+            false,
+        provider:
+          normalize_reasoning_provider(Map.get(detail, :provider) || Map.get(detail, "provider")),
+        format: Map.get(detail, :format) || Map.get(detail, "format") || "anthropic-thinking-v1",
+        index: Map.get(detail, :index) || Map.get(detail, "index") || fallback_index,
+        provider_data:
+          Map.get(detail, :provider_data) ||
+            Map.get(detail, "provider_data") ||
+            %{"type" => "thinking"}
+      }
+    end
+  end
+
+  defp to_reasoning_detail(_detail, _fallback_index), do: nil
+
+  defp serialize_reasoning_detail(%ReasoningDetails{} = detail) do
+    %{
+      "text" => detail.text,
+      "signature" => detail.signature,
+      "encrypted?" => detail.encrypted?,
+      "provider" => if(detail.provider, do: Atom.to_string(detail.provider)),
+      "format" => detail.format,
+      "index" => detail.index,
+      "provider_data" => detail.provider_data
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp normalize_reasoning_provider(nil), do: :anthropic
+  defp normalize_reasoning_provider(provider) when is_atom(provider), do: provider
+  defp normalize_reasoning_provider("anthropic"), do: :anthropic
+  defp normalize_reasoning_provider("google"), do: :google
+  defp normalize_reasoning_provider("openai"), do: :openai
+  defp normalize_reasoning_provider("openrouter"), do: :openrouter
+  defp normalize_reasoning_provider(_provider), do: :anthropic
+
+  defp normalize_error_map(error) do
+    error
+    |> Map.take([
+      :message,
+      "message",
+      :reason,
+      "reason",
+      :status,
+      "status",
+      :response_body,
+      "response_body",
+      :error,
+      "error",
+      :cause,
+      "cause",
+      :exception,
+      "exception",
+      :term,
+      "term"
+    ])
+    |> Enum.map(fn {key, value} -> {key, sanitize_error_value(value)} end)
+    |> Map.new()
+    |> case do
+      empty when map_size(empty) == 0 -> error |> inspect() |> redact_sensitive()
+      sanitized -> sanitized
+    end
+  end
+
+  defp sanitize_error_value(value) when is_binary(value), do: redact_sensitive(value)
+
+  defp sanitize_error_value(value) when is_map(value) do
+    value
+    |> Map.drop([:request_body, "request_body"])
+    |> Enum.map(fn {key, nested_value} -> {key, sanitize_error_value(nested_value)} end)
+    |> Map.new()
+  end
+
+  defp sanitize_error_value(value) when is_list(value),
+    do: Enum.map(value, &sanitize_error_value/1)
+
+  defp sanitize_error_value(value), do: value
+
+  defp redact_sensitive(value) when is_binary(value) do
+    value
+    |> String.replace(~r/(postgres(?:ql)?:\/\/[^:\s\/]+):[^@\s]+@/i, "\\1:[REDACTED]@")
+    |> String.replace(~r/\bAKIA[0-9A-Z]{16}\b/, "AKIA[REDACTED]")
+    |> String.replace(~r/\b(sk|cr|vck)-?[A-Za-z0-9_\/+=-]{12,}\b/, "\\1-[REDACTED]")
+    |> String.replace(~r/\bAIza[0-9A-Za-z_-]{20,}\b/, "AIza[REDACTED]")
+    |> String.replace(
+      ~r/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|GEMINI_API_KEY|AI_GATEWAY_API_KEY|VERCEL_ANTHROPIC_API_KEY)(\\?["']?\s*[:=]\s*\\?["']?)[^\\\s"',}]+/i,
+      "\\1\\2[REDACTED]"
+    )
+  end
 
   defp present?(value) when value in [nil, "", []], do: false
   defp present?(_), do: true

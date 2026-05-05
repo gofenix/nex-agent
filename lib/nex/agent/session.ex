@@ -195,6 +195,22 @@ defmodule Nex.Agent.Session do
         entry
       end
 
+    entry =
+      if reasoning_content = Map.get(m, "reasoning_content") do
+        Map.put(entry, "reasoning_content", reasoning_content)
+      else
+        entry
+      end
+
+    entry =
+      case Map.get(m, "reasoning_details") do
+        details when is_list(details) and details != [] ->
+          Map.put(entry, "reasoning_details", details)
+
+        _ ->
+          entry
+      end
+
     entry
   end
 

@@ -4,7 +4,7 @@ defmodule Nex.Agent.Channel.Feishu do
   - WebSocket long connection for inbound events
   - Message deduplication (based on message_id)
   - Bot message filtering
-  - react_emoji automatic response
+  - Processing reactions
   - Support for text, post, image, file, audio, media types
   """
 
@@ -18,6 +18,8 @@ defmodule Nex.Agent.Channel.Feishu do
   @feishu_ws_endpoint "https://open.feishu.cn/callback/ws/endpoint"
   @default_send_timeout_ms 15_000
   @dedup_cache_max 1000
+  @processing_reaction "Typing"
+  @failure_reaction "CrossMark"
 
   defstruct [
     :app_id,
@@ -25,11 +27,15 @@ defmodule Nex.Agent.Channel.Feishu do
     :encrypt_key,
     :verification_token,
     :allow_from,
-    :react_emoji,
+    :bot_open_id,
+    :bot_user_id,
+    :bot_name,
+    :require_mention,
     :enabled,
     :http_post_fun,
     :http_post_multipart_fun,
     :http_get_fun,
+    :http_delete_fun,
     :tenant_access_token,
     :tenant_access_token_expire_at,
     :ws_pid,
@@ -39,6 +45,7 @@ defmodule Nex.Agent.Channel.Feishu do
     :ws_ping_timer,
     :ws_service_id,
     ws_pending_fragments: %{},
+    processing_reactions: %{},
     processed_message_ids: []
   ]
 
@@ -48,12 +55,16 @@ defmodule Nex.Agent.Channel.Feishu do
           encrypt_key: String.t() | nil,
           verification_token: String.t() | nil,
           allow_from: [String.t()],
-          react_emoji: String.t(),
+          bot_open_id: String.t() | nil,
+          bot_user_id: String.t() | nil,
+          bot_name: String.t() | nil,
+          require_mention: boolean(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_post_multipart_fun: (String.t(), keyword(), keyword() ->
                                       {:ok, map()} | {:error, term()}),
           http_get_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_delete_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
           tenant_access_token: String.t() | nil,
           tenant_access_token_expire_at: integer() | nil,
           ws_pid: pid() | nil,
@@ -63,6 +74,7 @@ defmodule Nex.Agent.Channel.Feishu do
           ws_ping_timer: reference() | nil,
           ws_service_id: integer() | nil,
           ws_pending_fragments: map(),
+          processing_reactions: map(),
           processed_message_ids: [String.t()]
         }
 
@@ -121,6 +133,26 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  @doc "Mark an inbound Feishu message as being processed."
+  @spec start_processing_reaction(String.t() | nil) :: :ok | {:error, term()}
+  def start_processing_reaction(message_id) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:start_processing_reaction, message_id}, 15_000)
+    else
+      :ok
+    end
+  end
+
+  @doc "Clear the processing marker and optionally mark a failed turn."
+  @spec finish_processing_reaction(String.t() | nil, :ok | :error) :: :ok | {:error, term()}
+  def finish_processing_reaction(message_id, outcome) when outcome in [:ok, :error] do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:finish_processing_reaction, message_id, outcome}, 15_000)
+    else
+      :ok
+    end
+  end
+
   @spec ingest_event(map()) :: :ok | {:ok, map()} | {:error, term()}
   def ingest_event(payload) when is_map(payload) do
     GenServer.call(__MODULE__, {:ingest_event, payload})
@@ -149,12 +181,16 @@ defmodule Nex.Agent.Channel.Feishu do
       encrypt_key: Config.feishu_encrypt_key(config),
       verification_token: Config.feishu_verification_token(config),
       allow_from: Config.feishu_allow_from(config),
-      react_emoji: Config.feishu_react_emoji(config),
+      bot_open_id: Config.feishu_bot_open_id(config),
+      bot_user_id: Config.feishu_bot_user_id(config),
+      bot_name: Config.feishu_bot_name(config),
+      require_mention: Config.feishu_require_mention?(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       http_post_multipart_fun:
         Keyword.get(opts, :http_post_multipart_fun, &default_http_post_multipart/3),
       http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/2),
+      http_delete_fun: Keyword.get(opts, :http_delete_fun, &default_http_delete/2),
       tenant_access_token: nil,
       tenant_access_token_expire_at: nil,
       ws_pid: nil,
@@ -164,6 +200,7 @@ defmodule Nex.Agent.Channel.Feishu do
       ws_ping_timer: nil,
       ws_service_id: nil,
       ws_pending_fragments: %{},
+      processing_reactions: %{},
       processed_message_ids: []
     }
 
@@ -257,6 +294,22 @@ defmodule Nex.Agent.Channel.Feishu do
 
       :ignore ->
         {:reply, :ok, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:start_processing_reaction, message_id}, _from, state) do
+    case add_processing_reaction(message_id, state) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:finish_processing_reaction, message_id, outcome}, _from, state) do
+    case finish_processing_reaction_for_message(message_id, outcome, state) do
+      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -398,28 +451,93 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  defp add_reaction(_message_id, %{react_emoji: ""}), do: :ok
-  defp add_reaction(_, %{enabled: false}), do: :ok
+  defp add_processing_reaction(_message_id, %{enabled: false} = state), do: {:ok, state}
+  defp add_processing_reaction(nil, state), do: {:ok, state}
+  defp add_processing_reaction("", state), do: {:ok, state}
 
-  defp add_reaction(message_id, state) when is_binary(message_id) and message_id != "" do
-    Task.start(fn ->
-      with {:ok, token, _} <- get_tenant_access_token(state),
-           {:ok, _} <-
-             feishu_post(
-               state,
-               "/im/v1/messages/#{message_id}/reactions",
-               %{"reaction_type" => %{"emoji_type" => state.react_emoji}},
-               [{"Authorization", "Bearer #{token}"}]
-             ) do
-        Logger.debug("Added #{state.react_emoji} reaction to #{message_id}")
-      else
-        {:error, reason} ->
-          Logger.warning("Failed to add reaction: #{inspect(reason)}")
+  defp add_processing_reaction(message_id, state) when is_binary(message_id) do
+    if Map.has_key?(state.processing_reactions, message_id) do
+      {:ok, state}
+    else
+      case add_message_reaction(message_id, @processing_reaction, state) do
+        {:ok, reaction_id, new_state} ->
+          processing_reactions =
+            if is_binary(reaction_id) and reaction_id != "" do
+              Map.put(new_state.processing_reactions, message_id, reaction_id)
+            else
+              new_state.processing_reactions
+            end
+
+          {:ok, %{new_state | processing_reactions: processing_reactions}}
+
+        {:error, reason, new_state} ->
+          Logger.warning("Failed to add Feishu processing reaction: #{inspect(reason)}")
+          {:error, reason, new_state}
       end
-    end)
+    end
   end
 
-  defp add_reaction(_, _), do: :ok
+  defp finish_processing_reaction_for_message(_message_id, _outcome, %{enabled: false} = state),
+    do: {:ok, state}
+
+  defp finish_processing_reaction_for_message(nil, _outcome, state), do: {:ok, state}
+  defp finish_processing_reaction_for_message("", _outcome, state), do: {:ok, state}
+
+  defp finish_processing_reaction_for_message(message_id, outcome, state)
+       when is_binary(message_id) do
+    {reaction_id, processing_reactions} = Map.pop(state.processing_reactions, message_id)
+    state = %{state | processing_reactions: processing_reactions}
+
+    with {:ok, state} <- maybe_remove_message_reaction(message_id, reaction_id, state),
+         {:ok, state} <- maybe_add_failure_reaction(message_id, outcome, state) do
+      {:ok, state}
+    else
+      {:error, reason, new_state} ->
+        Logger.warning("Failed to finish Feishu processing reaction: #{inspect(reason)}")
+        {:error, reason, new_state}
+    end
+  end
+
+  defp add_message_reaction(message_id, emoji, state) do
+    with {:ok, token, state} <- get_tenant_access_token(state),
+         {:ok, body} <-
+           feishu_post(
+             state,
+             "/im/v1/messages/#{message_id}/reactions",
+             %{"reaction_type" => %{"emoji_type" => emoji}},
+             [{"Authorization", "Bearer #{token}"}]
+           ) do
+      {:ok, get_in(body, ["data", "reaction_id"]), state}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp maybe_remove_message_reaction(_message_id, nil, state), do: {:ok, state}
+  defp maybe_remove_message_reaction(_message_id, "", state), do: {:ok, state}
+
+  defp maybe_remove_message_reaction(message_id, reaction_id, state) do
+    with {:ok, token, state} <- get_tenant_access_token(state),
+         {:ok, _body} <-
+           feishu_delete(
+             state,
+             "/im/v1/messages/#{message_id}/reactions/#{reaction_id}",
+             [{"Authorization", "Bearer #{token}"}]
+           ) do
+      {:ok, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp maybe_add_failure_reaction(message_id, :error, state) do
+    case add_message_reaction(message_id, @failure_reaction, state) do
+      {:ok, _reaction_id, new_state} -> {:ok, new_state}
+      {:error, reason, new_state} -> {:error, reason, new_state}
+    end
+  end
+
+  defp maybe_add_failure_reaction(_message_id, :ok, state), do: {:ok, state}
 
   defp maybe_start_websocket(%{ws_pid: nil, enabled: true} = state) do
     case start_ws_connection(state) do
@@ -635,8 +753,8 @@ defmodule Nex.Agent.Channel.Feishu do
           state
         end
 
-      if allowed?(Map.get(inbound, :sender_id), state.allow_from) do
-        add_reaction(message_id, state)
+      if allowed?(Map.get(inbound, :sender_id), state.allow_from) and
+           group_admitted?(inbound, state) do
         {inbound, new_state} = maybe_attach_inbound_media(inbound, new_state)
 
         Logger.info(
@@ -647,7 +765,7 @@ defmodule Nex.Agent.Channel.Feishu do
         new_state
       else
         Logger.warning(
-          "Feishu inbound denied sender=#{Map.get(inbound, :sender_id)} allow_from=#{inspect(state.allow_from)}"
+          "Feishu inbound denied sender=#{Map.get(inbound, :sender_id)} allow_from=#{inspect(state.allow_from)} chat_type=#{get_in(inbound, [:metadata, "chat_type"])}"
         )
 
         new_state
@@ -685,9 +803,11 @@ defmodule Nex.Agent.Channel.Feishu do
     chat_id = Map.get(message, "chat_id") || Map.get(message, :chat_id)
     chat_type = Map.get(message, "chat_type") || Map.get(message, :chat_type)
     message_id = Map.get(message, "message_id") || Map.get(message, :message_id)
+    thread_id = Map.get(message, "thread_id") || Map.get(message, :thread_id)
     sender_id = extract_sender_open_id(sender)
     sender_type = Map.get(sender, "sender_type") || Map.get(sender, :sender_type)
     user_id = sender_id
+    mentions = extract_mentions(message)
 
     content_json =
       message
@@ -736,9 +856,12 @@ defmodule Nex.Agent.Channel.Feishu do
            raw: raw_payload,
            metadata: %{
              "message_id" => message_id,
+             "chat_id" => to_string(chat_id),
+             "thread_id" => thread_id,
              "user_id" => user_id,
              "chat_type" => to_string(chat_type),
              "message_type" => msg_type,
+             "mentions" => mentions,
              "raw_content_json" => content_json,
              "normalized_content" => Map.delete(normalized_content, "summary"),
              "resources" => resources
@@ -756,6 +879,68 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp parse_content(content) when is_map(content), do: content
   defp parse_content(_), do: %{}
+
+  defp group_admitted?(%{metadata: %{"chat_type" => "group"}} = inbound, state) do
+    not state.require_mention or mentions_bot?(get_in(inbound, [:metadata, "mentions"]), state)
+  end
+
+  defp group_admitted?(_inbound, _state), do: true
+
+  defp mentions_bot?(mentions, state) when is_list(mentions) do
+    Enum.any?(mentions, fn mention ->
+      mention_open_id = Map.get(mention, "open_id") || ""
+      mention_user_id = Map.get(mention, "user_id") || ""
+      mention_name = Map.get(mention, "name") || ""
+      is_all = Map.get(mention, "is_all") == true
+
+      cond do
+        is_all ->
+          true
+
+        present?(mention_open_id) and present?(state.bot_open_id) ->
+          mention_open_id == state.bot_open_id
+
+        present?(mention_user_id) and present?(state.bot_user_id) ->
+          mention_user_id == state.bot_user_id
+
+        present?(mention_name) and present?(state.bot_name) ->
+          mention_name == state.bot_name
+
+        true ->
+          false
+      end
+    end)
+  end
+
+  defp mentions_bot?(_mentions, _state), do: false
+
+  defp extract_mentions(message) when is_map(message) do
+    mentions = Map.get(message, "mentions") || Map.get(message, :mentions) || []
+
+    mentions
+    |> List.wrap()
+    |> Enum.map(&normalize_mention/1)
+    |> Enum.reject(&(&1 == %{}))
+  end
+
+  defp normalize_mention(mention) when is_map(mention) do
+    id = Map.get(mention, "id") || Map.get(mention, :id) || %{}
+
+    %{}
+    |> maybe_put("open_id", Map.get(id, "open_id") || Map.get(id, :open_id))
+    |> maybe_put("user_id", Map.get(id, "user_id") || Map.get(id, :user_id))
+    |> maybe_put("union_id", Map.get(id, "union_id") || Map.get(id, :union_id))
+    |> maybe_put("name", Map.get(mention, "name") || Map.get(mention, :name))
+    |> maybe_put("is_all", mention_all?(mention))
+  end
+
+  defp normalize_mention(_mention), do: %{}
+
+  defp mention_all?(mention) do
+    key = Map.get(mention, "key") || Map.get(mention, :key) || ""
+    name = Map.get(mention, "name") || Map.get(mention, :name) || ""
+    key == "@_all" or name in ["所有人", "All", "all"]
+  end
 
   defp normalize_inbound_content("text", content_json, _message_id) do
     text = Map.get(content_json, "text") || Map.get(content_json, :text)
@@ -1217,27 +1402,41 @@ defmodule Nex.Agent.Channel.Feishu do
             {:ok, state}
 
           true ->
-            send_interactive_card(payload, chat_id, content, state)
+            send_default_message(payload, chat_id, content, state)
         end
     end
   end
 
   defp send_explicit_message(payload, chat_id, content, msg_type, content_json, state) do
     with {:ok, token, state} <- get_tenant_access_token(state),
-         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
          {:ok, encoded_content} <- build_outbound_content(msg_type, content, content_json),
          {:ok, _body} <-
-           feishu_post(
-             state,
-             "/im/v1/messages?receive_id_type=#{receive_id_type}",
-             %{
-               "receive_id" => chat_id,
-               "msg_type" => msg_type,
-               "content" => encoded_content
-             },
-             [{"Authorization", "Bearer #{token}"}]
-           ) do
+           send_outbound_message(payload, chat_id, msg_type, encoded_content, token, state) do
       {:ok, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp send_default_message(payload, chat_id, content, state) do
+    with {:ok, token, token_state} <- get_tenant_access_token(state) do
+      {msg_type, encoded_content} = build_default_outbound_content(content)
+
+      case send_outbound_message(payload, chat_id, msg_type, encoded_content, token, token_state) do
+        {:ok, _body} ->
+          {:ok, token_state}
+
+        {:error, reason} ->
+          if invalid_post_error?(reason) do
+            Logger.warning(
+              "[Feishu] Post payload rejected, falling back to text: #{inspect(reason)}"
+            )
+
+            send_text(payload, chat_id, strip_markdown_to_text(content), token_state)
+          else
+            {:error, reason, token_state}
+          end
+      end
     else
       {:error, reason} -> {:error, reason, state}
     end
@@ -1248,12 +1447,7 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp build_outbound_content("post", content, nil) when is_binary(content) do
-    {:ok,
-     Jason.encode!(%{
-       "zh_cn" => %{
-         "content" => [[%{"tag" => "md", "text" => content}]]
-       }
-     })}
+    {:ok, Jason.encode!(build_markdown_post(content))}
   end
 
   defp build_outbound_content("interactive", content, nil) when is_binary(content) do
@@ -1328,21 +1522,71 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp send_text(payload, chat_id, content, state) do
     with {:ok, token, state} <- get_tenant_access_token(state),
-         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
          {:ok, _body} <-
-           feishu_post(
-             state,
-             "/im/v1/messages?receive_id_type=#{receive_id_type}",
-             %{
-               "receive_id" => chat_id,
-               "msg_type" => "text",
-               "content" => Jason.encode!(%{"text" => content})
-             },
-             [{"Authorization", "Bearer #{token}"}]
+           send_outbound_message(
+             payload,
+             chat_id,
+             "text",
+             Jason.encode!(%{"text" => content}),
+             token,
+             state
            ) do
       {:ok, state}
     else
       {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp send_outbound_message(payload, chat_id, msg_type, encoded_content, token, state) do
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    reply_to = metadata_get(metadata, "message_id")
+    thread_id = metadata_get(metadata, "thread_id")
+
+    if present?(reply_to) do
+      body =
+        %{
+          "msg_type" => msg_type,
+          "content" => encoded_content
+        }
+        |> maybe_put("reply_in_thread", present?(thread_id))
+
+      case feishu_post(
+             state,
+             "/im/v1/messages/#{reply_to}/reply",
+             body,
+             [{"Authorization", "Bearer #{token}"}]
+           ) do
+        {:ok, body} ->
+          {:ok, body}
+
+        {:error, reason} ->
+          if reply_fallback_error?(reason) and not present?(thread_id) do
+            Logger.warning(
+              "[Feishu] Reply to #{reply_to} failed, falling back to new message: #{inspect(reason)}"
+            )
+
+            create_outbound_message(payload, chat_id, msg_type, encoded_content, token, state)
+          else
+            {:error, reason}
+          end
+      end
+    else
+      create_outbound_message(payload, chat_id, msg_type, encoded_content, token, state)
+    end
+  end
+
+  defp create_outbound_message(payload, chat_id, msg_type, encoded_content, token, state) do
+    with {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id) do
+      feishu_post(
+        state,
+        "/im/v1/messages?receive_id_type=#{receive_id_type}",
+        %{
+          "receive_id" => chat_id,
+          "msg_type" => msg_type,
+          "content" => encoded_content
+        },
+        [{"Authorization", "Bearer #{token}"}]
+      )
     end
   end
 
@@ -1399,33 +1643,103 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  defp send_interactive_card(payload, chat_id, content, state) do
-    card = build_interactive_card(content)
-
-    with {:ok, token, state} <- get_tenant_access_token(state),
-         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
-         {:ok, _body} <-
-           feishu_post(
-             state,
-             "/im/v1/messages?receive_id_type=#{receive_id_type}",
-             %{
-               "receive_id" => chat_id,
-               "msg_type" => "interactive",
-               "content" => Jason.encode!(card)
-             },
-             [{"Authorization", "Bearer #{token}"}]
-           ) do
-      {:ok, state}
+  defp build_default_outbound_content(content) when is_binary(content) do
+    if markdown?(content) do
+      {"post", Jason.encode!(build_markdown_post(content))}
     else
-      {:error, reason} ->
-        Logger.warning("[Feishu] Card send failed, falling back to text: #{inspect(reason)}")
-
-        case send_text(payload, chat_id, content, state) do
-          {:ok, new_state} -> {:ok, new_state}
-          {:error, text_reason, text_state} -> {:error, text_reason, text_state}
-        end
+      {"text", Jason.encode!(%{"text" => content})}
     end
   end
+
+  defp markdown?(content) when is_binary(content) do
+    Regex.match?(
+      ~r/(^\#{1,6}\s)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(```)|(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(\[[^\]]+\]\([^)]+\))/m,
+      content
+    )
+  end
+
+  defp build_markdown_post(content) do
+    rows =
+      content
+      |> String.split("\n")
+      |> post_chunks()
+      |> Enum.map(fn chunk -> [%{"tag" => "md", "text" => chunk}] end)
+      |> Enum.reject(fn [%{"text" => text}] -> String.trim(text) == "" end)
+
+    %{
+      "zh_cn" => %{
+        "content" => if(rows == [], do: [[%{"tag" => "text", "text" => content}]], else: rows)
+      }
+    }
+  end
+
+  defp post_chunks(lines) do
+    {chunks, current} =
+      Enum.reduce(lines, {[], nil}, fn line, {chunks, current} ->
+        cond do
+          String.starts_with?(line, "```") and current == nil ->
+            {chunks, {:code, [line]}}
+
+          match?({:code, _}, current) and String.starts_with?(line, "```") ->
+            {:code, code_lines} = current
+            {chunks ++ [Enum.join(code_lines ++ [line], "\n")], nil}
+
+          match?({:code, _}, current) ->
+            {:code, code_lines} = current
+            {chunks, {:code, code_lines ++ [line]}}
+
+          String.trim(line) == "" ->
+            if current do
+              {chunks ++ [flush_post_chunk(current)], nil}
+            else
+              {chunks, nil}
+            end
+
+          post_line_starts_new_chunk?(line) ->
+            chunks = if current, do: chunks ++ [flush_post_chunk(current)], else: chunks
+            {chunks, {:text, [line]}}
+
+          true ->
+            case current do
+              {:text, text_lines} -> {chunks, {:text, text_lines ++ [line]}}
+              nil -> {chunks, {:text, [line]}}
+              {:code, _} = code -> {chunks, code}
+            end
+        end
+      end)
+
+    if current, do: chunks ++ [flush_post_chunk(current)], else: chunks
+  end
+
+  defp post_line_starts_new_chunk?(line) do
+    Regex.match?(~r/^\#{1,6}\s/, line) or Regex.match?(~r/^\s*[-*]\s/, line) or
+      Regex.match?(~r/^\s*\d+\.\s/, line)
+  end
+
+  defp flush_post_chunk({:text, lines}), do: Enum.join(lines, "\n")
+  defp flush_post_chunk({:code, lines}), do: Enum.join(lines, "\n")
+
+  defp strip_markdown_to_text(content) when is_binary(content) do
+    content
+    |> String.replace(~r/```[a-zA-Z0-9_-]*\n?/, "")
+    |> String.replace("```", "")
+    |> String.replace(~r/\*\*([^*]+)\*\*/, "\\1")
+    |> String.replace(~r/`([^`]+)`/, "\\1")
+    |> String.replace(~r/\[([^\]]+)\]\(([^)]+)\)/, "\\1 (\\2)")
+  end
+
+  defp invalid_post_error?({:feishu_api_error, %{"msg" => msg}}) when is_binary(msg) do
+    msg = String.downcase(msg)
+    String.contains?(msg, "post") or String.contains?(msg, "content format")
+  end
+
+  defp invalid_post_error?(_reason), do: false
+
+  defp reply_fallback_error?({:feishu_api_error, %{"code" => code}})
+       when code in [230_011, 231_003],
+       do: true
+
+  defp reply_fallback_error?(_reason), do: false
 
   defp build_interactive_card(content) do
     elements = build_card_elements(content)
@@ -1603,6 +1917,12 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
+  defp feishu_delete(state, path, headers) do
+    state.http_delete_fun.(@feishu_api <> path, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
   defp feishu_get_binary(state, path, headers) do
     state.http_get_fun.(@feishu_api <> path, headers)
     |> normalize_binary_response()
@@ -1663,6 +1983,15 @@ defmodule Nex.Agent.Channel.Feishu do
     )
   end
 
+  defp default_http_delete(url, headers) do
+    Req.delete(url,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms,
+      retry: false,
+      finch: Req.Finch
+    )
+  end
+
   defp extract_sender_open_id(sender) do
     sender_id = Map.get(sender, "sender_id") || Map.get(sender, :sender_id) || %{}
     open_id = Map.get(sender_id, "open_id") || Map.get(sender_id, :open_id)
@@ -1682,9 +2011,18 @@ defmodule Nex.Agent.Channel.Feishu do
         "msg_type" -> Map.get(metadata, :msg_type)
         "content_json" -> Map.get(metadata, :content_json)
         "receive_id_type" -> Map.get(metadata, :receive_id_type)
+        "message_id" -> Map.get(metadata, :message_id)
+        "thread_id" -> Map.get(metadata, :thread_id)
         _ -> nil
       end
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
 
   defp stringify_keys(map) when is_map(map) do
     map

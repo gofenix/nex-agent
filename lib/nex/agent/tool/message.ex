@@ -120,7 +120,8 @@ defmodule Nex.Agent.Tool.Message do
                     {:error, "Feishu text+image send failed: #{inspect(reason)}"}
                 end
               else
-                {:error, "Feishu text+image send requires the Feishu channel process to be running"}
+                {:error,
+                 "Feishu text+image send requires the Feishu channel process to be running"}
               end
 
             has_local_image ->
@@ -175,13 +176,6 @@ defmodule Nex.Agent.Tool.Message do
   end
 
   defp feishu_companion_metadata(metadata) do
-    msg_type = Map.get(metadata, "msg_type")
-    content_json = Map.get(metadata, "content_json")
-
-    if (is_nil(msg_type) or msg_type == "") and is_nil(content_json) do
-      Map.put(metadata, "msg_type", "text")
-    else
-      metadata
-    end
+    metadata
   end
 end
