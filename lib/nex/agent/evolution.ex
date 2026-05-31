@@ -164,7 +164,16 @@ defmodule Nex.Agent.Evolution do
       Logger.info("[Evolution] Triggering evolution after #{new_count} consolidations")
 
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        run_evolution_cycle(Keyword.put(opts, :trigger, :post_consolidation))
+        case run_evolution_cycle(Keyword.put(opts, :trigger, :post_consolidation)) do
+          {:ok, result} ->
+            Logger.info("[Evolution] Async cycle completed: #{inspect(result)}")
+
+          {:error, reason} ->
+            Logger.error("[Evolution] Async cycle failed: #{inspect(reason)}")
+
+          other ->
+            Logger.error("[Evolution] Async cycle unexpected result: #{inspect(other)}")
+        end
       end)
 
       true

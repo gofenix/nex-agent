@@ -1135,7 +1135,8 @@ defmodule Nex.Agent.Runner do
   defp effective_consolidation_tool_choice(_provider, _model, _base_url, nil), do: nil
 
   defp effective_consolidation_tool_choice(provider, model, base_url, tool_choice) do
-    if deepseek_anthropic_endpoint?(provider, base_url) or deepseek_reasoner_model?(model) do
+    if deepseek_anthropic_endpoint?(provider, base_url) or deepseek_reasoner_model?(model) or
+         deepseek_v4_model?(model) or opencode_go_endpoint?(base_url) do
       nil
     else
       tool_choice
@@ -1157,6 +1158,22 @@ defmodule Nex.Agent.Runner do
   end
 
   defp deepseek_reasoner_model?(_), do: false
+
+  defp deepseek_v4_model?(model) when is_binary(model) do
+    model
+    |> String.downcase()
+    |> String.contains?("deepseek-v4")
+  end
+
+  defp deepseek_v4_model?(_), do: false
+
+  defp opencode_go_endpoint?(base_url) when is_binary(base_url) do
+    base_url
+    |> String.downcase()
+    |> String.contains?("opencode.ai/zen/go")
+  end
+
+  defp opencode_go_endpoint?(_), do: false
 
   defp consolidation_tool_choice_retry_reason(_provider, nil, _err), do: nil
 

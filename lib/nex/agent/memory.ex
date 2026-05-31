@@ -294,24 +294,23 @@ defmodule Nex.Agent.Memory do
     end
   end
 
-  defp should_retry_empty_memory_context?(provider, reason, prompt_memory) do
-    provider == :anthropic and prompt_memory != @empty_memory_context and
-      anthropic_decode_failure?(reason)
+  defp should_retry_empty_memory_context?(_provider, reason, prompt_memory) do
+    prompt_memory != @empty_memory_context and decode_failure?(reason)
   end
 
-  defp anthropic_decode_failure?(reason) do
-    reason
-    |> anthropic_decode_error_text()
-    |> String.downcase()
-    |> then(fn text ->
-      String.contains?(text, "anthropic response decode error") and
-        (String.contains?(text, "empty_body") or String.contains?(text, "non_json_body"))
-    end)
+  defp decode_failure?(reason) do
+    text =
+      reason
+      |> decode_error_text()
+      |> String.downcase()
+
+    String.contains?(text, "decode error") and
+      (String.contains?(text, "empty_body") or String.contains?(text, "non_json_body"))
   end
 
-  defp anthropic_decode_error_text(%{reason: reason}) when is_binary(reason), do: reason
-  defp anthropic_decode_error_text(reason) when is_binary(reason), do: reason
-  defp anthropic_decode_error_text(reason), do: inspect(reason)
+  defp decode_error_text(%{reason: reason}) when is_binary(reason), do: reason
+  defp decode_error_text(reason) when is_binary(reason), do: reason
+  defp decode_error_text(reason), do: inspect(reason)
 
   defp compact_consolidation_memory(memory) do
     memory

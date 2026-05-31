@@ -179,7 +179,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
       normalize_tool_choice(options[:tool_choice])
     )
     |> maybe_put_keyword(:receive_timeout, true, @chat_timeout)
-    |> maybe_put_keyword(:provider_options, true, provider_options(resolved_provider))
+    |> maybe_put_keyword(:provider_options, true, provider_options(resolved_provider, base_url))
   end
 
   defp transform_tools(tools) do
@@ -263,10 +263,21 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp effective_base_url(:ollama, base_url), do: normalize_ollama_base_url(base_url)
   defp effective_base_url(_provider, base_url), do: base_url
 
-  defp provider_options(:openrouter),
-    do: [app_referer: @openrouter_referer, app_title: @openrouter_title]
+  defp provider_options(:openrouter, base_url) do
+    if is_openrouter_endpoint?(base_url) do
+      [app_referer: @openrouter_referer, app_title: @openrouter_title]
+    else
+      []
+    end
+  end
 
-  defp provider_options(_), do: []
+  defp provider_options(_, _), do: []
+
+  defp is_openrouter_endpoint?(base_url) when is_binary(base_url) do
+    base_url |> String.downcase() |> String.contains?("openrouter")
+  end
+
+  defp is_openrouter_endpoint?(_), do: false
 
   defp parse_response(%Response{} = response) do
     classified = Response.classify(response)
@@ -710,7 +721,13 @@ defmodule Nex.Agent.LLM.ReqLLM do
       :exception,
       "exception",
       :term,
-      "term"
+      "term",
+      :protocol,
+      "protocol",
+      :value,
+      "value",
+      :description,
+      "description"
     ])
     |> Enum.map(fn {key, value} -> {key, sanitize_error_value(value)} end)
     |> Map.new()
