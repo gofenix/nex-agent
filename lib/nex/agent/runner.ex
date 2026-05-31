@@ -70,6 +70,7 @@ defmodule Nex.Agent.Runner do
     messages =
       ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
         skip_skills: Keyword.get(opts, :skip_skills, false),
+        force_skills: Keyword.get(opts, :force_skills, []),
         workspace: workspace,
         runtime_system_messages: runtime_system_messages,
         cwd: Keyword.get(opts, :cwd)

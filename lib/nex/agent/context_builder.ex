@@ -223,15 +223,31 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp add_always_skills(parts, workspace, opts) do
-    if Keyword.get(opts, :skip_skills, false) do
-      parts
-    else
-      content = Skills.always_instructions(workspace: workspace)
+    force_skills = Keyword.get(opts, :force_skills, [])
 
-      if String.trim(content) == "" do
+    if force_skills != [] do
+      force_content =
+        force_skills
+        |> Enum.map(fn name -> Nex.Agent.Skills.read_skill_instructions(name) end)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("\n")
+
+      if String.trim(force_content) == "" do
         parts
       else
-        parts ++ [content]
+        parts ++ [force_content]
+      end
+    else
+      if Keyword.get(opts, :skip_skills, false) do
+        parts
+      else
+        content = Skills.always_instructions(workspace: workspace)
+
+        if String.trim(content) == "" do
+          parts
+        else
+          parts ++ [content]
+        end
       end
     end
   end

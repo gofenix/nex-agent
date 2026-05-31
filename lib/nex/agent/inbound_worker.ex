@@ -84,14 +84,14 @@ defmodule Nex.Agent.InboundWorker do
   def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
     from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
+    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
 
-    # Don't overwrite user agent with cron's ephemeral agent
     state =
-      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+      if from_cron or from_feishu_task, do: state, else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless result == :message_sent or from_cron or suppress_outbound?(result) do
+    unless result == :message_sent or from_cron or from_feishu_task or suppress_outbound?(result) do
       publish_outbound(payload, result)
     end
 
@@ -104,13 +104,14 @@ defmodule Nex.Agent.InboundWorker do
   def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
     from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
+    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
 
     state =
-      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+      if from_cron or from_feishu_task, do: state, else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless from_cron do
+    unless from_cron or from_feishu_task do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
 
@@ -121,8 +122,13 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:error, reason}, payload}, state) do
+    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
-    publish_outbound(payload, "Error: #{format_reason(reason)}")
+
+    unless from_feishu_task do
+      publish_outbound(payload, "Error: #{format_reason(reason)}")
+    end
+
     {:noreply, maybe_drain_pending(state, key)}
   end
 
@@ -253,6 +259,7 @@ defmodule Nex.Agent.InboundWorker do
     parent = self()
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
     from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
+    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
     media = extract_media(payload)
 
     cron_opts =
@@ -263,6 +270,14 @@ defmodule Nex.Agent.InboundWorker do
           skip_consolidation: true,
           max_iterations: 3,
           skip_skills: true
+        ],
+        else: []
+
+    task_opts =
+      if from_feishu_task,
+        do: [
+          force_skills: ["feishu-task-executor"],
+          max_iterations: 10
         ],
         else: []
 
@@ -279,7 +294,7 @@ defmodule Nex.Agent.InboundWorker do
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
         inbound_message_id = inbound_message_id(payload)
 
-        if channel == "feishu" and not from_cron do
+        if channel == "feishu" and not from_cron and not from_feishu_task do
           _ = Nex.Agent.Channel.Feishu.start_processing_reaction(inbound_message_id)
         end
 
@@ -297,9 +312,10 @@ defmodule Nex.Agent.InboundWorker do
               ]
               |> maybe_put_opt(:media, media)
               |> Kernel.++(cron_opts)
+              |> Kernel.++(task_opts)
             )
 
-          if channel == "feishu" and not from_cron do
+          if channel == "feishu" and not from_cron and not from_feishu_task do
             outcome =
               case result do
                 {:ok, _result, _updated_agent} -> :ok
@@ -312,7 +328,7 @@ defmodule Nex.Agent.InboundWorker do
           send(parent, {:async_result, key, result, payload})
         rescue
           e ->
-            if channel == "feishu" and not from_cron do
+            if channel == "feishu" and not from_cron and not from_feishu_task do
               _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
             end
 

@@ -194,6 +194,19 @@ defmodule Nex.Agent.Skills do
     |> Enum.map_join("\n\n---\n\n", &format_always_skill/1)
   end
 
+  @doc """
+  Read skill instructions by name, searching workspace skills first then priv/skills/.
+  """
+  @spec read_skill_instructions(String.t()) :: String.t()
+  def read_skill_instructions(name) do
+    priv_path = Path.join(:code.priv_dir(:nex_agent), "skills/#{name}/SKILL.md")
+
+    case File.read(priv_path) do
+      {:ok, content} -> content
+      {:error, _} -> ""
+    end
+  end
+
   defp execute_markdown_skill(skill, arguments, opts) do
     content = substitute_arguments(skill.content, arguments)
 
