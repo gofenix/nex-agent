@@ -688,6 +688,22 @@ defmodule Nex.Agent.Channel.Feishu do
     Logger.info("[Feishu] WS event payload=#{inspect(payload, limit: 500, printable_limit: 500)}")
 
     case normalize_event(payload) do
+      {:ok, %{metadata: %{_from_feishu_task: true}} = inbound} ->
+        task_id = inbound.metadata.task_id
+        action = inbound.metadata.task_action
+        operator_id = inbound.metadata.operator_user_id
+        workspace = task_workspace()
+
+        if Nex.Agent.Channel.FeishuTask.dup?(state.bot_open_id, operator_id, task_id, action, workspace) do
+          Logger.debug("[Feishu] Task event dedup: task=#{task_id} action=#{action}")
+          state
+        else
+          Nex.Agent.Channel.FeishuTask.record_dedup(task_id, action, workspace)
+          Logger.info("[Feishu] Task inbound id=#{task_id} action=#{action}")
+          Bus.publish(:inbound, inbound)
+          state
+        end
+
       {:ok, inbound} ->
         Logger.info(
           "[Feishu] Inbound sender=#{inbound[:sender_id]} chat=#{inbound[:chat_id]} content=#{inspect(inbound[:content])}"
@@ -702,6 +718,11 @@ defmodule Nex.Agent.Channel.Feishu do
       {:challenge, _} ->
         state
     end
+  end
+
+  defp task_workspace do
+    Application.get_env(:nex_agent, :workspace_path) ||
+      Path.expand("~/.nex/agent/workspace")
   end
 
   defp schedule_ws_ping(%{ws_ping_interval: nil} = state), do: state
@@ -776,6 +797,11 @@ defmodule Nex.Agent.Channel.Feishu do
   defp normalize_event(%{"type" => "url_verification", "challenge" => challenge})
        when is_binary(challenge) do
     {:challenge, challenge}
+  end
+
+  defp normalize_event(%{"header" => %{"event_type" => type}} = payload)
+       when type in ~w(task.task.created_v1 task.task.updated_v1 task.task.comment.created_v1) do
+    Nex.Agent.Channel.FeishuTask.normalize(payload)
   end
 
   defp normalize_event(payload) when is_map(payload) do
