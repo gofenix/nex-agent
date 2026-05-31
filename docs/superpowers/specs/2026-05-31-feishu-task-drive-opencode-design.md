@@ -102,10 +102,8 @@ The skill resolves the target repository in priority order:
 Per-repo concurrency control to prevent two tasks from modifying the same
 project simultaneously.
 
-**Lock file**: `workspace/tasks/locks/<sha256(repo_path).hex>.lock`
-```json
-{"task_id": "...", "pid": 12345, "started_at": "2026-05-31T10:00:00Z"}
-```
+**Lock directory**: `workspace/tasks/locks/<sha256(repo_path).hex>/` — contains
+`meta.json`: `{"task_id": "...", "started_at": "2026-05-31T10:00:00Z"}`
 
 **Queue file**: `workspace/tasks/queues/pending.jsonl`
 ```jsonl
