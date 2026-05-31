@@ -44,6 +44,7 @@ defmodule Nex.Agent.Channel.FeishuTask do
     task = payload["event"] || %{}
     task_id = task["task_id"]
     operator_id = get_in(payload, ["header", "operator_user_id"])
+    creator_id = task["creator_id"] || operator_id
 
     if is_nil(task_id) or task_id == "" do
       Logger.warning("[FeishuTask] created event missing task_id")
@@ -52,7 +53,7 @@ defmodule Nex.Agent.Channel.FeishuTask do
       {:ok,
        %{
          channel: "feishu",
-         chat_id: operator_id,
+         chat_id: creator_id,
          content: "/run_feishu_task #{task_id}",
          metadata: %{
            _from_feishu_task: true,
@@ -60,6 +61,7 @@ defmodule Nex.Agent.Channel.FeishuTask do
            task_title: task["title"] || "",
            task_description: task["description"] || "",
            task_action: "created",
+           creator_id: creator_id,
            operator_user_id: operator_id
          }
        }}
@@ -72,12 +74,14 @@ defmodule Nex.Agent.Channel.FeishuTask do
     old_status = get_in(task, ["changes", "status", "old"]) || ""
     new_status = get_in(task, ["changes", "status", "new"]) || ""
     operator_id = get_in(payload, ["header", "operator_user_id"])
+    creator_id = task["creator_id"] || operator_id
 
-    if task_id && old_status == "completed" && new_status == "in_progress" do
+    if task_id && old_status == "completed" && new_status == "in_progress" &&
+         operator_id == creator_id do
       {:ok,
        %{
          channel: "feishu",
-         chat_id: operator_id,
+         chat_id: creator_id,
          content: "/rerun_feishu_task #{task_id}",
          metadata: %{
            _from_feishu_task: true,
@@ -85,6 +89,7 @@ defmodule Nex.Agent.Channel.FeishuTask do
            task_title: task["title"] || "",
            task_description: task["description"] || "",
            task_action: "rerun",
+           creator_id: creator_id,
            operator_user_id: operator_id
          }
        }}
@@ -98,12 +103,13 @@ defmodule Nex.Agent.Channel.FeishuTask do
     task_id = task["task_id"]
     comment = get_in(task, ["comment", "content"]) || ""
     operator_id = get_in(payload, ["header", "operator_user_id"])
+    creator_id = task["creator_id"] || operator_id
 
-    if task_id && comment =~ "/rerun" do
+    if task_id && comment =~ "/rerun" && operator_id == creator_id do
       {:ok,
        %{
          channel: "feishu",
-         chat_id: operator_id,
+         chat_id: creator_id,
          content: "/rerun_feishu_task #{task_id}",
          metadata: %{
            _from_feishu_task: true,
@@ -111,6 +117,7 @@ defmodule Nex.Agent.Channel.FeishuTask do
            task_title: task["title"] || "",
            task_description: task["description"] || "",
            task_action: "rerun",
+           creator_id: creator_id,
            operator_user_id: operator_id
          }
        }}
@@ -231,22 +238,6 @@ In `lib/nex/agent/channel/feishu.ex:687-705`, replace the `handle_ws_event_paylo
       Path.expand("~/.nex/agent/workspace")
   end
 ```
-
-- [ ] **Step 4: Add `bot_open_id` to Feishu channel state**
-
-In `lib/nex/agent/channel/feishu.ex`, add `bot_open_id` to the struct fields (search for `defstruct`):
-```elixir
-bot_open_id: nil
-```
-
-Populate it during authentication/startup by reading from channel config or Feishu API. For now, set it in `init/1`:
-
-In `init/1`, after parsing config, compute:
-```elixir
-bot_open_id = config[:bot_open_id] || ""
-```
-
-If `lark-cli` is available, fetch via bash — but for initial implementation, default to empty string and the dedup will still work (just won't filter bot's own events). This can be refined later.
 
 - [ ] **Step 5: Compile and verify**
 
@@ -418,15 +409,18 @@ Or read from `priv/skills/`:
 
 - [ ] **Step 4: Pass `force_skills` through Runner**
 
-In `lib/nex/agent/runner.ex`, find where `add_always_skills` is called via `ContextBuilder.build_system_prompt`. The `skip_skills` and other options are already passed. Ensure `force_skills` flows through.
-
-Search for where Runner passes opts to ContextBuilder — likely at `Runner.prepare_run` or `Runner.run`. Add:
+In `lib/nex/agent/runner.ex:71-76`, add `force_skills` to the ContextBuilder opts:
 
 ```elixir
-    force_skills = Keyword.get(opts, :force_skills, [])
+    messages =
+      ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
+        skip_skills: Keyword.get(opts, :skip_skills, false),
+        force_skills: Keyword.get(opts, :force_skills, []),
+        workspace: workspace,
+        runtime_system_messages: runtime_system_messages,
+        cwd: Keyword.get(opts, :cwd)
+      )
 ```
-
-And include it in the ContextBuilder options map.
 
 - [ ] **Step 5: Compile and verify**
 
@@ -477,7 +471,11 @@ Try in order:
 1. Read the task's custom field "仓库" via `bash("lark-cli task get <task_id>")` and extract the `custom_fields` values.
 2. Look for `@repo:` annotation in task_description.
 3. Look up `workspace/tasks/repos.json` for alias matching.
-4. If still unresolved, use `message` tool to ask the user "不能确定任务 `<title>` 对应的仓库。请回复仓库路径或别名。" and STOP.
+4. If still unresolved, use `message` tool to ask the user "不能确定任务 `<title>` 对应的仓库。请回复仓库路径或别名。" and STOP. When user replies, save the alias:
+```
+echo '"<alias>": "<path>"' >> workspace/tasks/repos.json
+```
+Then re-trigger the task by updating status from completed back to in_progress.
 
 ## Step 3: Acquire repo lock
 
@@ -580,9 +578,20 @@ Expected: no errors.
 ```
 mix test
 ```
-Expected: same 19 pre-existing failures, no new failures.
+Expected: no new failures beyond pre-existing ones.
 
-- [ ] **Step 4: Create `tasks/repos.json` template**
+- [ ] **Step 4: Extend `task_list` to show repos**
+
+In `lib/nex/agent/tool/task.ex` (the task tool), add a `repos` section to the output when available. Read `workspace/tasks/repos.json` and include aliases in the task list response.
+
+Alternative: add a simple `read` of `tasks/repos.json` as part of the tool's `list` action.
+
+- [ ] **Step 4a: Create `tasks/repos.json` template**
+
+```
+mkdir -p ~/.nex/agent/workspace/tasks && \
+echo '{"nex-agent": "/Users/fenix/github/nex-agent"}' > ~/.nex/agent/workspace/tasks/repos.json
+```
 
 In the workspace tasks directory, create a template alias file. This is a runtime file, not version-controlled. Document it:
 ```
