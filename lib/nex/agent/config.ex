@@ -15,6 +15,7 @@ defmodule Nex.Agent.Config do
             gateway: %{},
             telegram: %{},
             feishu: %{},
+            github_project: %{},
             discord: %{},
             slack: %{},
             dingtalk: %{}
@@ -30,6 +31,7 @@ defmodule Nex.Agent.Config do
           gateway: map(),
           telegram: map(),
           feishu: map(),
+          github_project: map(),
           discord: map(),
           slack: map(),
           dingtalk: map()
@@ -73,6 +75,8 @@ defmodule Nex.Agent.Config do
             gateway: Map.merge(default_gateway(), Map.get(data, "gateway", %{})),
             telegram: Map.merge(default_telegram(), Map.get(data, "telegram", %{})),
             feishu: Map.merge(default_feishu(), Map.get(data, "feishu", %{})),
+            github_project:
+              Map.merge(default_github_project(), Map.get(data, "github_project", %{})),
             discord: Map.merge(default_discord(), Map.get(data, "discord", %{})),
             slack: Map.merge(default_slack(), Map.get(data, "slack", %{})),
             dingtalk: Map.merge(default_dingtalk(), Map.get(data, "dingtalk", %{}))
@@ -105,6 +109,7 @@ defmodule Nex.Agent.Config do
       "gateway" => config.gateway,
       "telegram" => config.telegram,
       "feishu" => config.feishu,
+      "github_project" => config.github_project,
       "discord" => config.discord,
       "slack" => config.slack,
       "dingtalk" => config.dingtalk
@@ -128,6 +133,7 @@ defmodule Nex.Agent.Config do
       gateway: default_gateway(),
       telegram: default_telegram(),
       feishu: default_feishu(),
+      github_project: default_github_project(),
       discord: default_discord(),
       slack: default_slack(),
       dingtalk: default_dingtalk()
@@ -148,6 +154,74 @@ defmodule Nex.Agent.Config do
   @spec feishu(t()) :: map()
   def feishu(%__MODULE__{} = config) do
     Map.merge(default_feishu(), config.feishu || %{})
+  end
+
+  @doc """
+  Get the GitHub Project polling configuration.
+  """
+  @spec github_project(t()) :: map()
+  def github_project(%__MODULE__{} = config) do
+    Map.merge(default_github_project(), config.github_project || %{})
+  end
+
+  @doc """
+  Whether GitHub Project polling is enabled.
+  """
+  @spec github_project_polling_enabled?(t()) :: boolean()
+  def github_project_polling_enabled?(%__MODULE__{} = config) do
+    config
+    |> github_project()
+    |> Map.get("enabled", false)
+    |> Kernel.==(true)
+  end
+
+  @doc """
+  Get the GitHub Project owner.
+  """
+  @spec github_project_owner(t()) :: String.t() | nil
+  def github_project_owner(%__MODULE__{} = config) do
+    case Map.get(github_project(config), "owner") do
+      owner when is_binary(owner) and owner != "" -> owner
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Get the GitHub Project number.
+  """
+  @spec github_project_number(t()) :: pos_integer() | nil
+  def github_project_number(%__MODULE__{} = config) do
+    case Map.get(github_project(config), "project_number") do
+      number when is_integer(number) and number > 0 -> number
+      number when is_binary(number) -> parse_positive_integer(number)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Get GitHub Project polling interval in milliseconds.
+  """
+  @spec github_project_poll_interval_ms(t()) :: pos_integer()
+  def github_project_poll_interval_ms(%__MODULE__{} = config) do
+    project = github_project(config)
+
+    cond do
+      is_integer(project["poll_interval_ms"]) and project["poll_interval_ms"] > 0 ->
+        project["poll_interval_ms"]
+
+      is_integer(project["poll_interval_seconds"]) and project["poll_interval_seconds"] > 0 ->
+        project["poll_interval_seconds"] * 1000
+
+      true ->
+        30_000
+    end
+  end
+
+  defp parse_positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number > 0 -> number
+      _ -> nil
+    end
   end
 
   @doc """
@@ -290,6 +364,28 @@ defmodule Nex.Agent.Config do
     case Map.get(feishu(config), "react_emoji") do
       emoji when is_binary(emoji) and emoji != "" -> emoji
       _ -> "THUMBSUP"
+    end
+  end
+
+  @doc """
+  Whether local Feishu task polling is enabled.
+  """
+  @spec feishu_task_polling_enabled?(t()) :: boolean()
+  def feishu_task_polling_enabled?(%__MODULE__{} = config) do
+    config
+    |> feishu()
+    |> Map.get("task_polling_enabled", false)
+    |> Kernel.==(true)
+  end
+
+  @doc """
+  Get local Feishu task polling interval in milliseconds.
+  """
+  @spec feishu_task_poll_interval_ms(t()) :: pos_integer()
+  def feishu_task_poll_interval_ms(%__MODULE__{} = config) do
+    case Map.get(feishu(config), "task_poll_interval_ms") do
+      value when is_integer(value) and value > 0 -> value
+      _ -> 60_000
     end
   end
 
@@ -489,6 +585,35 @@ defmodule Nex.Agent.Config do
 
   def set(%__MODULE__{} = config, :feishu_react_emoji, value) when is_binary(value) do
     %{config | feishu: Map.put(feishu(config), "react_emoji", value)}
+  end
+
+  def set(%__MODULE__{} = config, :feishu_task_polling_enabled, value)
+      when is_boolean(value) do
+    %{config | feishu: Map.put(feishu(config), "task_polling_enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :feishu_task_poll_interval_ms, value)
+      when is_integer(value) and value > 0 do
+    %{config | feishu: Map.put(feishu(config), "task_poll_interval_ms", value)}
+  end
+
+  def set(%__MODULE__{} = config, :github_project_enabled, value)
+      when is_boolean(value) do
+    %{config | github_project: Map.put(github_project(config), "enabled", value)}
+  end
+
+  def set(%__MODULE__{} = config, :github_project_owner, value) when is_binary(value) do
+    %{config | github_project: Map.put(github_project(config), "owner", value)}
+  end
+
+  def set(%__MODULE__{} = config, :github_project_number, value)
+      when is_integer(value) and value > 0 do
+    %{config | github_project: Map.put(github_project(config), "project_number", value)}
+  end
+
+  def set(%__MODULE__{} = config, :github_project_poll_interval_seconds, value)
+      when is_integer(value) and value > 0 do
+    %{config | github_project: Map.put(github_project(config), "poll_interval_seconds", value)}
   end
 
   # Discord setters
@@ -852,7 +977,9 @@ defmodule Nex.Agent.Config do
       "bot_open_id" => "",
       "bot_user_id" => "",
       "bot_name" => "",
-      "react_emoji" => "THUMBSUP"
+      "react_emoji" => "THUMBSUP",
+      "task_polling_enabled" => false,
+      "task_poll_interval_ms" => 60_000
     }
   end
 
@@ -871,6 +998,25 @@ defmodule Nex.Agent.Config do
       "app_token" => "",
       "bot_token" => "",
       "allow_from" => []
+    }
+  end
+
+  defp default_github_project do
+    %{
+      "enabled" => false,
+      "owner" => "",
+      "project_number" => nil,
+      "poll_interval_seconds" => 30,
+      "status_field" => "Status",
+      "progress_field" => "Nex Progress",
+      "work_root" => nil,
+      "cleanup_after_merged" => true,
+      "opencode_model" => nil,
+      "required_label" => "opencode",
+      "todo_status" => "Todo",
+      "doing_status" => "In Progress",
+      "review_status" => "In Progress",
+      "done_status" => "Done"
     }
   end
 

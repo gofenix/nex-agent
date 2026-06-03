@@ -6,14 +6,95 @@ defmodule Nex.Agent.Channel.FeishuTask do
   @dedup_ttl_seconds 300
   @dedup_dir "tasks"
 
-  def normalize(%{"header" => %{"event_type" => "task.task.created_v1"}} = payload) do
+  def normalize(%{"header" => %{"event_type" => "task.task.updated_v1"}} = payload) do
+    task = payload["event"] || %{}
+    task_id = task["task_id"]
+    operator_id = get_in(payload, ["header", "operator_user_id"])
+    creator_id = task["creator_id"] || operator_id
+    old_status = get_in(task, ["changes", "status", "old"]) || ""
+    new_status = get_in(task, ["changes", "status", "new"]) || ""
+
+    if is_nil(task_id) or task_id == "" do
+      Logger.warning("[FeishuTask] updated event missing task_id")
+      :ignore
+    else
+      cond do
+        old_status == "completed" && new_status == "in_progress" && operator_id == creator_id ->
+          {:ok,
+           %{
+             channel: "feishu",
+             chat_id: creator_id,
+             content: "/rerun_feishu_task #{task_id}",
+             metadata: %{
+               _from_feishu_task: true,
+               task_id: task_id,
+               task_title: task["title"] || "",
+               task_description: task["description"] || "",
+               task_action: "rerun",
+               creator_id: creator_id,
+               operator_user_id: operator_id
+             }
+           }}
+
+        old_status == "" && new_status == "" ->
+          {:ok,
+           %{
+             channel: "feishu",
+             chat_id: creator_id,
+             content: "/run_feishu_task #{task_id}",
+             metadata: %{
+               _from_feishu_task: true,
+               task_id: task_id,
+               task_title: task["title"] || "",
+               task_description: task["description"] || "",
+               task_action: "created",
+               creator_id: creator_id,
+               operator_user_id: operator_id
+             }
+           }}
+
+        true ->
+          :ignore
+      end
+    end
+  end
+
+  def normalize(%{"header" => %{"event_type" => "task.task.comment.updated_v1"}} = payload) do
+    task = payload["event"] || %{}
+    task_id = task["task_id"]
+    _change_type = get_in(task, ["changes", "comment", "type"]) || task["change_type"] || ""
+    content = get_in(task, ["comment", "content"]) || task["content"] || ""
+    operator_id = get_in(payload, ["header", "operator_user_id"])
+    creator_id = task["creator_id"] || operator_id
+
+    if task_id && content =~ "/rerun" && operator_id == creator_id do
+      {:ok,
+       %{
+         channel: "feishu",
+         chat_id: creator_id,
+         content: "/rerun_feishu_task #{task_id}",
+         metadata: %{
+           _from_feishu_task: true,
+           task_id: task_id,
+           task_title: task["title"] || "",
+           task_description: task["description"] || "",
+           task_action: "rerun",
+           creator_id: creator_id,
+           operator_user_id: operator_id
+         }
+       }}
+    else
+      :ignore
+    end
+  end
+
+  def normalize(%{"header" => %{"event_type" => "task.task.update_tenant_v1"}} = payload) do
     task = payload["event"] || %{}
     task_id = task["task_id"]
     operator_id = get_in(payload, ["header", "operator_user_id"])
     creator_id = task["creator_id"] || operator_id
 
     if is_nil(task_id) or task_id == "" do
-      Logger.warning("[FeishuTask] created event missing task_id")
       :ignore
     else
       {:ok,
@@ -31,64 +112,6 @@ defmodule Nex.Agent.Channel.FeishuTask do
            operator_user_id: operator_id
          }
        }}
-    end
-  end
-
-  def normalize(%{"header" => %{"event_type" => "task.task.updated_v1"}} = payload) do
-    task = payload["event"] || %{}
-    task_id = task["task_id"]
-    old_status = get_in(task, ["changes", "status", "old"]) || ""
-    new_status = get_in(task, ["changes", "status", "new"]) || ""
-    operator_id = get_in(payload, ["header", "operator_user_id"])
-    creator_id = task["creator_id"] || operator_id
-
-    if task_id && old_status == "completed" && new_status == "in_progress" &&
-         operator_id == creator_id do
-      {:ok,
-       %{
-         channel: "feishu",
-         chat_id: creator_id,
-         content: "/rerun_feishu_task #{task_id}",
-         metadata: %{
-           _from_feishu_task: true,
-           task_id: task_id,
-           task_title: task["title"] || "",
-           task_description: task["description"] || "",
-           task_action: "rerun",
-           creator_id: creator_id,
-           operator_user_id: operator_id
-         }
-       }}
-    else
-      :ignore
-    end
-  end
-
-  def normalize(%{"header" => %{"event_type" => "task.task.comment.created_v1"}} = payload) do
-    task = payload["event"] || %{}
-    task_id = task["task_id"]
-    comment = get_in(task, ["comment", "content"]) || ""
-    operator_id = get_in(payload, ["header", "operator_user_id"])
-    creator_id = task["creator_id"] || operator_id
-
-    if task_id && comment =~ "/rerun" && operator_id == creator_id do
-      {:ok,
-       %{
-         channel: "feishu",
-         chat_id: creator_id,
-         content: "/rerun_feishu_task #{task_id}",
-         metadata: %{
-           _from_feishu_task: true,
-           task_id: task_id,
-           task_title: task["title"] || "",
-           task_description: task["description"] || "",
-           task_action: "rerun",
-           creator_id: creator_id,
-           operator_user_id: operator_id
-         }
-       }}
-    else
-      :ignore
     end
   end
 

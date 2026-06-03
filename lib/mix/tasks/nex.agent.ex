@@ -71,6 +71,10 @@ defmodule Mix.Tasks.Nex.Agent do
     with_config_targeting(opts, fn target -> run_config(args, target) end)
   end
 
+  defp dispatch(["github", "event", event_path], opts) do
+    with_cli_targeting(opts, fn target -> run_github_event(event_path, target) end)
+  end
+
   defp dispatch(["evolve"], opts) do
     with_cli_targeting(opts, &run_evolve/1)
   end
@@ -116,6 +120,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent gateway [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway stop [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway restart [--config PATH] [--workspace PATH]")
+    Mix.shell().info("  mix nex.agent github event EVENT_JSON [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent evolve")
     Mix.shell().info("Configuration:")
     Mix.shell().info("  mix nex.agent config show [--config PATH]")
@@ -124,6 +129,12 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent config set api_key PROVIDER KEY [--config PATH]")
     Mix.shell().info("  mix nex.agent config set defaults.workspace PATH [--config PATH]")
     Mix.shell().info("  mix nex.agent config set gateway.port PORT [--config PATH]")
+
+    Mix.shell().info(
+      "  mix nex.agent config set feishu.task_polling_enabled true|false [--config PATH]"
+    )
+
+    Mix.shell().info("  mix nex.agent config set feishu.task_poll_interval_ms MS [--config PATH]")
     Mix.shell().info("")
     Mix.shell().info("Global options:")
     Mix.shell().info("  -c, --config PATH      Use a specific config file")
@@ -263,6 +274,70 @@ defmodule Mix.Tasks.Nex.Agent do
     case File.stat(path) do
       {:ok, %{size: size}} -> size
       _ -> 0
+    end
+  end
+
+  defp run_github_event(event_path, target) do
+    ensure_cli_runtime(target)
+
+    path = Path.expand(event_path)
+
+    payload =
+      with {:ok, content} <- File.read(path),
+           {:ok, decoded} when is_map(decoded) <- Jason.decode(content) do
+        decoded
+      else
+        {:ok, _} ->
+          Mix.raise("GitHub event payload must be a JSON object: #{path}")
+
+        {:error, reason} ->
+          Mix.raise("Failed to read GitHub event payload #{path}: #{inspect(reason)}")
+      end
+
+    case Nex.Agent.Channel.Github.ingest_event(payload,
+           event_type: System.get_env("GITHUB_EVENT_NAME") || "github",
+           workspace: target.workspace
+         ) do
+      :ok ->
+        Mix.shell().info("GitHub event accepted")
+        wait_for_inbound_worker_idle()
+
+      {:ignore, reason} ->
+        Mix.shell().info("GitHub event ignored: #{reason}")
+
+      {:error, reason} ->
+        Mix.raise("GitHub event failed: #{reason}")
+    end
+  end
+
+  defp wait_for_inbound_worker_idle(deadline_ms \\ 1_805_000) do
+    started = System.monotonic_time(:millisecond)
+
+    Stream.repeatedly(fn -> :ok end)
+    |> Enum.reduce_while(:ok, fn _, :ok ->
+      if inbound_worker_idle?() do
+        {:halt, :ok}
+      else
+        elapsed = System.monotonic_time(:millisecond) - started
+
+        if elapsed >= deadline_ms do
+          Mix.raise("Timed out waiting for GitHub event execution to finish")
+        else
+          Process.sleep(1_000)
+          {:cont, :ok}
+        end
+      end
+    end)
+  end
+
+  defp inbound_worker_idle? do
+    case Process.whereis(Nex.Agent.InboundWorker) do
+      nil ->
+        true
+
+      pid ->
+        state = :sys.get_state(pid)
+        map_size(state.active_tasks) == 0 and map_size(state.pending_queue) == 0
     end
   end
 
@@ -506,6 +581,16 @@ defmodule Mix.Tasks.Nex.Agent do
         port = parse_positive_integer!(value, "gateway.port")
         persist_config_update(:gateway_port, port)
         Mix.shell().info("Updated gateway.port = #{port}")
+
+      ["config", "set", "feishu.task_polling_enabled", value] ->
+        bool = parse_boolean!(value)
+        persist_config_update(:feishu_task_polling_enabled, bool)
+        Mix.shell().info("Updated feishu.task_polling_enabled = #{bool}")
+
+      ["config", "set", "feishu.task_poll_interval_ms", value] ->
+        interval_ms = parse_positive_integer!(value, "feishu.task_poll_interval_ms")
+        persist_config_update(:feishu_task_poll_interval_ms, interval_ms)
+        Mix.shell().info("Updated feishu.task_poll_interval_ms = #{interval_ms}")
 
       ["config", "set", "telegram.token", value] ->
         persist_config_update(:telegram_token, value)

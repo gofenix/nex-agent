@@ -10,6 +10,10 @@ defmodule Nex.Agent.InboundWorker do
 
   alias Nex.Agent.{Bus, Config, MemoryUpdater, Workspace}
 
+  @default_task_watchdog_timeout_ms 600_000
+  @coding_task_timeout_seconds 1_800
+  @watchdog_grace_ms 5_000
+
   defstruct [
     :config,
     :agent_start_fun,
@@ -82,16 +86,20 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
-    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
+    from_cron = metadata_flag?(payload, "_from_cron")
+    from_subagent = metadata_flag?(payload, "_from_subagent")
+    from_feishu_task = metadata_flag?(payload, "_from_feishu_task")
+    from_github = metadata_flag?(payload, "_from_github")
 
     state =
-      if from_cron or from_feishu_task, do: state, else: put_in(state.agents[key], updated_agent)
+      if from_cron or from_feishu_task or from_github,
+        do: state,
+        else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless result == :message_sent or from_cron or from_feishu_task or suppress_outbound?(result) do
+    unless result == :message_sent or from_cron or from_feishu_task or from_github or
+             suppress_outbound?(result) do
       publish_outbound(payload, result)
     end
 
@@ -102,16 +110,19 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
-    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
+    from_cron = metadata_flag?(payload, "_from_cron")
+    from_subagent = metadata_flag?(payload, "_from_subagent")
+    from_feishu_task = metadata_flag?(payload, "_from_feishu_task")
+    from_github = metadata_flag?(payload, "_from_github")
 
     state =
-      if from_cron or from_feishu_task, do: state, else: put_in(state.agents[key], updated_agent)
+      if from_cron or from_feishu_task or from_github,
+        do: state,
+        else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless from_cron or from_feishu_task do
+    unless from_cron or from_feishu_task or from_github do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
 
@@ -122,10 +133,11 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:error, reason}, payload}, state) do
-    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
+    from_feishu_task = metadata_flag?(payload, "_from_feishu_task")
+    from_github = metadata_flag?(payload, "_from_github")
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
 
-    unless from_feishu_task do
+    unless from_feishu_task or from_github do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
 
@@ -135,7 +147,7 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:check_timeout, key, pid}, state) do
     if Map.get(state.active_tasks, key) == pid and Process.alive?(pid) do
-      Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
+      Logger.warning("[InboundWorker] Task #{inspect(key)} timed out, killing")
       Process.exit(pid, :kill)
     end
 
@@ -257,10 +269,19 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
-    from_feishu_task = get_in(payload, [:metadata, "_from_feishu_task"]) == true
+    from_cron = metadata_flag?(payload, "_from_cron")
+    from_subagent = metadata_flag?(payload, "_from_subagent")
+    from_feishu_task = metadata_flag?(payload, "_from_feishu_task")
+    from_github_project = metadata_flag?(payload, "_from_github_project")
+    from_github = metadata_flag?(payload, "_from_github") or from_github_project
     media = extract_media(payload)
+
+    prompt_content =
+      cond do
+        from_feishu_task -> feishu_task_prompt(content, payload)
+        from_github -> github_prompt(content, payload)
+        true -> content
+      end
 
     cron_opts =
       if from_cron,
@@ -274,14 +295,40 @@ defmodule Nex.Agent.InboundWorker do
         else: []
 
     task_opts =
-      if from_feishu_task,
-        do: [
-          force_skills: ["feishu-task-executor"],
-          max_iterations: 10
-        ],
-        else: []
+      cond do
+        from_feishu_task ->
+          [
+            history_limit: 0,
+            force_skills: ["feishu-task-executor"],
+            skip_consolidation: true,
+            max_iterations: 10,
+            timeout: @coding_task_timeout_seconds
+          ]
 
-    unless from_cron or from_subagent do
+        from_github ->
+          opts = [
+            history_limit: 0,
+            force_skills: ["github-issue-executor"],
+            skip_consolidation: true,
+            max_iterations: 20,
+            timeout: @coding_task_timeout_seconds
+          ]
+
+          if from_github_project do
+            opts ++
+              [
+                first_iteration_tool_only: ["opencode_run"],
+                first_iteration_tool_choice: "opencode_run"
+              ]
+          else
+            opts
+          end
+
+        true ->
+          []
+      end
+
+    unless from_cron or from_subagent or from_github do
       Nex.Agent.PersonalSummary.ensure_default_jobs(
         channel,
         chat_id,
@@ -302,13 +349,14 @@ defmodule Nex.Agent.InboundWorker do
           result =
             state.agent_prompt_fun.(
               agent,
-              content,
+              prompt_content,
               [
                 channel: channel,
                 chat_id: chat_id,
                 on_progress: nil,
                 workspace: workspace,
-                schedule_memory_refresh: false
+                schedule_memory_refresh: false,
+                metadata: extract_metadata(payload)
               ]
               |> maybe_put_opt(:media, media)
               |> Kernel.++(cron_opts)
@@ -335,7 +383,7 @@ defmodule Nex.Agent.InboundWorker do
             send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
         catch
           kind, reason ->
-            if channel == "feishu" and not from_cron do
+            if channel == "feishu" and not from_cron and not from_feishu_task do
               _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
             end
 
@@ -347,13 +395,24 @@ defmodule Nex.Agent.InboundWorker do
       end)
 
     Process.monitor(pid)
-    Process.send_after(self(), {:check_timeout, key, pid}, 600_000)
+    Process.send_after(self(), {:check_timeout, key, pid}, task_watchdog_timeout_ms(payload))
 
     %{
       state
       | active_tasks: Map.put(state.active_tasks, key, pid),
         agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
     }
+  end
+
+  @doc false
+  def task_watchdog_timeout_ms(payload) when is_map(payload) do
+    if metadata_flag?(payload, "_from_feishu_task") or
+         metadata_flag?(payload, "_from_github") or
+         metadata_flag?(payload, "_from_github_project") do
+      @coding_task_timeout_seconds * 1_000 + @watchdog_grace_ms
+    else
+      @default_task_watchdog_timeout_ms
+    end
   end
 
   defp maybe_drain_pending(state, key) do
@@ -545,6 +604,88 @@ defmodule Nex.Agent.InboundWorker do
     else
       base
     end
+  end
+
+  defp feishu_task_prompt(content, payload) do
+    metadata = extract_metadata(payload)
+    metadata_json = Jason.encode!(metadata, pretty: true)
+
+    """
+    You are handling a Feishu task dispatch event.
+
+    Incoming command:
+    #{content}
+
+    Feishu task metadata:
+    #{metadata_json}
+
+    Mandatory behavior:
+    - Follow the feishu-task-executor skill exactly.
+    - Use the Feishu task_id from metadata.
+    - Fetch task details with: lark-cli task tasks get --as user --format json --params '{"task_guid":"<task_id>","user_id_type":"open_id"}'
+    - Resolve the target repository from the task details, @repo annotation, or workspace/tasks/repos.json.
+    - Dispatch coding work with `opencode run --dangerously-skip-permissions` from the resolved repository.
+    - Report progress/results back to the Feishu task with lark-cli task +comment/+complete/+reopen commands.
+
+    Forbidden for this event:
+    - Do not use the internal Nex personal task tool.
+    - Do not run `lark-cli task get`; that command does not exist in this CLI.
+    - Do not run `lark-cli task update` or `lark-cli task comment`; use `task +update`, `task +comment`, `task +complete`, and `task +reopen`.
+    - Do not run `opencode -m` for the task prompt; `-m` selects a model and starts interactive mode. Use `opencode run --dangerously-skip-permissions`.
+    - Do not use executor_status or executor_dispatch to inspect Nex background executors.
+    - Do not answer conversationally until execution/reporting has been attempted.
+    """
+  end
+
+  defp github_prompt(content, payload) do
+    metadata = extract_metadata(payload)
+    metadata_json = Jason.encode!(metadata, pretty: true)
+
+    """
+    You are handling a GitHub comment mention event.
+
+    Incoming command:
+    #{content}
+
+    GitHub event metadata:
+    #{metadata_json}
+
+    Mandatory behavior:
+    - Follow the github-issue-executor skill exactly.
+    - Decide from the GitHub context whether to start, continue, retry, stop, report status, or ask a clarifying question.
+    - Use the issue, PR, branch, work_dir, registry, and comment metadata as context; do not require a preclassified action.
+    - If coding work is needed, use work_dir as the only execution directory and call the `opencode_run` tool. Do not call opencode through the bash tool.
+    - `opencode_run` must receive work_dir, branch, repo, issue_number, issue_title, issue_body, model from metadata.opencode_model when present, and timeout: 1800 when those values are available.
+    - `opencode_run` records the prompt, command metadata, model, stdout/stderr log, exit code, and git diff summary. Inspect its returned JSON before creating a PR.
+    - After `opencode_run` returns, inspect its result and git diff, run verification if needed, create or update the PR yourself, and record useful state in tasks/github_items.json.
+    - If the user's intent is unclear or risky, ask a concise clarifying question in GitHub instead of guessing.
+
+    Forbidden for this event:
+    - Do not use Feishu or lark-cli commands.
+    - Do not use the internal Nex personal task tool.
+    - Do not implement the issue yourself with read/edit/write tools.
+    - Do not run opencode in a long-lived checkout such as /Users/fenix/github/* or /Users/fenix/repos/*.
+    - Do not use `bash` for opencode execution; use `opencode_run` so logs and metadata are observable.
+    - Do not spend turns inspecting the repo beyond what is required to run opencode.
+    - Do not stop after saying what you will do when the intent is clear; execute the required shell commands.
+    - Do not answer conversationally until execution/reporting has been attempted.
+
+    Required coding tool call shape:
+    opencode_run(work_dir: "<work_dir>", branch: "<branch>", repo: "<repo>", issue_number: <issue_number>, issue_title: "<issue_title>", issue_body: "<issue_body>", model: "<opencode_model>", timeout: 1800)
+    """
+  end
+
+  defp metadata_flag?(payload, key) when is_binary(key) do
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    atom_key = safe_existing_atom(key)
+
+    Map.get(metadata, key) == true or Map.get(metadata, atom_key) == true
+  end
+
+  defp safe_existing_atom(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
   end
 
   defp inbound_message_id(payload) do

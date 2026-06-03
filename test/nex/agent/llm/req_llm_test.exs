@@ -185,4 +185,23 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     refute inspected =~ "sk-secretsecretsecret"
     assert inspected =~ "[REDACTED]"
   end
+
+  test "nested transport error structs are sanitized without treating them as enumerable maps" do
+    error = %Protocol.UndefinedError{
+      protocol: Enumerable,
+      value: %Req.TransportError{reason: :econnrefused}
+    }
+    generate_text_fun = fn _model_spec, _messages, _opts -> {:error, error} end
+
+    assert {:error, sanitized} =
+             AgentReqLLM.chat(
+               [%{"role" => "user", "content" => "hello"}],
+               provider: :openai,
+               model: "gpt-4o",
+               req_llm_generate_text_fun: generate_text_fun
+             )
+
+    assert sanitized[:protocol] == Enumerable
+    assert sanitized[:value][:reason] == :econnrefused
+  end
 end

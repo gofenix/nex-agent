@@ -19,6 +19,8 @@ defmodule Nex.Agent.Runner do
   @memory_window 50
   @max_tool_result_length 8000
   @tool_hint_preview_length 220
+  @tool_stream_default_timeout_ms 120_000
+  @tool_stream_timeout_grace_ms 5_000
   @skill_complexity_tool_calls 4
   @skill_complexity_tool_rounds 2
   @user_correction_terms [
@@ -251,12 +253,13 @@ defmodule Nex.Agent.Runner do
     else
       # Time the LLM call
       llm_start = System.monotonic_time(:millisecond)
+      iteration_opts = Keyword.put(opts, :trace_iteration, iteration + 1)
 
       llm_result =
         try do
           call_llm_with_retry(
             messages,
-            Keyword.put(opts, :trace_iteration, iteration + 1),
+            iteration_opts,
             _retries = 1
           )
         rescue
@@ -308,7 +311,7 @@ defmodule Nex.Agent.Runner do
                 iteration,
                 max_iterations,
                 on_progress,
-                opts
+                iteration_opts
               )
 
             iter_total = System.monotonic_time(:millisecond) - iter_start
@@ -796,10 +799,13 @@ defmodule Nex.Agent.Runner do
   defp transient_error?(_), do: false
 
   defp call_llm(messages, opts) do
+    opts = maybe_apply_first_iteration_tool_choice(opts)
+
     tools =
-      case Keyword.get(opts, :tools_filter) do
+      case effective_tools_filter(opts) do
         :subagent -> registry_definitions(:subagent, opts)
         :cron -> registry_definitions(:cron, opts)
+        {:only, names} -> registry_definitions({:only, names}, opts)
         _ -> registry_definitions(:all, opts)
       end
 
@@ -815,6 +821,44 @@ defmodule Nex.Agent.Runner do
 
   # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
   @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
+
+  defp effective_tools_filter(opts) do
+    first_only = Keyword.get(opts, :first_iteration_tool_only)
+
+    if Keyword.get(opts, :trace_iteration) == 1 and is_list(first_only) and first_only != [] do
+      {:only, first_only}
+    else
+      Keyword.get(opts, :tools_filter)
+    end
+  end
+
+  defp maybe_apply_first_iteration_tool_choice(opts) do
+    choice = Keyword.get(opts, :first_iteration_tool_choice)
+
+    if Keyword.get(opts, :trace_iteration) == 1 and is_binary(choice) and choice != "" do
+      Keyword.put(opts, :tool_choice, %{type: "tool", name: choice})
+    else
+      opts
+    end
+  end
+
+  defp tool_allowed_for_iteration?(tool_name, opts) do
+    first_only = Keyword.get(opts, :first_iteration_tool_only)
+
+    if Keyword.get(opts, :trace_iteration) == 1 and is_list(first_only) and first_only != [] do
+      tool_name in first_only
+    else
+      true
+    end
+  end
+
+  defp registry_definitions({:only, names}, opts) when is_list(names) do
+    allowed = MapSet.new(names)
+
+    :all
+    |> registry_definitions(opts)
+    |> Enum.filter(&(Map.get(&1, "name") in allowed))
+  end
 
   defp registry_definitions(filter, opts) do
     if Process.whereis(ToolRegistry) do
@@ -888,13 +932,20 @@ defmodule Nex.Agent.Runner do
           parsed_args = parse_args(args)
           Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
 
-          result = execute_tool(tool_name, parsed_args, ctx)
+          result =
+            if tool_allowed_for_iteration?(tool_name, opts) do
+              execute_tool(tool_name, parsed_args, ctx)
+            else
+              {:error,
+               "Tool #{tool_name} is not allowed in this iteration. Use one of: #{Enum.join(Keyword.get(opts, :first_iteration_tool_only, []), ", ")}."}
+            end
+
           truncated = truncate_result(result)
 
           {tool_call_id, tool_name, truncated, parsed_args}
         end,
         ordered: true,
-        timeout: 120_000,
+        timeout: tool_stream_timeout_ms(indexed_calls, opts),
         on_timeout: :kill_task
       )
       |> Enum.zip(indexed_calls)
@@ -941,6 +992,44 @@ defmodule Nex.Agent.Runner do
   defp parse_args([]), do: %{}
   defp parse_args(args) when is_map(args), do: args
   defp parse_args(_), do: %{}
+
+  @doc false
+  def tool_stream_timeout_ms(indexed_calls, opts \\ []) when is_list(indexed_calls) do
+    call_timeout =
+      indexed_calls
+      |> Enum.map(fn {_tool_call_id, _tool_name, args} ->
+        args
+        |> parse_args()
+        |> tool_arg_timeout_ms()
+      end)
+      |> Enum.max(fn -> @tool_stream_default_timeout_ms end)
+
+    opts_timeout =
+      opts
+      |> Keyword.get(:timeout)
+      |> normalize_tool_timeout_ms()
+
+    [call_timeout, opts_timeout]
+    |> Enum.max()
+    |> max(@tool_stream_default_timeout_ms)
+    |> Kernel.+(@tool_stream_timeout_grace_ms)
+  end
+
+  defp tool_arg_timeout_ms(args) when is_map(args) do
+    args
+    |> Map.get("timeout", Map.get(args, :timeout))
+    |> normalize_tool_timeout_ms()
+  end
+
+  defp tool_arg_timeout_ms(_), do: @tool_stream_default_timeout_ms
+
+  defp normalize_tool_timeout_ms(timeout) when is_integer(timeout) and timeout > 0,
+    do: timeout * 1000
+
+  defp normalize_tool_timeout_ms(timeout) when is_float(timeout) and timeout > 0,
+    do: trunc(timeout * 1000)
+
+  defp normalize_tool_timeout_ms(_), do: @tool_stream_default_timeout_ms
 
   defp tool_loop_signature("tool_create", args) do
     parsed = parse_args(args)
@@ -1024,6 +1113,7 @@ defmodule Nex.Agent.Runner do
       model: Keyword.get(opts, :model),
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
+      timeout: Keyword.get(opts, :timeout),
       tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),

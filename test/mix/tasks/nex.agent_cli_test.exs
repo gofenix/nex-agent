@@ -76,6 +76,53 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
                  end
   end
 
+  test "github event command ingests GitHub Actions payload without waking agent when unmentioned" do
+    base_dir = temp_dir("cli-github-event")
+    config_path = Path.join(base_dir, "config.json")
+    workspace = Path.join(base_dir, "workspace")
+    event_path = Path.join(base_dir, "event.json")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+    end)
+
+    File.mkdir_p!(base_dir)
+
+    File.write!(
+      event_path,
+      Jason.encode!(%{
+        "comment" => %{
+          "id" => 9001,
+          "body" => "no wake word here",
+          "html_url" => "https://github.com/gofenix/nex-agent/issues/12#issuecomment-9001",
+          "user" => %{"login" => "fenix"}
+        },
+        "issue" => %{
+          "number" => 12,
+          "title" => "Fix empty input",
+          "body" => "Current implementation accepts empty input.",
+          "html_url" => "https://github.com/gofenix/nex-agent/issues/12"
+        },
+        "repository" => %{"full_name" => "gofenix/nex-agent"}
+      })
+    )
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.Nex.Agent.run([
+          "-c",
+          config_path,
+          "-w",
+          workspace,
+          "github",
+          "event",
+          event_path
+        ])
+      end)
+
+    assert output =~ "GitHub event ignored: missing_wake_word"
+  end
+
   test "onboard with explicit config and workspace persists instance targeting" do
     base_dir = temp_dir("cli-onboard")
     config_path = Path.join(base_dir, "alpha/config.json")
@@ -147,9 +194,33 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
       Mix.Tasks.Nex.Agent.run(["-c", config_path, "config", "set", "gateway.port", "19444"])
     end)
 
+    capture_io(fn ->
+      Mix.Tasks.Nex.Agent.run([
+        "-c",
+        config_path,
+        "config",
+        "set",
+        "feishu.task_polling_enabled",
+        "true"
+      ])
+    end)
+
+    capture_io(fn ->
+      Mix.Tasks.Nex.Agent.run([
+        "-c",
+        config_path,
+        "config",
+        "set",
+        "feishu.task_poll_interval_ms",
+        "30000"
+      ])
+    end)
+
     updated = Config.load(config_path: config_path)
     assert Config.configured_workspace(updated) == Path.expand(new_workspace)
     assert Config.gateway_port(updated) == 19_444
+    assert Config.feishu_task_polling_enabled?(updated)
+    assert Config.feishu_task_poll_interval_ms(updated) == 30_000
   end
 
   test "single-message mode honors -m instead of falling through to the REPL" do

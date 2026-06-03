@@ -132,6 +132,7 @@ defmodule Nex.Agent do
       |> maybe_put(:history_limit, Keyword.get(opts, :history_limit))
       |> maybe_put(:skip_consolidation, Keyword.get(opts, :skip_consolidation))
       |> maybe_put(:skip_skills, Keyword.get(opts, :skip_skills))
+      |> maybe_put(:force_skills, Keyword.get(opts, :force_skills))
 
     case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->

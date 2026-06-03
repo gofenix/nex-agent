@@ -96,7 +96,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
       Bus.unsubscribe(:feishu_outbound)
-      File.rm_rf!(workspace)
+      File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace, worker_name: worker_name}
@@ -172,6 +172,188 @@ defmodule Nex.Agent.InboundWorkerTest do
                "mime_type" => "image/png"
              }
            ]
+  end
+
+  test "feishu task metadata with atom keys forces task executor options" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_feishu_task_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, opts})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "feishu",
+        chat_id: "ou_user",
+        content: "/rerun_feishu_task task_1",
+        metadata: %{
+          _from_feishu_task: true,
+          task_id: "task_1",
+          task_action: "rerun"
+        }
+      }
+    })
+
+    assert_receive {:prompt_opts, prompt, opts}, 1_000
+    assert prompt =~ "/rerun_feishu_task task_1"
+    assert prompt =~ "\"task_id\": \"task_1\""
+    assert prompt =~ "Do not use the internal Nex personal task tool"
+    assert Keyword.get(opts, :force_skills) == ["feishu-task-executor"]
+    assert Keyword.get(opts, :history_limit) == 0
+    assert Keyword.get(opts, :skip_consolidation) == true
+
+    refute_receive {:bus_message, :feishu_outbound, _}, 100
+  end
+
+  test "github metadata forces issue executor options without preclassified action" do
+    parent = self()
+
+    worker_name = String.to_atom("inbound_worker_github_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, opts})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "github",
+        chat_id: "gofenix/nex-agent#12",
+        content: "@nex 这个 case 还不对，空输入应该直接报错",
+        metadata: %{
+          _from_github: true,
+          event_type: "issue_comment",
+          issue_url: "https://github.com/gofenix/nex-agent/issues/12",
+          issue_number: 12,
+          issue_title: "add jp readme",
+          issue_body: "add jp",
+          repo: "gofenix/nex-agent",
+          work_dir: "/Users/fenix/.nex/agent/workspace/github/items/PVTI_123/gofenix__nex-agent",
+          branch: "codex/github-issue-12-PVTI_123",
+          pr_url: "https://github.com/gofenix/nex-agent/pull/13",
+          comment_body: "@nex 这个 case 还不对，空输入应该直接报错"
+        }
+      }
+    })
+
+    assert_receive {:prompt_opts, prompt, opts}, 1_000
+    assert prompt =~ "@nex 这个 case 还不对，空输入应该直接报错"
+    assert prompt =~ "\"_from_github\": true"
+    assert prompt =~ "\"work_dir\""
+    assert prompt =~ "\"branch\": \"codex/github-issue-12-PVTI_123\""
+    assert prompt =~ "\"pr_url\": \"https://github.com/gofenix/nex-agent/pull/13\""
+    assert prompt =~ "Follow the github-issue-executor skill exactly"
+
+    assert prompt =~
+             "Decide from the GitHub context whether to start, continue, retry, stop, report status, or ask a clarifying question."
+
+    refute prompt =~ "\"action\""
+    assert prompt =~ "opencode_run"
+    assert prompt =~ "Do not call opencode through the bash tool"
+    assert prompt =~ "stdout/stderr log"
+    assert prompt =~ "Do not run opencode in a long-lived checkout"
+    assert prompt =~ "timeout: 1800"
+    assert Keyword.get(opts, :force_skills) == ["github-issue-executor"]
+    assert Keyword.get(opts, :history_limit) == 0
+    assert Keyword.get(opts, :skip_consolidation) == true
+    assert Keyword.get(opts, :max_iterations) == 20
+    assert Keyword.get(opts, :timeout) == 1_800
+
+    refute_receive {:bus_message, :github_outbound, _}, 100
+  end
+
+  test "github project metadata forces opencode_run as the first iteration tool" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_github_project_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, opts})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "github",
+        chat_id: "gofenix",
+        content: "Pick up Issue #12: add jp readme",
+        metadata: %{
+          _from_github_project: true,
+          issue_number: 12,
+          issue_title: "add jp readme",
+          issue_body: "add jp",
+          repo: "gofenix/nex-agent",
+          work_dir: "/Users/fenix/.nex/agent/workspace/github/items/PVTI_123/gofenix__nex-agent",
+          branch: "codex/github-issue-12-PVTI_123",
+          opencode_model: "opencode/test-model"
+        }
+      }
+    })
+
+    assert_receive {:prompt_opts, prompt, opts}, 1_000
+    assert prompt =~ "\"_from_github_project\": true"
+    assert prompt =~ "Follow the github-issue-executor skill exactly"
+    assert Keyword.get(opts, :force_skills) == ["github-issue-executor"]
+    assert Keyword.get(opts, :first_iteration_tool_only) == ["opencode_run"]
+    assert Keyword.get(opts, :first_iteration_tool_choice) == "opencode_run"
+    assert Keyword.get(opts, :timeout) == 1_800
+  end
+
+  test "coding task watchdog timeout is longer than the opencode tool timeout" do
+    assert InboundWorker.task_watchdog_timeout_ms(%{
+             metadata: %{"_from_github" => true}
+           }) == 1_805_000
+
+    assert InboundWorker.task_watchdog_timeout_ms(%{
+             metadata: %{"_from_feishu_task" => true}
+           }) == 1_805_000
+
+    assert InboundWorker.task_watchdog_timeout_ms(%{
+             metadata: %{"_from_github_project" => true}
+           }) == 1_805_000
+
+    assert InboundWorker.task_watchdog_timeout_ms(%{metadata: %{}}) == 600_000
+  end
+
+  test "timeout check handles tuple runtime keys without crashing" do
+    worker_name = String.to_atom("inbound_worker_timeout_#{System.unique_integer([:positive])}")
+    start_supervised!({InboundWorker, name: worker_name})
+
+    task_pid =
+      spawn(fn ->
+        Process.sleep(:infinity)
+      end)
+
+    key = {"/tmp/workspace", "github:gofenix"}
+
+    worker_pid = Process.whereis(worker_name)
+
+    :sys.replace_state(worker_pid, fn state ->
+      %{state | active_tasks: Map.put(state.active_tasks, key, task_pid)}
+    end)
+
+    ref = Process.monitor(task_pid)
+    send(worker_pid, {:check_timeout, key, task_pid})
+
+    assert_receive {:DOWN, ^ref, :process, ^task_pid, :killed}, 1_000
+    assert Process.alive?(worker_pid)
   end
 
   test "feishu reply via message tool does not append duplicate narration", %{

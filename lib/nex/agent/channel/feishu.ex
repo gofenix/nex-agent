@@ -359,10 +359,13 @@ defmodule Nex.Agent.Channel.Feishu do
         full_json when is_binary(full_json) ->
           _ = send_ws_ack(raw_frame, state)
 
-          case Jason.decode(full_json) do
-            {:ok, payload} -> handle_ws_event_payload(payload, state)
-            _ -> state
-          end
+           case Jason.decode(full_json) do
+             {:ok, payload} ->
+               event_type = get_in(payload, ["header", "event_type"]) || "?"
+               Logger.info("[Feishu] WS event type=#{event_type}")
+               handle_ws_event_payload(payload, state)
+             _ -> state
+           end
       end
 
     {:noreply, state}
@@ -800,7 +803,11 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp normalize_event(%{"header" => %{"event_type" => type}} = payload)
-       when type in ~w(task.task.created_v1 task.task.updated_v1 task.task.comment.created_v1) do
+       when type in ~w(
+         task.task.updated_v1
+         task.task.comment.updated_v1
+         task.task.update_tenant_v1
+       ) do
     Nex.Agent.Channel.FeishuTask.normalize(payload)
   end
 

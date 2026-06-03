@@ -13,6 +13,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.Edit,
     Nex.Agent.Tool.ListDir,
     Nex.Agent.Tool.Bash,
+    Nex.Agent.Tool.OpencodeRun,
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
@@ -44,6 +45,8 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.SkillRead,
     Nex.Agent.Tool.SkillCreate
   ]
+  @default_execute_timeout_ms 120_000
+  @execute_timeout_grace_ms 5_000
 
   # Client API
 
@@ -77,7 +80,19 @@ defmodule Nex.Agent.Tool.Registry do
 
   @doc "Execute a tool by name."
   def execute(name, args, ctx \\ %{}) do
-    GenServer.call(__MODULE__, {:execute, name, args, ctx}, 120_000)
+    GenServer.call(__MODULE__, {:execute, name, args, ctx}, execute_timeout_ms(args, ctx))
+  end
+
+  @doc false
+  def execute_timeout_ms(args, ctx \\ %{}) do
+    args_timeout = timeout_value(args)
+    ctx_timeout = timeout_value(ctx)
+
+    [args_timeout, ctx_timeout]
+    |> Enum.map(&normalize_timeout_ms/1)
+    |> Enum.max()
+    |> max(@default_execute_timeout_ms)
+    |> Kernel.+(@execute_timeout_grace_ms)
   end
 
   @doc "List all registered tool names."
@@ -254,6 +269,17 @@ defmodule Nex.Agent.Tool.Registry do
         :error
     end
   end
+
+  defp timeout_value(map) when is_map(map), do: Map.get(map, "timeout", Map.get(map, :timeout))
+  defp timeout_value(_), do: nil
+
+  defp normalize_timeout_ms(timeout) when is_integer(timeout) and timeout > 0,
+    do: timeout * 1000
+
+  defp normalize_timeout_ms(timeout) when is_float(timeout) and timeout > 0,
+    do: trunc(timeout * 1000)
+
+  defp normalize_timeout_ms(_), do: @default_execute_timeout_ms
 
   # Scan repo tool directory for modules not in @default_tools.
   defp discover_project_tool_modules do

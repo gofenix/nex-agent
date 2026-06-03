@@ -50,4 +50,54 @@ defmodule Nex.Agent.ConfigTest do
     assert loaded.skill_runtime["max_selected_skills"] == 3
     assert [%{"repo" => "org/index"} | _] = loaded.skill_runtime["github_indexes"]
   end
+
+  test "feishu task polling defaults are disabled and configurable" do
+    config = Config.default()
+
+    refute Config.feishu_task_polling_enabled?(config)
+    assert Config.feishu_task_poll_interval_ms(config) == 60_000
+
+    config = %Config{
+      config
+      | feishu: %{
+          config.feishu
+          | "task_polling_enabled" => true,
+            "task_poll_interval_ms" => 30_000
+        }
+    }
+
+    assert Config.feishu_task_polling_enabled?(config)
+    assert Config.feishu_task_poll_interval_ms(config) == 30_000
+  end
+
+  test "github project polling defaults are disabled and configurable" do
+    config = Config.default()
+
+    refute Config.github_project_polling_enabled?(config)
+    assert Config.github_project_poll_interval_ms(config) == 30_000
+    assert Config.github_project_owner(config) == nil
+    assert Config.github_project_number(config) == nil
+    assert Config.github_project(config)["work_root"] == nil
+    assert Config.github_project(config)["cleanup_after_merged"] == true
+
+    config = %Config{
+      config
+      | github_project: %{
+          config.github_project
+          | "enabled" => true,
+            "owner" => "gofenix",
+            "project_number" => 2,
+            "poll_interval_seconds" => 45,
+            "work_root" => "/tmp/nex-github-work",
+            "cleanup_after_merged" => false
+        }
+    }
+
+    assert Config.github_project_polling_enabled?(config)
+    assert Config.github_project_poll_interval_ms(config) == 45_000
+    assert Config.github_project_owner(config) == "gofenix"
+    assert Config.github_project_number(config) == 2
+    assert Config.github_project(config)["work_root"] == "/tmp/nex-github-work"
+    assert Config.github_project(config)["cleanup_after_merged"] == false
+  end
 end

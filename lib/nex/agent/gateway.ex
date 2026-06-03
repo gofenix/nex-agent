@@ -108,6 +108,7 @@ defmodule Nex.Agent.Gateway do
         subagent: Process.whereis(Nex.Agent.Subagent) != nil,
         telegram_channel: Process.whereis(Nex.Agent.Channel.Telegram) != nil,
         feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil,
+        feishu_task_poller: Process.whereis(Nex.Agent.Channel.FeishuTaskPoller) != nil,
         discord_channel: Process.whereis(Nex.Agent.Channel.Discord) != nil,
         slack_channel: Process.whereis(Nex.Agent.Channel.Slack) != nil,
         dingtalk_channel: Process.whereis(Nex.Agent.Channel.DingTalk) != nil
@@ -217,6 +218,19 @@ defmodule Nex.Agent.Gateway do
       if Nex.Agent.Config.feishu_enabled?(config),
         do: [{Nex.Agent.Channel.Feishu, config: config} | specs],
         else: specs
+
+    specs =
+      if Nex.Agent.Config.feishu_enabled?(config) and
+           Nex.Agent.Config.feishu_task_polling_enabled?(config),
+         do: [{Nex.Agent.Channel.FeishuTaskPoller, config: config} | specs],
+         else: specs
+
+    specs =
+      if Nex.Agent.Config.github_project_polling_enabled?(config) and
+           Nex.Agent.Config.github_project_owner(config) != nil and
+           Nex.Agent.Config.github_project_number(config) != nil,
+         do: [{Nex.Agent.Channel.GithubProjectPoller, config: config} | specs],
+         else: specs
 
     specs =
       if Nex.Agent.Config.discord_enabled?(config),

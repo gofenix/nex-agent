@@ -739,6 +739,13 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp sanitize_error_value(value) when is_binary(value), do: redact_sensitive(value)
 
+  defp sanitize_error_value(%{__struct__: module} = value) do
+    value
+    |> Map.from_struct()
+    |> Map.put(:struct, inspect(module))
+    |> sanitize_error_value()
+  end
+
   defp sanitize_error_value(value) when is_map(value) do
     value
     |> Map.drop([:request_body, "request_body"])

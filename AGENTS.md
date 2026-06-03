@@ -6,6 +6,7 @@ Load the repo-local skills before you start changing code when they match the ta
 
 - Do not end responses with soft follow-up prompts like “if you want” / “if you’d like” / “if you愿意”.
 - Distinguish clearly between a working draft for internal thinking and a polished document that can be shared directly. Do not leave meta-writing scaffolding in shareable docs.
+- When the user asks to run a process "in the background" and watch it, keep it simple: run it in the current Codex tool session and monitor its output. Do not switch to `launchctl`, `tmux`, `screen`, daemonization, or other system-level service management unless the user explicitly asks for a persistent system service.
 
 ## Design Context
 
