@@ -2,7 +2,7 @@
   <h1>NexAgent</h1>
   <p><strong>持续进化的专属 AI Agent</strong></p>
   <p>它可以长期运行，在你常用的聊天应用中工作，调用工具，保留上下文记忆，并在真实使用中持续进化。</p>
-  <p><a href="./README.md">English README</a> | <a href="./README.ja.md">日本語</a></p>
+  <p><a href="./README.md">English README</a> | <a href="./README.ja.md">日本語</a> | <a href="./README.ko.md">한국어</a></p>
 </div>
 
 NexAgent 是一个面向真实使用场景的 AI Agent。

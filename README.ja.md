@@ -2,7 +2,7 @@
   <h1>NexAgent</h1>
   <p><strong>自己進化する AI エージェント</strong></p>
   <p>使い慣れたチャットアプリの中で動作し、ツールを呼び出し、コンテキストを記憶し、実際の使用を通じて進化し続ける長期稼働エージェントです。</p>
-  <p><a href="./README.md">English README</a> | <a href="./README.zh-CN.md">中文文档</a></p>
+  <p><a href="./README.md">English README</a> | <a href="./README.zh-CN.md">中文文档</a> | <a href="./README.ko.md">한국어</a></p>
 </div>
 
 NexAgent は、実際の使用シーンに向けて構築された AI エージェントです。
