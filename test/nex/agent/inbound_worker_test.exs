@@ -344,6 +344,51 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert queued_body =~ "状态：当前已有任务在执行，已排队"
   end
 
+  test "github ack does not block prompt dispatch when posting is slow" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_github_slow_ack_#{System.unique_integer([:positive])}")
+
+    ack_fun = fn repo, issue_number, body ->
+      send(parent, {:github_ack_started, repo, issue_number, body})
+      Process.sleep(500)
+      send(parent, :github_ack_finished)
+      :ok
+    end
+
+    prompt_fun = fn agent, prompt, _opts ->
+      send(parent, {:prompt_started, prompt})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun, github_ack_fun: ack_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "github",
+        chat_id: "gofenix/nex-agent#12",
+        content: "@nex 添加一个法语的readme",
+        metadata: %{
+          _from_github: true,
+          event_type: "issue_comment",
+          issue_number: 12,
+          repo: "gofenix/nex-agent",
+          comment_body: "@nex 添加一个法语的readme"
+        }
+      }
+    })
+
+    assert_receive {:github_ack_started, "gofenix/nex-agent", 12, _body}, 100
+    assert_receive {:prompt_started, prompt}, 100
+    assert prompt =~ "@nex 添加一个法语的readme"
+    refute_receive :github_ack_finished, 100
+  end
+
   test "github project metadata forces opencode_run as the first iteration tool" do
     parent = self()
 
@@ -429,6 +474,55 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     assert_receive {:DOWN, ^ref, :process, ^task_pid, :killed}, 1_000
     assert Process.alive?(worker_pid)
+  end
+
+  test "watchdog timeout drains queued github work after killing active task" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_timeout_drain_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn _agent, prompt, _opts ->
+      send(parent, {:prompt_started, prompt})
+      Process.sleep(:infinity)
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name,
+       agent_prompt_fun: prompt_fun,
+       github_ack_fun: fn _repo, _issue_number, _body -> :ok end}
+    )
+
+    worker_pid = Process.whereis(worker_name)
+
+    first_payload = %{
+      channel: "github",
+      chat_id: "gofenix/nex-agent#12",
+      content: "@nex first",
+      metadata: %{
+        "_from_github" => true,
+        "repo" => "gofenix/nex-agent",
+        "issue_number" => 12
+      }
+    }
+
+    second_payload = %{first_payload | content: "@nex second"}
+
+    send(worker_pid, {:bus_message, :inbound, first_payload})
+    assert_receive {:prompt_started, first_prompt}, 1_000
+    assert first_prompt =~ "@nex first"
+
+    send(worker_pid, {:bus_message, :inbound, second_payload})
+    refute_receive {:prompt_started, _}, 100
+
+    state = :sys.get_state(worker_pid)
+    [{key, task_pid}] = Map.to_list(state.active_tasks)
+
+    send(worker_pid, {:check_timeout, key, task_pid})
+
+    assert_receive {:prompt_started, second_prompt}, 1_000
+    assert second_prompt =~ "@nex second"
   end
 
   test "feishu reply via message tool does not append duplicate narration", %{

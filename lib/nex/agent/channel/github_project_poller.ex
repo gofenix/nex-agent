@@ -8,6 +8,7 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
   alias Nex.Agent.Channel.Github
 
   @registry_file Path.join(["tasks", "github_items.json"])
+  @default_gh_timeout_ms 120_000
 
   defstruct [
     :owner,
@@ -20,8 +21,10 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
     :doing_status,
     :review_status,
     :done_status,
+    :project_id,
     :status_field,
     :progress_field,
+    :progress_field_id,
     :opencode_model,
     :run_fun,
     enabled: false,
@@ -61,8 +64,11 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
       doing_status: Keyword.get(opts, :doing_status, github_project["doing_status"]),
       review_status: Keyword.get(opts, :review_status, github_project["review_status"]),
       done_status: Keyword.get(opts, :done_status, github_project["done_status"]),
+      project_id: Keyword.get(opts, :project_id, present(github_project["project_id"])),
       status_field: Keyword.get(opts, :status_field, github_project["status_field"]),
       progress_field: Keyword.get(opts, :progress_field, github_project["progress_field"]),
+      progress_field_id:
+        Keyword.get(opts, :progress_field_id, present(github_project["progress_field_id"])),
       opencode_model:
         Keyword.get(opts, :opencode_model, present(github_project["opencode_model"])),
       run_fun: Keyword.get(opts, :run_fun, &default_run/1)
@@ -113,6 +119,18 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
     ]
   end
 
+  def project_view_args(project_number, owner) do
+    [
+      "project",
+      "view",
+      to_string(project_number),
+      "--owner",
+      owner,
+      "--format",
+      "json"
+    ]
+  end
+
   def repo_clone_args(repo, work_dir), do: ["repo", "clone", repo, work_dir]
 
   def issue_view_args(repo, issue_number) do
@@ -140,6 +158,68 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
     ]
   end
 
+  def pr_view_args(repo, pr_url) do
+    [
+      "pr",
+      "view",
+      pr_url,
+      "--repo",
+      repo,
+      "--json",
+      "url,state,mergedAt,closed,number,headRefName"
+    ]
+  end
+
+  def field_list_args(project_number, owner) do
+    [
+      "project",
+      "field-list",
+      to_string(project_number),
+      "--owner",
+      owner,
+      "--format",
+      "json"
+    ]
+  end
+
+  def issue_close_args(repo, issue_number) do
+    [
+      "issue",
+      "close",
+      to_string(issue_number),
+      "--repo",
+      repo,
+      "--comment",
+      "PR merged; closing issue and marking Project item Done."
+    ]
+  end
+
+  def issue_comment_args(repo, issue_number, body) do
+    [
+      "issue",
+      "comment",
+      to_string(issue_number),
+      "--repo",
+      repo,
+      "--body",
+      body
+    ]
+  end
+
+  @doc false
+  def run_command(command, args, timeout_ms) when is_binary(command) and is_list(args) do
+    task =
+      Task.async(fn ->
+        System.cmd(command, args, stderr_to_stdout: true)
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {output, 0}} -> {:ok, output}
+      {:ok, {output, code}} -> {:error, %{exit_code: code, output: output, args: args}}
+      nil -> {:error, :timeout}
+    end
+  end
+
   defp poll_once(state) do
     with {:ok, output} <- state.run_fun.(item_list_args(state.project_number, state.owner)),
          {:ok, items} <- decode_items(output) do
@@ -159,9 +239,12 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
       |> Enum.reverse()
       |> Enum.each(&publish_inbound/1)
 
-      normalized_items
-      |> poll_issue_comments(next_registry, state)
-      |> then(&write_registry(state.workspace, &1))
+      next_registry =
+        normalized_items
+        |> poll_issue_comments(next_registry, state)
+        |> poll_pr_lifecycle(normalized_items, state)
+
+      write_registry(state.workspace, next_registry)
 
       :ok
     end
@@ -302,34 +385,37 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
   end
 
   defp write_pickup_progress(item, state) do
-    args = [
-      "project",
-      "item-edit",
-      "--id",
-      item["id"],
-      "--project-id",
-      project_id(),
-      "--field-id",
-      progress_field_id(),
-      "--text",
-      "Picked up Issue ##{item["issue_number"]}: #{item["issue_title"]}"
-    ]
+    with {:ok, project_id} <- project_id(state),
+         {:ok, progress_field_id} <- progress_field_id(state) do
+      args = [
+        "project",
+        "item-edit",
+        "--id",
+        item["id"],
+        "--project-id",
+        project_id,
+        "--field-id",
+        progress_field_id,
+        "--text",
+        "Picked up Issue ##{item["issue_number"]}: #{item["issue_title"]}"
+      ]
 
-    case state.run_fun.(args) do
-      {:ok, _} ->
-        :ok
+      case state.run_fun.(args) do
+        {:ok, _} ->
+          :ok
 
+        {:error, reason} ->
+          Logger.warning(
+            "[GithubProjectPoller] pickup progress skipped item=#{item["id"]} reason=#{inspect(reason)}"
+          )
+      end
+    else
       {:error, reason} ->
         Logger.warning(
           "[GithubProjectPoller] pickup progress skipped item=#{item["id"]} reason=#{inspect(reason)}"
         )
     end
   end
-
-  # Project/field ids for gofenix/projects/2 are stable enough for progress writes.
-  # The executor still resolves status ids dynamically before moving columns.
-  defp project_id, do: "PVT_kwHOAGgans4AU6d5"
-  defp progress_field_id, do: "PVTF_lAHOAGgans4AU6d5zhUfBr0"
 
   defp normalize_item(%{"content" => %{"type" => "Issue"} = content, "id" => id} = item) do
     repo = content["repository"] || repo_from_url(item["repository"])
@@ -570,6 +656,268 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
 
   defp issue_key(item), do: "#{item["repo"]}##{item["issue_number"]}"
 
+  defp poll_pr_lifecycle(registry, items, state) do
+    Enum.reduce(items, registry, fn item, acc ->
+      case registry_entry_for_item(acc, item) do
+        nil -> acc
+        entry -> poll_pr_lifecycle_for_item(item, entry, acc, state)
+      end
+    end)
+  end
+
+  defp poll_pr_lifecycle_for_item(item, entry, registry, state) do
+    pr_url = present(entry["pr_url"])
+
+    cond do
+      is_nil(pr_url) ->
+        registry
+
+      entry["cleanup_status"] == "deleted" and entry["status"] in ["done", "todo"] ->
+        registry
+
+      true ->
+        case state.run_fun.(pr_view_args(item["repo"], pr_url)) do
+          {:ok, output} ->
+            case decode_pr(output) do
+              {:ok, pr} -> handle_pr_lifecycle(item, entry, pr, registry, state)
+              {:error, reason} -> log_pr_lifecycle_skip(item, reason, registry)
+            end
+
+          {:error, reason} ->
+            log_pr_lifecycle_skip(item, reason, registry)
+        end
+    end
+  end
+
+  defp handle_pr_lifecycle(item, entry, pr, registry, state) do
+    cond do
+      pr_merged?(pr) ->
+        issue_close_result = close_issue(item, state)
+        project_status_result = set_project_status(item, state.done_status, state)
+        {entry, cleanup_status} = cleanup_entry_work_dir(entry, state)
+        synced? = issue_close_result == :ok and project_status_result == :ok
+
+        entry =
+          entry
+          |> Map.merge(%{
+            "status" => if(synced?, do: "done", else: entry["status"] || "review"),
+            "pr_state" => "merged",
+            "merged_at" => pr["mergedAt"],
+            "cleanup_status" => cleanup_status,
+            "issue_close_status" => sync_status(issue_close_result),
+            "project_status_sync" => sync_status(project_status_result),
+            "last_check" => now_iso()
+          })
+
+        put_registry_aliases(registry, item, entry, state)
+
+      pr_closed_unmerged?(pr) ->
+        issue_comment_result = comment_closed_unmerged(item, state)
+        project_status_result = set_project_status(item, state.todo_status, state)
+        {entry, cleanup_status} = cleanup_entry_work_dir(entry, state)
+        synced? = issue_comment_result == :ok and project_status_result == :ok
+
+        entry =
+          entry
+          |> Map.merge(%{
+            "status" => if(synced?, do: "todo", else: entry["status"] || "review"),
+            "pr_url" => if(synced?, do: nil, else: entry["pr_url"]),
+            "pr_state" => "closed_unmerged",
+            "cleanup_status" => cleanup_status,
+            "issue_comment_status" => sync_status(issue_comment_result),
+            "project_status_sync" => sync_status(project_status_result),
+            "last_check" => now_iso()
+          })
+
+        put_registry_aliases(registry, item, entry, state)
+
+      true ->
+        entry =
+          entry
+          |> Map.put("pr_state", String.downcase(to_string(pr["state"] || "open")))
+          |> Map.put("last_pr_check", now_iso())
+
+        put_registry_aliases(registry, item, entry, state)
+    end
+  end
+
+  defp decode_pr(output) do
+    case Jason.decode(output) do
+      {:ok, pr} when is_map(pr) -> {:ok, pr}
+      _ -> {:error, :invalid_pr_json}
+    end
+  end
+
+  defp pr_merged?(pr) do
+    String.upcase(to_string(pr["state"] || "")) == "MERGED" or present(pr["mergedAt"]) != nil
+  end
+
+  defp pr_closed_unmerged?(pr) do
+    String.upcase(to_string(pr["state"] || "")) == "CLOSED" and is_nil(present(pr["mergedAt"]))
+  end
+
+  defp close_issue(item, state) do
+    case state.run_fun.(issue_close_args(item["repo"], item["issue_number"])) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[GithubProjectPoller] issue close failed repo=#{item["repo"]} issue=#{item["issue_number"]} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp comment_closed_unmerged(item, state) do
+    body = "PR closed without merge; returning this Project item to Todo."
+
+    case state.run_fun.(issue_comment_args(item["repo"], item["issue_number"], body)) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[GithubProjectPoller] closed PR comment failed repo=#{item["repo"]} issue=#{item["issue_number"]} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp set_project_status(item, status, state) do
+    with {:ok, project_id} <- project_id(state),
+         {:ok, fields_output} <-
+           state.run_fun.(field_list_args(state.project_number, state.owner)),
+         {:ok, status_field_id, option_id} <-
+           status_option(fields_output, state.status_field, status) do
+      args = [
+        "project",
+        "item-edit",
+        "--id",
+        item["id"],
+        "--project-id",
+        project_id,
+        "--field-id",
+        status_field_id,
+        "--single-select-option-id",
+        option_id
+      ]
+
+      case state.run_fun.(args) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[GithubProjectPoller] project status update failed item=#{item["id"]} status=#{status} reason=#{inspect(reason)}"
+          )
+
+          {:error, reason}
+      end
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "[GithubProjectPoller] project status lookup failed item=#{item["id"]} status=#{status} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp sync_status(:ok), do: "ok"
+  defp sync_status({:error, _reason}), do: "error"
+  defp sync_status(_), do: "error"
+
+  defp status_option(output, status_field_name, status_name) do
+    with {:ok, %{"fields" => fields}} when is_list(fields) <- Jason.decode(output),
+         %{"id" => field_id, "options" => options} when is_list(options) <-
+           Enum.find(fields, &(&1["name"] == status_field_name)),
+         %{"id" => option_id} <- Enum.find(options, &(&1["name"] == status_name)) do
+      {:ok, field_id, option_id}
+    else
+      _ -> {:error, :missing_status_option}
+    end
+  end
+
+  defp project_id(state) do
+    case present(state.project_id) do
+      nil ->
+        with {:ok, output} <- state.run_fun.(project_view_args(state.project_number, state.owner)),
+             {:ok, %{"id" => id}} when is_binary(id) and id != "" <- Jason.decode(output) do
+          {:ok, id}
+        else
+          {:error, reason} -> {:error, reason}
+          _ -> {:error, :missing_project_id}
+        end
+
+      project_id ->
+        {:ok, project_id}
+    end
+  end
+
+  defp progress_field_id(state) do
+    case present(state.progress_field_id) do
+      nil ->
+        with {:ok, output} <- state.run_fun.(field_list_args(state.project_number, state.owner)),
+             {:ok, field_id} <- field_id(output, state.progress_field) do
+          {:ok, field_id}
+        end
+
+      progress_field_id ->
+        {:ok, progress_field_id}
+    end
+  end
+
+  defp field_id(output, field_name) do
+    with {:ok, %{"fields" => fields}} when is_list(fields) <- Jason.decode(output),
+         %{"id" => field_id} when is_binary(field_id) <-
+           Enum.find(fields, &(&1["name"] == field_name)) do
+      {:ok, field_id}
+    else
+      _ -> {:error, :missing_field_id}
+    end
+  end
+
+  defp cleanup_entry_work_dir(entry, state) do
+    work_dir = present(entry["work_dir"])
+
+    cond do
+      state.cleanup_after_merged == false ->
+        {entry, "retained"}
+
+      is_nil(work_dir) ->
+        {entry, "missing"}
+
+      not safe_work_dir?(work_dir, state) ->
+        {entry, "unsafe_path"}
+
+      not File.exists?(work_dir) ->
+        {entry, "missing"}
+
+      true ->
+        case File.rm_rf(work_dir) do
+          {:ok, _} -> {entry, "deleted"}
+          {:error, _path, reason} -> {Map.put(entry, "cleanup_error", inspect(reason)), "error"}
+        end
+    end
+  end
+
+  defp safe_work_dir?(work_dir, state) do
+    work_root = Path.expand(state.work_root)
+    expanded = Path.expand(work_dir)
+    expanded != work_root and String.starts_with?(expanded, work_root <> "/")
+  end
+
+  defp log_pr_lifecycle_skip(item, reason, registry) do
+    Logger.warning(
+      "[GithubProjectPoller] PR lifecycle check failed repo=#{item["repo"]} issue=#{item["issue_number"]} reason=#{inspect(reason)}"
+    )
+
+    registry
+  end
+
   defp labels(%{"labels" => labels}) when is_list(labels) do
     Enum.map(labels, fn
       %{"name" => name} -> name
@@ -645,10 +993,7 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
   defp registry_path(workspace), do: Path.join(workspace, @registry_file)
 
   defp default_run(args) do
-    case System.cmd("gh", args, stderr_to_stdout: true) do
-      {output, 0} -> {:ok, output}
-      {output, code} -> {:error, %{exit_code: code, output: output, args: args}}
-    end
+    run_command("gh", args, @default_gh_timeout_ms)
   end
 
   defp present(value) when is_binary(value) and value != "", do: value

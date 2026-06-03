@@ -77,7 +77,9 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.github_project_poll_interval_ms(config) == 30_000
     assert Config.github_project_owner(config) == nil
     assert Config.github_project_number(config) == nil
+    assert Config.github_project(config)["project_id"] == nil
     assert Config.github_project(config)["work_root"] == nil
+    assert Config.github_project(config)["progress_field_id"] == nil
     assert Config.github_project(config)["cleanup_after_merged"] == true
 
     config = %Config{
@@ -87,8 +89,10 @@ defmodule Nex.Agent.ConfigTest do
           | "enabled" => true,
             "owner" => "gofenix",
             "project_number" => 2,
+            "project_id" => "PVT_dynamic",
             "poll_interval_seconds" => 45,
             "work_root" => "/tmp/nex-github-work",
+            "progress_field_id" => "PVTF_dynamic",
             "cleanup_after_merged" => false
         }
     }
@@ -97,7 +101,9 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.github_project_poll_interval_ms(config) == 45_000
     assert Config.github_project_owner(config) == "gofenix"
     assert Config.github_project_number(config) == 2
+    assert Config.github_project(config)["project_id"] == "PVT_dynamic"
     assert Config.github_project(config)["work_root"] == "/tmp/nex-github-work"
+    assert Config.github_project(config)["progress_field_id"] == "PVTF_dynamic"
     assert Config.github_project(config)["cleanup_after_merged"] == false
   end
 end

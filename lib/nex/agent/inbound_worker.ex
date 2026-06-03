@@ -164,12 +164,23 @@ defmodule Nex.Agent.InboundWorker do
       Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
     end
 
+    drained_keys =
+      state.active_tasks
+      |> Enum.filter(fn {_key, task_pid} -> task_pid == pid end)
+      |> Enum.map(&elem(&1, 0))
+
     active_tasks =
       state.active_tasks
       |> Enum.reject(fn {_key, task_pid} -> task_pid == pid end)
       |> Map.new()
 
-    {:noreply, %{state | active_tasks: active_tasks}}
+    state =
+      drained_keys
+      |> Enum.reduce(%{state | active_tasks: active_tasks}, fn key, acc ->
+        maybe_drain_pending(acc, key)
+      end)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -604,8 +615,15 @@ defmodule Nex.Agent.InboundWorker do
 
       if repo && issue_number do
         body = github_ack_body(content, status)
+        start_github_ack_task(state.github_ack_fun, repo, issue_number, body)
+      end
+    end
+  end
 
-        case state.github_ack_fun.(repo, issue_number, body) do
+  defp start_github_ack_task(ack_fun, repo, issue_number, body) do
+    task = fn ->
+      try do
+        case ack_fun.(repo, issue_number, body) do
           :ok ->
             :ok
 
@@ -614,7 +632,29 @@ defmodule Nex.Agent.InboundWorker do
               "[InboundWorker] GitHub ack failed repo=#{repo} issue=#{issue_number} reason=#{inspect(reason)}"
             )
         end
+      rescue
+        e ->
+          Logger.warning(
+            "[InboundWorker] GitHub ack crashed repo=#{repo} issue=#{issue_number} reason=#{Exception.message(e)}"
+          )
+      catch
+        kind, reason ->
+          Logger.warning(
+            "[InboundWorker] GitHub ack crashed repo=#{repo} issue=#{issue_number} reason=#{inspect({kind, reason})}"
+          )
       end
+    end
+
+    case Process.whereis(Nex.Agent.TaskSupervisor) do
+      nil ->
+        _pid = spawn(task)
+        :ok
+
+      _pid ->
+        case Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, task) do
+          {:ok, _pid} -> :ok
+          {:error, _reason} -> spawn(task)
+        end
     end
   end
 
