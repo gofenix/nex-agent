@@ -2,7 +2,7 @@
   <h1>NexAgent</h1>
   <p><strong>Your own self-evolving AI agent</strong></p>
   <p>A long-running agent that works in the chat apps you already use, calls tools, remembers context, and keeps improving through real-world use.</p>
-  <p><a href="./README.zh-CN.md">中文文档</a> | <a href="./README.ja.md">日本語</a> | <a href="./README.ko.md">한국어</a></p>
+  <p><a href="./README.zh-CN.md">中文文档</a> | <a href="./README.ja.md">日本語</a> | <a href="./README.ko.md">한국어</a> | <a href="./README.fr.md">Français</a></p>
 </div>
 
 **NexAgent** is an AI agent built for real-world, long-running use.
