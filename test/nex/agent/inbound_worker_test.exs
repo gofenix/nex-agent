@@ -218,12 +218,19 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_name = String.to_atom("inbound_worker_github_#{System.unique_integer([:positive])}")
 
+    ack_fun = fn repo, issue_number, body ->
+      send(parent, {:github_ack, repo, issue_number, body})
+      :ok
+    end
+
     prompt_fun = fn agent, prompt, opts ->
       send(parent, {:prompt_opts, prompt, opts})
       {:ok, "done", agent}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun, github_ack_fun: ack_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
@@ -247,6 +254,11 @@ defmodule Nex.Agent.InboundWorkerTest do
         }
       }
     })
+
+    assert_receive {:github_ack, "gofenix/nex-agent", 12, body}, 1_000
+    assert body =~ "已收到"
+    assert body =~ "目标：@nex 这个 case 还不对，空输入应该直接报错"
+    assert body =~ "状态：正在处理"
 
     assert_receive {:prompt_opts, prompt, opts}, 1_000
     assert prompt =~ "@nex 这个 case 还不对，空输入应该直接报错"
@@ -274,6 +286,64 @@ defmodule Nex.Agent.InboundWorkerTest do
     refute_receive {:bus_message, :github_outbound, _}, 100
   end
 
+  test "github inbound acknowledges queued comments while a task is active" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_github_queue_ack_#{System.unique_integer([:positive])}")
+
+    ack_fun = fn repo, issue_number, body ->
+      send(parent, {:github_ack, repo, issue_number, body})
+      :ok
+    end
+
+    prompt_fun = fn agent, _prompt, _opts ->
+      receive do
+        :release_github_prompt -> {:ok, "done", agent}
+      end
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun, github_ack_fun: ack_fun}
+    )
+
+    github_payload = fn content, comment_id ->
+      %{
+        channel: "github",
+        chat_id: "gofenix/nex-agent#12",
+        content: content,
+        metadata: %{
+          _from_github: true,
+          event_type: "issue_comment",
+          issue_number: 12,
+          issue_title: "add jp readme",
+          repo: "gofenix/nex-agent",
+          comment_id: comment_id,
+          comment_body: content
+        }
+      }
+    end
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      github_payload.("@nex 添加一个法语的readme", "comment-1")
+    })
+
+    assert_receive {:github_ack, "gofenix/nex-agent", 12, first_body}, 1_000
+    assert first_body =~ "状态：正在处理"
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      github_payload.("@nex 再补一个德语的readme", "comment-2")
+    })
+
+    assert_receive {:github_ack, "gofenix/nex-agent", 12, queued_body}, 1_000
+    assert queued_body =~ "目标：@nex 再补一个德语的readme"
+    assert queued_body =~ "状态：当前已有任务在执行，已排队"
+  end
+
   test "github project metadata forces opencode_run as the first iteration tool" do
     parent = self()
 
@@ -285,7 +355,12 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "done", agent}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name,
+       agent_prompt_fun: prompt_fun,
+       github_ack_fun: fn _repo, _issue_number, _body -> :ok end}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,

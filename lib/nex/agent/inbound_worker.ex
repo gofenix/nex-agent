@@ -19,6 +19,7 @@ defmodule Nex.Agent.InboundWorker do
     :agent_start_fun,
     :agent_prompt_fun,
     :agent_abort_fun,
+    :github_ack_fun,
     agents: %{},
     active_tasks: %{},
     agent_last_active: %{},
@@ -29,12 +30,14 @@ defmodule Nex.Agent.InboundWorker do
   @type agent_prompt_fun :: (term(), String.t(), keyword() ->
                                {:ok, String.t(), term()} | {:error, term(), term()})
   @type agent_abort_fun :: (term() -> :ok | {:error, term()})
+  @type github_ack_fun :: (String.t(), pos_integer(), String.t() -> :ok | {:error, term()})
 
   @type t :: %__MODULE__{
           config: Config.t(),
           agent_start_fun: agent_start_fun(),
           agent_prompt_fun: agent_prompt_fun(),
           agent_abort_fun: agent_abort_fun(),
+          github_ack_fun: github_ack_fun(),
           agents: %{String.t() => term()},
           active_tasks: %{String.t() => pid()},
           agent_last_active: %{String.t() => integer()},
@@ -59,6 +62,7 @@ defmodule Nex.Agent.InboundWorker do
       agent_start_fun: Keyword.get(opts, :agent_start_fun, &Nex.Agent.start/1),
       agent_prompt_fun: Keyword.get(opts, :agent_prompt_fun, &Nex.Agent.prompt/3),
       agent_abort_fun: Keyword.get(opts, :agent_abort_fun, &Nex.Agent.abort/1),
+      github_ack_fun: Keyword.get(opts, :github_ack_fun, &default_github_ack/3),
       agents: %{},
       active_tasks: %{},
       agent_last_active: %{},
@@ -237,6 +241,8 @@ defmodule Nex.Agent.InboundWorker do
 
       true ->
         if Map.has_key?(state.active_tasks, key) do
+          maybe_ack_github_received(payload, content, :queued, state)
+
           # Session already has an active task — queue this message
           queue = Map.get(state.pending_queue, key, :queue.new())
           queued = {session_key, workspace, content, payload}
@@ -259,6 +265,7 @@ defmodule Nex.Agent.InboundWorker do
 
           %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
         else
+          maybe_ack_github_received(payload, content, :started, state)
           dispatch_async(state, key, session_key, workspace, content, payload)
         end
     end
@@ -585,6 +592,63 @@ defmodule Nex.Agent.InboundWorker do
     Bus.publish(outbound_topic, %{chat_id: chat_id, content: content, metadata: metadata})
   end
 
+  defp maybe_ack_github_received(payload, content, status, state) do
+    if metadata_flag?(payload, "_from_github") or metadata_flag?(payload, "_from_github_project") do
+      metadata = extract_metadata(payload)
+      repo = present_string(Map.get(metadata, "repo") || Map.get(metadata, :repo))
+
+      issue_number =
+        parse_positive_integer(
+          Map.get(metadata, "issue_number") || Map.get(metadata, :issue_number)
+        )
+
+      if repo && issue_number do
+        body = github_ack_body(content, status)
+
+        case state.github_ack_fun.(repo, issue_number, body) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[InboundWorker] GitHub ack failed repo=#{repo} issue=#{issue_number} reason=#{inspect(reason)}"
+            )
+        end
+      end
+    end
+  end
+
+  defp github_ack_body(content, :queued) do
+    """
+    已收到。
+
+    目标：#{String.trim(content)}
+    状态：当前已有任务在执行，已排队；前一个任务完成后会继续处理。
+    """
+    |> String.trim()
+  end
+
+  defp github_ack_body(content, :started) do
+    """
+    已收到。
+
+    目标：#{String.trim(content)}
+    状态：正在处理，会在完成后把结果和 PR / 验证信息更新到这里。
+    """
+    |> String.trim()
+  end
+
+  defp default_github_ack(repo, issue_number, body) do
+    case System.cmd(
+           "gh",
+           ["issue", "comment", to_string(issue_number), "--repo", repo, "--body", body],
+           stderr_to_stdout: true
+         ) do
+      {_output, 0} -> :ok
+      {output, code} -> {:error, %{exit_code: code, output: output}}
+    end
+  end
+
   defp extract_metadata(payload) do
     existing = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
 
@@ -709,6 +773,19 @@ defmodule Nex.Agent.InboundWorker do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+  defp present_string(value) when is_binary(value) and value != "", do: value
+  defp present_string(_), do: nil
+
+  defp parse_positive_integer(value) when is_integer(value) and value > 0, do: value
+
+  defp parse_positive_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number > 0 -> number
+      _ -> nil
+    end
+  end
+
+  defp parse_positive_integer(_), do: nil
 
   defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent), do: :ok
   defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true), do: :ok
