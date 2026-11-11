@@ -347,9 +347,7 @@ Code-based capabilities belong in the tool system, where Elixir modules implemen
 ### SkillRuntime E2E testing
 
 - Hermetic end-to-end coverage runs through `Runner.run/3`, temp workspaces, real `Tool.Registry`, stubbed LLM calls, and stubbed GitHub responses. These tests run in the default `mix test` path and are tagged `:e2e`.
-- Live end-to-end coverage is tagged `:live_e2e` and is excluded from default test runs. Use `mix test --only live_e2e` when `OPENAI_API_KEY` is set. The GitHub live import path also requires `GH_TOKEN` or `GITHUB_TOKEN`.
-- The live GitHub fixture defaults to the repository under test via `SKILL_RUNTIME_LIVE_REPO`, `SKILL_RUNTIME_LIVE_COMMIT_SHA`, and `SKILL_RUNTIME_LIVE_PATH`. In GitHub Actions those default to `${GITHUB_REPOSITORY}`, `${GITHUB_SHA}`, and `test/support/fixtures/skill_runtime/live_packages/live_echo_playbook`.
-- Default CI runs the hermetic suite through `mix test`. Live E2E runs only in the dedicated manual/nightly workflow.
+- Default CI runs the hermetic suite through `mix test`.
 
 ## Memory and Sessions
 
