@@ -353,9 +353,7 @@ NexAgent 当前支持以下 provider:
 ### SkillRuntime 端到端测试
 
 - Hermetic E2E 会通过 `Runner.run/3`、临时 workspace、真实 `Tool.Registry`、stub LLM 和 stub GitHub 响应把整条链路跑通。这组测试会跟随默认 `mix test` 一起跑，并打上 `:e2e` 标签。
-- Live E2E 打 `:live_e2e` 标签，默认不进入常规测试。手工运行用 `mix test --only live_e2e`；其中 OpenAI 需要 `OPENAI_API_KEY`，GitHub 导入链路还需要 `GH_TOKEN` 或 `GITHUB_TOKEN`。
-- Live GitHub fixture 默认通过 `SKILL_RUNTIME_LIVE_REPO`、`SKILL_RUNTIME_LIVE_COMMIT_SHA` 和 `SKILL_RUNTIME_LIVE_PATH` 指向当前仓库；GitHub Actions 中默认会落到 `${GITHUB_REPOSITORY}`、`${GITHUB_SHA}` 和 `test/support/fixtures/skill_runtime/live_packages/live_echo_playbook`。
-- 默认 CI 只跑 hermetic 套件；live E2E 只放在单独的手工/夜间 workflow 里。
+- 默认 CI 通过 `mix test` 跑 hermetic 套件。
 
 ## Memory and Sessions
 
