@@ -121,7 +121,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
     prompt = List.last(messages)["content"]
 
     [_, block] =
-      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation Segment/s, prompt)
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
 
     String.trim(block)
   end

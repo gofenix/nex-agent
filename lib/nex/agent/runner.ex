@@ -146,8 +146,38 @@ defmodule Nex.Agent.Runner do
       |> Map.put("pending_skill_nudge", next_skill_nudge(session, signals))
 
     session = put_evolution_metadata(session, metadata)
+    maybe_record_evolution_signal(signals, prompt, workspace)
     maybe_enqueue_memory_refresh(session, workspace, opts)
     session
+  end
+
+  defp maybe_record_evolution_signal(signals, prompt, workspace) do
+    if signals.correction_hint or signals.tool_errors > 0 do
+      Nex.Agent.Evolution.record_signal(
+        %{
+          source: "runner",
+          signal:
+            cond do
+              signals.correction_hint and signals.tool_errors > 0 ->
+                "User correction with #{signals.tool_errors} tool error(s): #{String.slice(prompt, 0, 200)}"
+
+              signals.correction_hint ->
+                "User correction: #{String.slice(prompt, 0, 200)}"
+
+              true ->
+                "#{signals.tool_errors} tool error(s) during: #{String.slice(prompt, 0, 200)}"
+            end,
+          context: %{
+            tool_errors: signals.tool_errors,
+            correction: signals.correction_hint,
+            tools_used: signals.used_tools |> Enum.uniq()
+          }
+        },
+        workspace: workspace
+      )
+    end
+
+    :ok
   end
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do

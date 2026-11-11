@@ -50,20 +50,23 @@ defmodule Nex.Agent.MemoryStatusTest do
     {:ok, workspace: workspace, key: key}
   end
 
-  test "reports ready state when unconsolidated messages exceed the threshold", %{
+  test "reports pending state when the session still has unreviewed messages", %{
     workspace: workspace,
     key: key
   } do
     assert {:ok, status} =
              MemoryStatus.execute(%{}, %{workspace: workspace, session_key: key})
 
-    assert status["status"] == "ready"
-    assert status["reason"] == "threshold_reached"
-    assert status["session"]["unconsolidated_messages"] == 53
+    assert status["status"] == "pending"
+    assert status["reason"] == "unreviewed_messages"
+    assert status["session"]["exists"] == true
+    assert status["session"]["total_messages"] == 63
+    assert status["session"]["last_reviewed_message_count"] == 10
+    assert status["session"]["unreviewed_messages"] == 53
     assert status["memory_files"]["memory_has_user_content"] == true
-    assert status["memory_files"]["history_has_entries"] == true
-    assert status["runtime_evolution"]["turns_since_memory_write"] == 5
-    assert status["runtime_evolution"]["next_memory_nudge_due_in_turns"] == 1
+    assert status["memory_files"]["memory_bytes"] > 0
+    assert status["refresh"]["job_status"] == "idle"
+    assert status["refresh"]["queued_jobs_for_session"] == 0
   end
 
   test "derives session key from channel and chat_id when explicit session key is missing", %{
@@ -77,10 +80,10 @@ defmodule Nex.Agent.MemoryStatusTest do
 
     assert status["session_key"] == key
     assert status["session"]["exists"] == true
-    assert status["reason"] == "threshold_reached"
+    assert status["reason"] == "unreviewed_messages"
   end
 
-  test "reports stale blocked state when consolidation flag is stuck", %{
+  test "legacy consolidation flags do not change the refresh status", %{
     workspace: workspace,
     key: key
   } do
@@ -101,10 +104,11 @@ defmodule Nex.Agent.MemoryStatusTest do
     assert {:ok, status} =
              MemoryStatus.execute(%{}, %{workspace: workspace, session_key: key})
 
-    assert status["status"] == "blocked"
-    assert status["reason"] == "stale_consolidation_flag"
-    assert status["session"]["consolidation_in_progress"] == true
-    assert status["session"]["consolidation_stale"] == true
+    assert status["status"] == "pending"
+    assert status["reason"] == "unreviewed_messages"
+    assert status["session"]["unreviewed_messages"] == 10
+    refute Map.has_key?(status["session"], "consolidation_in_progress")
+    refute Map.has_key?(status, "runtime_evolution")
   end
 
   defp build_messages(count) do
