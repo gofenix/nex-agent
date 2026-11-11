@@ -137,12 +137,26 @@ defmodule Nex.Agent do
     case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
-        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
+
+        maybe_enqueue_memory_refresh(
+          session,
+          schedule_memory_refresh,
+          skip_consolidation,
+          runner_opts
+        )
+
         {:ok, result, %{agent | session: session, workspace: workspace, cwd: cwd}}
 
       {:error, reason, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
-        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
+
+        maybe_enqueue_memory_refresh(
+          session,
+          schedule_memory_refresh,
+          skip_consolidation,
+          runner_opts
+        )
+
         {:error, reason, %{agent | session: session, workspace: workspace, cwd: cwd}}
     end
   end

@@ -61,29 +61,31 @@ defmodule Nex.Agent.Tasks do
 
   @spec update(String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def update(task_id, attrs, opts \\ []) when is_binary(task_id) and is_map(attrs) do
-    with %{} = task <- get(task_id, opts) do
-      updated =
-        task
-        |> Map.put("title", update_field(task, attrs, "title", &normalize_string/1))
-        |> Map.put("status", update_field(task, attrs, "status", &normalize_status/1))
-        |> Map.put("due_at", update_field(task, attrs, "due_at", &normalize_datetime/1))
-        |> Map.put(
-          "follow_up_at",
-          update_field(task, attrs, "follow_up_at", &normalize_datetime/1)
-        )
-        |> Map.put("source", update_field(task, attrs, "source", &normalize_string/1))
-        |> Map.put("project", update_field(task, attrs, "project", &blank_to_nil/1))
-        |> Map.put("summary", update_field(task, attrs, "summary", &blank_to_nil/1))
-        |> Map.put("channel", task["channel"] || blank_to_nil(Keyword.get(opts, :channel)))
-        |> Map.put("chat_id", task["chat_id"] || blank_to_nil(Keyword.get(opts, :chat_id)))
-        |> Map.put("updated_at", now_iso())
-        |> sync_jobs(opts)
+    case get(task_id, opts) do
+      %{} = task ->
+        updated =
+          task
+          |> Map.put("title", update_field(task, attrs, "title", &normalize_string/1))
+          |> Map.put("status", update_field(task, attrs, "status", &normalize_status/1))
+          |> Map.put("due_at", update_field(task, attrs, "due_at", &normalize_datetime/1))
+          |> Map.put(
+            "follow_up_at",
+            update_field(task, attrs, "follow_up_at", &normalize_datetime/1)
+          )
+          |> Map.put("source", update_field(task, attrs, "source", &normalize_string/1))
+          |> Map.put("project", update_field(task, attrs, "project", &blank_to_nil/1))
+          |> Map.put("summary", update_field(task, attrs, "summary", &blank_to_nil/1))
+          |> Map.put("channel", task["channel"] || blank_to_nil(Keyword.get(opts, :channel)))
+          |> Map.put("chat_id", task["chat_id"] || blank_to_nil(Keyword.get(opts, :chat_id)))
+          |> Map.put("updated_at", now_iso())
+          |> sync_jobs(opts)
 
-      replace_task(updated, opts)
-      Audit.append("task.update", updated, opts)
-      {:ok, updated}
-    else
-      nil -> {:error, "Task not found: #{task_id}"}
+        replace_task(updated, opts)
+        Audit.append("task.update", updated, opts)
+        {:ok, updated}
+
+      nil ->
+        {:error, "Task not found: #{task_id}"}
     end
   end
 
@@ -123,8 +125,7 @@ defmodule Nex.Agent.Tasks do
 
     upcoming =
       tasks
-      |> Enum.filter(&(&1["status"] in ["open", "snoozed"]))
-      |> Enum.filter(&(is_binary(&1["due_at"]) or is_binary(&1["follow_up_at"])))
+      |> Enum.filter(&upcoming_task?/1)
       |> Enum.take(10)
 
     %{
@@ -141,6 +142,11 @@ defmodule Nex.Agent.Tasks do
   @spec task_file(keyword()) :: String.t()
   def task_file(opts \\ []) do
     tasks_file(opts)
+  end
+
+  defp upcoming_task?(task) do
+    task["status"] in ["open", "snoozed"] and
+      (is_binary(task["due_at"]) or is_binary(task["follow_up_at"]))
   end
 
   defp replace_task(updated, opts) do

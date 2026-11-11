@@ -57,115 +57,141 @@ defmodule Nex.Agent.Tool.Message do
     Logger.info("Message Tool Execute - Args: #{inspect(args)}, Ctx: #{inspect(ctx)}")
 
     content = Map.get(args, "content")
-    channel = Map.get(args, "channel") || Map.get(ctx, :channel, "telegram")
-    chat_id = Map.get(args, "chat_id") || Map.get(ctx, :chat_id, "")
-    msg_type = Map.get(args, "msg_type")
     content_json = Map.get(args, "content_json")
     local_image_path = Map.get(args, "local_image_path")
-    receive_id_type = Map.get(args, "receive_id_type")
     has_local_image = is_binary(local_image_path) and local_image_path != ""
     has_message_payload = present_message_payload?(content, content_json)
 
     if has_message_payload || has_local_image do
-      topic =
-        case channel do
-          "telegram" -> :telegram_outbound
-          "feishu" -> :feishu_outbound
-          "discord" -> :discord_outbound
-          "http" -> :http_outbound
-          _ -> :outbound
-        end
-
-      metadata =
-        Map.get(ctx, :metadata, %{})
-        |> Map.put("_from_tool", true)
-        |> maybe_put("msg_type", msg_type)
-        |> maybe_put("content_json", content_json)
-        |> maybe_put("receive_id_type", receive_id_type)
-
-      payload = %{
-        chat_id: chat_id,
+      publish_message(%{
         content: content,
-        metadata: metadata
-      }
-
-      Logger.info("Message Tool Publishing to #{topic}: #{inspect(payload)}")
-
-      case channel do
-        "feishu" ->
-          cond do
-            has_local_image and has_message_payload ->
-              if Process.whereis(Nex.Agent.Channel.Feishu) do
-                with :ok <-
-                       Nex.Agent.Channel.Feishu.deliver_message(
-                         chat_id,
-                         content,
-                         feishu_companion_metadata(metadata)
-                       ),
-                     :ok <-
-                       Nex.Agent.Channel.Feishu.deliver_local_image(
-                         chat_id,
-                         local_image_path,
-                         metadata
-                       ) do
-                  {:ok,
-                   %{
-                     sent: true,
-                     channel: channel,
-                     chat_id: chat_id,
-                     delivered: ["message", "image"]
-                   }}
-                else
-                  {:error, reason} ->
-                    {:error, "Feishu text+image send failed: #{inspect(reason)}"}
-                end
-              else
-                {:error,
-                 "Feishu text+image send requires the Feishu channel process to be running"}
-              end
-
-            has_local_image ->
-              if Process.whereis(Nex.Agent.Channel.Feishu) do
-                case Nex.Agent.Channel.Feishu.deliver_local_image(
-                       chat_id,
-                       local_image_path,
-                       metadata
-                     ) do
-                  :ok ->
-                    {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
-
-                  {:error, reason} ->
-                    {:error, "Feishu image send failed: #{inspect(reason)}"}
-                end
-              else
-                {:error, "Feishu image send requires the Feishu channel process to be running"}
-              end
-
-            Process.whereis(Nex.Agent.Channel.Feishu) ->
-              case Nex.Agent.Channel.Feishu.deliver_message(chat_id, content, metadata) do
-                :ok ->
-                  {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
-
-                {:error, reason} ->
-                  {:error, "Feishu send failed: #{inspect(reason)}"}
-              end
-
-            true ->
-              Nex.Agent.Bus.publish(topic, payload)
-              {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
-          end
-
-        _ ->
-          if is_binary(local_image_path) and local_image_path != "" do
-            {:error, "local_image_path is currently only supported for Feishu"}
-          else
-            Nex.Agent.Bus.publish(topic, payload)
-            {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
-          end
-      end
+        content_json: content_json,
+        channel: Map.get(args, "channel") || Map.get(ctx, :channel, "telegram"),
+        chat_id: Map.get(args, "chat_id") || Map.get(ctx, :chat_id, ""),
+        msg_type: Map.get(args, "msg_type"),
+        receive_id_type: Map.get(args, "receive_id_type"),
+        local_image_path: local_image_path,
+        has_local_image: has_local_image,
+        has_message_payload: has_message_payload,
+        ctx: ctx
+      })
     else
       {:error, "content, content_json, or local_image_path is required"}
     end
+  end
+
+  defp publish_message(message) do
+    require Logger
+    topic = outbound_topic(message.channel)
+
+    metadata =
+      Map.get(message.ctx, :metadata, %{})
+      |> Map.put("_from_tool", true)
+      |> maybe_put("msg_type", message.msg_type)
+      |> maybe_put("content_json", message.content_json)
+      |> maybe_put("receive_id_type", message.receive_id_type)
+
+    payload = %{chat_id: message.chat_id, content: message.content, metadata: metadata}
+    Logger.info("Message Tool Publishing to #{topic}: #{inspect(payload)}")
+
+    case message.channel do
+      "feishu" -> publish_feishu(message, metadata, topic, payload)
+      _ -> publish_non_feishu(message, topic, payload)
+    end
+  end
+
+  defp outbound_topic("telegram"), do: :telegram_outbound
+  defp outbound_topic("feishu"), do: :feishu_outbound
+  defp outbound_topic("discord"), do: :discord_outbound
+  defp outbound_topic("http"), do: :http_outbound
+  defp outbound_topic(_channel), do: :outbound
+
+  defp publish_feishu(message, metadata, topic, payload) do
+    cond do
+      message.has_local_image and message.has_message_payload ->
+        deliver_feishu_text_and_image(message, metadata)
+
+      message.has_local_image ->
+        deliver_feishu_image(message, metadata)
+
+      Process.whereis(Nex.Agent.Channel.Feishu) ->
+        deliver_feishu_text(message, metadata)
+
+      true ->
+        Nex.Agent.Bus.publish(topic, payload)
+        sent_result(message)
+    end
+  end
+
+  defp deliver_feishu_text_and_image(message, metadata) do
+    if Process.whereis(Nex.Agent.Channel.Feishu) do
+      with :ok <-
+             Nex.Agent.Channel.Feishu.deliver_message(
+               message.chat_id,
+               message.content,
+               feishu_companion_metadata(metadata)
+             ),
+           :ok <-
+             Nex.Agent.Channel.Feishu.deliver_local_image(
+               message.chat_id,
+               message.local_image_path,
+               metadata
+             ) do
+        {:ok,
+         %{
+           sent: true,
+           channel: message.channel,
+           chat_id: message.chat_id,
+           delivered: ["message", "image"]
+         }}
+      else
+        {:error, reason} ->
+          {:error, "Feishu text+image send failed: #{inspect(reason)}"}
+      end
+    else
+      {:error, "Feishu text+image send requires the Feishu channel process to be running"}
+    end
+  end
+
+  defp deliver_feishu_image(message, metadata) do
+    if Process.whereis(Nex.Agent.Channel.Feishu) do
+      case Nex.Agent.Channel.Feishu.deliver_local_image(
+             message.chat_id,
+             message.local_image_path,
+             metadata
+           ) do
+        :ok ->
+          sent_result(message)
+
+        {:error, reason} ->
+          {:error, "Feishu image send failed: #{inspect(reason)}"}
+      end
+    else
+      {:error, "Feishu image send requires the Feishu channel process to be running"}
+    end
+  end
+
+  defp deliver_feishu_text(message, metadata) do
+    case Nex.Agent.Channel.Feishu.deliver_message(message.chat_id, message.content, metadata) do
+      :ok ->
+        sent_result(message)
+
+      {:error, reason} ->
+        {:error, "Feishu send failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp publish_non_feishu(message, topic, payload) do
+    if message.has_local_image do
+      {:error, "local_image_path is currently only supported for Feishu"}
+    else
+      Nex.Agent.Bus.publish(topic, payload)
+      sent_result(message)
+    end
+  end
+
+  defp sent_result(message) do
+    {:ok, %{sent: true, channel: message.channel, chat_id: message.chat_id}}
   end
 
   defp maybe_put(map, _key, nil), do: map

@@ -141,6 +141,9 @@ defmodule Nex.Agent.Tool.MemoryStatus do
   defp reason_for("", _job_status, _unreviewed), do: "missing_session_key"
   defp reason_for(_session_key, "running", _unreviewed), do: "memory_refresh_running"
   defp reason_for(_session_key, "queued", _unreviewed), do: "memory_refresh_queued"
-  defp reason_for(_session_key, _job_status, unreviewed) when unreviewed > 0, do: "unreviewed_messages"
+
+  defp reason_for(_session_key, _job_status, unreviewed) when unreviewed > 0,
+    do: "unreviewed_messages"
+
   defp reason_for(_session_key, _job_status, _unreviewed), do: "up_to_date"
 end

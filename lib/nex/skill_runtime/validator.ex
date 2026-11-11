@@ -10,9 +10,8 @@ defmodule Nex.SkillRuntime.Validator do
   def validate_package(%Package{} = package) do
     with :ok <- validate_structure(package),
          :ok <- validate_provenance(package),
-         :ok <- validate_paths(package),
-         :ok <- validate_execution(package) do
-      :ok
+         :ok <- validate_paths(package) do
+      validate_execution(package)
     end
   end
 
@@ -75,9 +74,8 @@ defmodule Nex.SkillRuntime.Validator do
     expected_checksum = get_in(package.source, ["package_checksum"])
 
     with :ok <- ensure_source_commit_present(package, manifest),
-         :ok <- validate_manifest_files(package, manifest),
-         :ok <- validate_package_checksum(package, manifest, expected_checksum) do
-      :ok
+         :ok <- validate_manifest_files(package, manifest) do
+      validate_package_checksum(package, manifest, expected_checksum)
     end
   end
 
@@ -115,9 +113,8 @@ defmodule Nex.SkillRuntime.Validator do
 
   defp validate_execution(%Package{} = package) do
     with {:ok, {:command, interpreter, [path]}} <- detect_interpreter(package),
-         :ok <- ensure_interpreter_available(interpreter),
-         :ok <- validate_shell_script_if_needed(interpreter, path) do
-      :ok
+         :ok <- ensure_interpreter_available(interpreter) do
+      validate_shell_script_if_needed(interpreter, path)
     end
   end
 
@@ -161,38 +158,36 @@ defmodule Nex.SkillRuntime.Validator do
       |> Enum.reject(&(&1 == "source.json"))
       |> MapSet.new()
 
-    cond do
-      actual_files != expected_files ->
-        missing = MapSet.difference(expected_files, actual_files) |> Enum.sort()
-        unexpected = MapSet.difference(actual_files, expected_files) |> Enum.sort()
+    if actual_files != expected_files do
+      missing = MapSet.difference(expected_files, actual_files) |> Enum.sort()
+      unexpected = MapSet.difference(actual_files, expected_files) |> Enum.sort()
 
-        {:error,
-         "file_manifest mismatch" <>
-           maybe_suffix(" missing=#{Enum.join(missing, ",")}", missing) <>
-           maybe_suffix(" unexpected=#{Enum.join(unexpected, ",")}", unexpected)}
+      {:error,
+       "file_manifest mismatch" <>
+         maybe_suffix(" missing=#{Enum.join(missing, ",")}", missing) <>
+         maybe_suffix(" unexpected=#{Enum.join(unexpected, ",")}", unexpected)}
+    else
+      Enum.reduce_while(manifest, :ok, fn {relative_path, expected_file_checksum}, :ok ->
+        case Package.safe_join(package.root_path, relative_path) do
+          nil ->
+            {:halt, {:error, "file_manifest path escapes package root: #{relative_path}"}}
 
-      true ->
-        Enum.reduce_while(manifest, :ok, fn {relative_path, expected_file_checksum}, :ok ->
-          case Package.safe_join(package.root_path, relative_path) do
-            nil ->
-              {:halt, {:error, "file_manifest path escapes package root: #{relative_path}"}}
+          path ->
+            case File.read(path) do
+              {:ok, content} ->
+                actual = sha256(content)
 
-            path ->
-              case File.read(path) do
-                {:ok, content} ->
-                  actual = sha256(content)
+                if actual == expected_file_checksum do
+                  {:cont, :ok}
+                else
+                  {:halt, {:error, "checksum mismatch for #{relative_path}"}}
+                end
 
-                  if actual == expected_file_checksum do
-                    {:cont, :ok}
-                  else
-                    {:halt, {:error, "checksum mismatch for #{relative_path}"}}
-                  end
-
-                {:error, _} ->
-                  {:halt, {:error, "missing file_manifest entry #{relative_path}"}}
-              end
-          end
-        end)
+              {:error, _} ->
+                {:halt, {:error, "missing file_manifest entry #{relative_path}"}}
+            end
+        end
+      end)
     end
   end
 
@@ -209,12 +204,11 @@ defmodule Nex.SkillRuntime.Validator do
       package.files
       |> Enum.reject(&(&1 == "source.json"))
       |> Enum.sort()
-      |> Enum.map(fn relative_path ->
+      |> Enum.map_join(fn relative_path ->
         package.root_path
         |> Package.safe_join(relative_path)
         |> File.read!()
       end)
-      |> Enum.join()
       |> sha256()
 
     if actual == expected_checksum do

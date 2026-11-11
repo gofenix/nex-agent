@@ -6,7 +6,7 @@ defmodule Nex.Agent.MemoryUpdater do
 
   alias Nex.Agent.{Memory, Session, SessionManager, Workspace}
 
-  defstruct current: nil, order: :queue.new(), pending: %{}
+  defstruct current: nil, current_monitor: nil, order: :queue.new(), pending: %{}
 
   @type job :: %{
           key: {String.t(), String.t()},
@@ -89,23 +89,45 @@ defmodule Nex.Agent.MemoryUpdater do
 
   @impl true
   def handle_info({:job_finished, key, result}, state) do
-    log_job_result(key, result)
-    next_state = %{state | current: nil}
-    {:noreply, maybe_start_next(next_state)}
+    if match?(%{key: ^key}, state.current) do
+      maybe_demonitor(state.current_monitor)
+      log_job_result(key, result)
+      {:noreply, maybe_start_next(%{state | current: nil, current_monitor: nil})}
+    else
+      {:noreply, state}
+    end
   end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{current_monitor: ref} = state)
+      when reason != :normal do
+    log_job_result(state.current.key, {:error, reason})
+    {:noreply, maybe_start_next(%{state | current: nil, current_monitor: nil})}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state), do: {:noreply, state}
 
   defp maybe_start_next(%__MODULE__{current: nil} = state) do
     case dequeue_next_job(state.order, state.pending) do
       {:ok, job, order, pending} ->
         parent = self()
 
-        {:ok, _pid} =
+        {:ok, pid} =
           Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-            result = run_job(job)
+            result =
+              try do
+                run_job(job)
+              rescue
+                exception -> {:error, Exception.message(exception)}
+              catch
+                kind, reason -> {:error, {kind, reason}}
+              end
+
             send(parent, {:job_finished, job.key, result})
           end)
 
-        %{state | current: job, order: order, pending: pending}
+        monitor = Process.monitor(pid)
+        %{state | current: job, current_monitor: monitor, order: order, pending: pending}
 
       :empty ->
         state
@@ -179,7 +201,8 @@ defmodule Nex.Agent.MemoryUpdater do
         Keyword.get(opts, :req_llm_generate_text_fun) ||
           Map.get(runtime_metadata, "memory_refresh_req_llm_generate_text_fun"),
       llm_call_fun:
-        Keyword.get(opts, :llm_call_fun) || Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
+        Keyword.get(opts, :llm_call_fun) ||
+          Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
     }
   end
 
@@ -204,4 +227,11 @@ defmodule Nex.Agent.MemoryUpdater do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp maybe_demonitor(nil), do: :ok
+
+  defp maybe_demonitor(monitor_ref) do
+    Process.demonitor(monitor_ref, [:flush])
+    :ok
+  end
 end

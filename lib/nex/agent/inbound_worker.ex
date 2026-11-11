@@ -284,132 +284,25 @@ defmodule Nex.Agent.InboundWorker do
 
   defp dispatch_async(state, key, session_key, workspace, content, payload) do
     {channel, chat_id} = parse_session_key(session_key)
-
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
+    flags = inbound_dispatch_flags(payload)
+    maybe_ensure_personal_summary(flags, channel, chat_id, payload, workspace)
     parent = self()
-    from_cron = metadata_flag?(payload, "_from_cron")
-    from_subagent = metadata_flag?(payload, "_from_subagent")
-    from_feishu_task = metadata_flag?(payload, "_from_feishu_task")
-    from_github_project = metadata_flag?(payload, "_from_github_project")
-    from_github = metadata_flag?(payload, "_from_github") or from_github_project
-    media = extract_media(payload)
-
-    prompt_content =
-      cond do
-        from_feishu_task -> feishu_task_prompt(content, payload)
-        from_github -> github_prompt(content, payload)
-        true -> content
-      end
-
-    cron_opts =
-      if from_cron,
-        do: [
-          history_limit: 0,
-          tools_filter: :cron,
-          skip_consolidation: true,
-          max_iterations: 3,
-          skip_skills: true
-        ],
-        else: []
-
-    task_opts =
-      cond do
-        from_feishu_task ->
-          [
-            history_limit: 0,
-            force_skills: ["feishu-task-executor"],
-            skip_consolidation: true,
-            max_iterations: 10,
-            timeout: @coding_task_timeout_seconds
-          ]
-
-        from_github ->
-          opts = [
-            history_limit: 0,
-            force_skills: ["github-issue-executor"],
-            skip_consolidation: true,
-            max_iterations: 20,
-            timeout: @coding_task_timeout_seconds
-          ]
-
-          if from_github_project do
-            opts ++
-              [
-                first_iteration_tool_only: ["opencode_run"],
-                first_iteration_tool_choice: "opencode_run"
-              ]
-          else
-            opts
-          end
-
-        true ->
-          []
-      end
-
-    unless from_cron or from_subagent or from_github do
-      Nex.Agent.PersonalSummary.ensure_default_jobs(
-        channel,
-        chat_id,
-        metadata: extract_metadata(payload),
-        workspace: workspace
-      )
-    end
+    prompt_fun = state.agent_prompt_fun
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        inbound_message_id = inbound_message_id(payload)
-
-        if channel == "feishu" and not from_cron and not from_feishu_task do
-          _ = Nex.Agent.Channel.Feishu.start_processing_reaction(inbound_message_id)
-        end
-
-        try do
-          result =
-            state.agent_prompt_fun.(
-              agent,
-              prompt_content,
-              [
-                channel: channel,
-                chat_id: chat_id,
-                on_progress: nil,
-                workspace: workspace,
-                schedule_memory_refresh: false,
-                metadata: extract_metadata(payload)
-              ]
-              |> maybe_put_opt(:media, media)
-              |> Kernel.++(cron_opts)
-              |> Kernel.++(task_opts)
-            )
-
-          if channel == "feishu" and not from_cron and not from_feishu_task do
-            outcome =
-              case result do
-                {:ok, _result, _updated_agent} -> :ok
-                _ -> :error
-              end
-
-            _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, outcome)
-          end
-
-          send(parent, {:async_result, key, result, payload})
-        rescue
-          e ->
-            if channel == "feishu" and not from_cron and not from_feishu_task do
-              _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
-            end
-
-            send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
-        catch
-          kind, reason ->
-            if channel == "feishu" and not from_cron and not from_feishu_task do
-              _ = Nex.Agent.Channel.Feishu.finish_processing_reaction(inbound_message_id, :error)
-            end
-
-            send(
-              parent,
-              {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
-            )
-        end
+        run_inbound_prompt(
+          parent,
+          key,
+          prompt_fun,
+          agent,
+          inbound_prompt_content(content, payload, flags),
+          inbound_prompt_opts(channel, chat_id, workspace, payload, flags),
+          payload,
+          channel,
+          flags
+        )
       end)
 
     Process.monitor(pid)
@@ -420,6 +313,142 @@ defmodule Nex.Agent.InboundWorker do
       | active_tasks: Map.put(state.active_tasks, key, pid),
         agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
     }
+  end
+
+  defp inbound_dispatch_flags(payload) do
+    github_project = metadata_flag?(payload, "_from_github_project")
+
+    %{
+      cron: metadata_flag?(payload, "_from_cron"),
+      subagent: metadata_flag?(payload, "_from_subagent"),
+      feishu_task: metadata_flag?(payload, "_from_feishu_task"),
+      github_project: github_project,
+      github: metadata_flag?(payload, "_from_github") or github_project
+    }
+  end
+
+  defp inbound_prompt_content(content, payload, flags) do
+    cond do
+      flags.feishu_task -> feishu_task_prompt(content, payload)
+      flags.github -> github_prompt(content, payload)
+      true -> content
+    end
+  end
+
+  defp inbound_prompt_opts(channel, chat_id, workspace, payload, flags) do
+    [
+      channel: channel,
+      chat_id: chat_id,
+      on_progress: nil,
+      workspace: workspace,
+      schedule_memory_refresh: false,
+      metadata: extract_metadata(payload)
+    ]
+    |> maybe_put_opt(:media, extract_media(payload))
+    |> Kernel.++(inbound_cron_opts(flags.cron))
+    |> Kernel.++(inbound_task_opts(flags))
+  end
+
+  defp inbound_cron_opts(true) do
+    [
+      history_limit: 0,
+      tools_filter: :cron,
+      skip_consolidation: true,
+      max_iterations: 3,
+      skip_skills: true
+    ]
+  end
+
+  defp inbound_cron_opts(false), do: []
+
+  defp inbound_task_opts(%{feishu_task: true}) do
+    [
+      history_limit: 0,
+      force_skills: ["feishu-task-executor"],
+      skip_consolidation: true,
+      max_iterations: 10,
+      timeout: @coding_task_timeout_seconds
+    ]
+  end
+
+  defp inbound_task_opts(%{github: true, github_project: true}) do
+    [
+      history_limit: 0,
+      force_skills: ["github-issue-executor"],
+      skip_consolidation: true,
+      max_iterations: 20,
+      timeout: @coding_task_timeout_seconds,
+      first_iteration_tool_only: ["opencode_run"],
+      first_iteration_tool_choice: "opencode_run"
+    ]
+  end
+
+  defp inbound_task_opts(%{github: true}) do
+    [
+      history_limit: 0,
+      force_skills: ["github-issue-executor"],
+      skip_consolidation: true,
+      max_iterations: 20,
+      timeout: @coding_task_timeout_seconds
+    ]
+  end
+
+  defp inbound_task_opts(_flags), do: []
+
+  defp maybe_ensure_personal_summary(flags, channel, chat_id, payload, workspace) do
+    unless flags.cron or flags.subagent or flags.github do
+      Nex.Agent.PersonalSummary.ensure_default_jobs(
+        channel,
+        chat_id,
+        metadata: extract_metadata(payload),
+        workspace: workspace
+      )
+    end
+  end
+
+  defp run_inbound_prompt(
+         parent,
+         key,
+         prompt_fun,
+         agent,
+         prompt_content,
+         prompt_opts,
+         payload,
+         channel,
+         flags
+       ) do
+    message_id = inbound_message_id(payload)
+    track_reaction = feishu_reaction?(channel, flags)
+    if track_reaction, do: Nex.Agent.Channel.Feishu.start_processing_reaction(message_id)
+
+    try do
+      result = prompt_fun.(agent, prompt_content, prompt_opts)
+      if track_reaction, do: finish_feishu_reaction(message_id, result)
+      send(parent, {:async_result, key, result, payload})
+    rescue
+      exception ->
+        if track_reaction,
+          do: Nex.Agent.Channel.Feishu.finish_processing_reaction(message_id, :error)
+
+        send(parent, {:async_result, key, {:error, Exception.message(exception)}, payload})
+    catch
+      kind, reason ->
+        if track_reaction,
+          do: Nex.Agent.Channel.Feishu.finish_processing_reaction(message_id, :error)
+
+        send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload})
+    end
+  end
+
+  defp feishu_reaction?("feishu", %{cron: false, feishu_task: false}), do: true
+  defp feishu_reaction?(_channel, _flags), do: false
+
+  defp finish_feishu_reaction(message_id, {:ok, _result, _updated_agent}) do
+    Nex.Agent.Channel.Feishu.finish_processing_reaction(message_id, :ok)
+  end
+
+  defp finish_feishu_reaction(message_id, _result) do
+    Nex.Agent.Channel.Feishu.finish_processing_reaction(message_id, :error)
   end
 
   @doc false

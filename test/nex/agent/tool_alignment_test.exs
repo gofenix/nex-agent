@@ -177,8 +177,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     names = Enum.map(definitions, & &1["name"])
 
-    assert tools["memory_consolidate"]["description"] =~ "trigger memory consolidation"
-    assert tools["memory_consolidate"]["description"] =~ "触发记忆整理"
+    assert tools["memory_consolidate"]["description"] =~ "trigger memory refresh"
+    assert tools["memory_consolidate"]["description"] =~ "立即更新记忆"
     assert tools["memory_status"]["description"] =~ "check memory status"
     assert tools["memory_status"]["description"] =~ "检查记忆状态"
     assert tools["memory_rebuild"]["description"] =~ "full rebuild"

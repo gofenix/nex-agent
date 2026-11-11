@@ -359,13 +359,15 @@ defmodule Nex.Agent.Channel.Feishu do
         full_json when is_binary(full_json) ->
           _ = send_ws_ack(raw_frame, state)
 
-           case Jason.decode(full_json) do
-             {:ok, payload} ->
-               event_type = get_in(payload, ["header", "event_type"]) || "?"
-               Logger.info("[Feishu] WS event type=#{event_type}")
-               handle_ws_event_payload(payload, state)
-             _ -> state
-           end
+          case Jason.decode(full_json) do
+            {:ok, payload} ->
+              event_type = get_in(payload, ["header", "event_type"]) || "?"
+              Logger.info("[Feishu] WS event type=#{event_type}")
+              handle_ws_event_payload(payload, state)
+
+            _ ->
+              state
+          end
       end
 
     {:noreply, state}
@@ -697,7 +699,13 @@ defmodule Nex.Agent.Channel.Feishu do
         operator_id = inbound.metadata.operator_user_id
         workspace = task_workspace()
 
-        if Nex.Agent.Channel.FeishuTask.dup?(state.bot_open_id, operator_id, task_id, action, workspace) do
+        if Nex.Agent.Channel.FeishuTask.dup?(
+             state.bot_open_id,
+             operator_id,
+             task_id,
+             action,
+             workspace
+           ) do
           Logger.debug("[Feishu] Task event dedup: task=#{task_id} action=#{action}")
           state
         else
@@ -1452,26 +1460,35 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp send_default_message(payload, chat_id, content, state) do
-    with {:ok, token, token_state} <- get_tenant_access_token(state) do
-      {msg_type, encoded_content} = build_default_outbound_content(content)
+    case get_tenant_access_token(state) do
+      {:ok, token, token_state} ->
+        {msg_type, encoded_content} = build_default_outbound_content(content)
 
-      case send_outbound_message(payload, chat_id, msg_type, encoded_content, token, token_state) do
-        {:ok, _body} ->
-          {:ok, token_state}
+        case send_outbound_message(
+               payload,
+               chat_id,
+               msg_type,
+               encoded_content,
+               token,
+               token_state
+             ) do
+          {:ok, _body} ->
+            {:ok, token_state}
 
-        {:error, reason} ->
-          if invalid_post_error?(reason) do
-            Logger.warning(
-              "[Feishu] Post payload rejected, falling back to text: #{inspect(reason)}"
-            )
+          {:error, reason} ->
+            if invalid_post_error?(reason) do
+              Logger.warning(
+                "[Feishu] Post payload rejected, falling back to text: #{inspect(reason)}"
+              )
 
-            send_text(payload, chat_id, strip_markdown_to_text(content), token_state)
-          else
-            {:error, reason, token_state}
-          end
-      end
-    else
-      {:error, reason} -> {:error, reason, state}
+              send_text(payload, chat_id, strip_markdown_to_text(content), token_state)
+            else
+              {:error, reason, token_state}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, reason, state}
     end
   end
 

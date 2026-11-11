@@ -201,19 +201,22 @@ defmodule Nex.Agent.Memory do
             case normalize_refresh_args(result) do
               {:ok, %{"status" => "noop"} = normalized} ->
                 maybe_append_history_entry(normalized, memory_opts)
-                {:ok, mark_reviewed(session), :noop}
+                count_successful_refresh({:ok, mark_reviewed(session), :noop}, opts)
 
               {:ok, %{"status" => "update", "memory_update" => update} = normalized} ->
                 maybe_append_history_entry(normalized, memory_opts)
                 update = stringify_result(update)
 
-                if is_binary(update) and String.trim(update) != "" and
-                     normalize_memory_body(update) != normalize_memory_body(current_memory) do
-                  write_long_term(update, memory_opts)
-                  {:ok, mark_reviewed(session), :updated}
-                else
-                  {:ok, mark_reviewed(session), :noop}
-                end
+                outcome =
+                  if is_binary(update) and String.trim(update) != "" and
+                       normalize_memory_body(update) != normalize_memory_body(current_memory) do
+                    write_long_term(update, memory_opts)
+                    {:ok, mark_reviewed(session), :updated}
+                  else
+                    {:ok, mark_reviewed(session), :noop}
+                  end
+
+                count_successful_refresh(outcome, opts)
 
               {:error, reason} ->
                 Logger.warning(
@@ -492,13 +495,28 @@ defmodule Nex.Agent.Memory do
   defp normalize_refresh_args(_), do: {:error, "unexpected arguments type"}
 
   defp normalize_legacy_refresh_args(normalized) do
-    cond do
-      Map.get(normalized, "memory_update") in [nil, ""] ->
-        {:error, "save_memory payload missing memory_update for update"}
-
-      true ->
-        {:ok, Map.put(normalized, "status", "update")}
+    if Map.get(normalized, "memory_update") in [nil, ""] do
+      {:error, "save_memory payload missing memory_update for update"}
+    else
+      {:ok, Map.put(normalized, "status", "update")}
     end
+  end
+
+  defp count_successful_refresh({:ok, _session, _status} = outcome, opts) do
+    evolution_opts =
+      opts
+      |> Keyword.take([
+        :workspace,
+        :provider,
+        :model,
+        :api_key,
+        :base_url,
+        :req_llm_generate_text_fun
+      ])
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    _ = Nex.Agent.Evolution.maybe_trigger_after_consolidation(evolution_opts)
+    outcome
   end
 
   defp maybe_append_history_entry(normalized, opts) do

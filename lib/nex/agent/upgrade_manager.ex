@@ -73,6 +73,7 @@ defmodule Nex.Agent.UpgradeManager do
     case CodeUpgrade.upgrade_module(module, code, validate: true) do
       {:ok, result} ->
         source_path = get_source_path(module)
+
         if persist_git do
           persist_evolution(module, source_path, reason)
         end

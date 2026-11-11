@@ -130,11 +130,10 @@ defmodule Nex.Agent.MemoryConsolidateTest do
       %{
         persisted
         | metadata: %{
-            "memory_refresh_llm_call_fun" =>
-              fn _messages, _opts ->
-                Process.sleep(200)
-                {:ok, %{"status" => "noop"}}
-              end
+            "memory_refresh_llm_call_fun" => fn _messages, _opts ->
+              Process.sleep(200)
+              {:ok, %{"status" => "noop"}}
+            end
           }
       },
       workspace: workspace

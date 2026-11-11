@@ -15,8 +15,7 @@ defmodule Nex.Agent.PersonalSummary do
 
     upcoming =
       tasks
-      |> Enum.filter(&(&1["status"] in ["open", "snoozed"]))
-      |> Enum.filter(&(is_binary(&1["due_at"]) or is_binary(&1["follow_up_at"])))
+      |> Enum.filter(&upcoming_task?/1)
       |> Enum.take(5)
 
     """
@@ -137,6 +136,11 @@ defmodule Nex.Agent.PersonalSummary do
 
   defp workspace_opts(nil), do: []
   defp workspace_opts(workspace), do: [workspace: workspace]
+
+  defp upcoming_task?(task) do
+    task["status"] in ["open", "snoozed"] and
+      (is_binary(task["due_at"]) or is_binary(task["follow_up_at"]))
+  end
 
   defp personal_chat?("feishu", _chat_id, opts) do
     metadata = Keyword.get(opts, :metadata, %{})

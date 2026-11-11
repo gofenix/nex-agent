@@ -264,7 +264,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp effective_base_url(_provider, base_url), do: base_url
 
   defp provider_options(:openrouter, base_url) do
-    if is_openrouter_endpoint?(base_url) do
+    if openrouter_endpoint?(base_url) do
       [app_referer: @openrouter_referer, app_title: @openrouter_title]
     else
       []
@@ -273,11 +273,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp provider_options(_, _), do: []
 
-  defp is_openrouter_endpoint?(base_url) when is_binary(base_url) do
+  defp openrouter_endpoint?(base_url) when is_binary(base_url) do
     base_url |> String.downcase() |> String.contains?("openrouter")
   end
 
-  defp is_openrouter_endpoint?(_), do: false
+  defp openrouter_endpoint?(_), do: false
 
   defp parse_response(%Response{} = response) do
     classified = Response.classify(response)

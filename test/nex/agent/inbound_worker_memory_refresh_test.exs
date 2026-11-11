@@ -32,7 +32,9 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
 
   test "publishes final reply before background memory refresh finishes", %{workspace: workspace} do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_memory_only_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_memory_only_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, _prompt, _opts ->
       updated_session =
@@ -42,18 +44,17 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
         |> then(fn session ->
           metadata =
             Map.merge(session.metadata || %{}, %{
-              "memory_refresh_llm_call_fun" =>
-                fn _messages, _llm_opts ->
-                  send(parent, :memory_refresh_started)
-                  Process.sleep(200)
+              "memory_refresh_llm_call_fun" => fn _messages, _llm_opts ->
+                send(parent, :memory_refresh_started)
+                Process.sleep(200)
 
-                  {:ok,
-                   %{
-                     "status" => "update",
-                     "memory_update" =>
-                       "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
-                   }}
-                end
+                {:ok,
+                 %{
+                   "status" => "update",
+                   "memory_update" =>
+                     "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+                 }}
+              end
             })
 
           %{session | metadata: metadata}

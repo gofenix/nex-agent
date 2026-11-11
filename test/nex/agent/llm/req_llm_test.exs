@@ -191,6 +191,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
       protocol: Enumerable,
       value: %Req.TransportError{reason: :econnrefused}
     }
+
     generate_text_fun = fn _model_spec, _messages, _opts -> {:error, error} end
 
     assert {:error, sanitized} =

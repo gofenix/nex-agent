@@ -44,12 +44,7 @@ defmodule Nex.SkillRuntime do
         Config.load(config_path: Keyword.get(opts, :config_path))
       end)
 
-    base =
-      if function_exported?(Config, :skill_runtime, 1) do
-        apply(Config, :skill_runtime, [config])
-      else
-        default_config()
-      end
+    base = Config.skill_runtime(config)
 
     Map.merge(base, Keyword.get(opts, :skill_runtime, %{}))
   end
@@ -164,58 +159,10 @@ defmodule Nex.SkillRuntime do
   def prepare_run(prompt, opts \\ []) when is_binary(prompt) do
     opts = merged_opts(opts)
 
-    if not enabled?(opts) do
-      {:ok, %PreparedRun{}}
-    else
+    if enabled?(opts) do
       with {:ok, runtime_opts} <- bootstrap(opts, true) do
         hits = Registry.search(prompt, runtime_opts)
-        max_selected = config(runtime_opts)["max_selected_skills"] || 2
-
-        {packages, warnings} =
-          hits
-          |> Enum.take(max_selected * 3)
-          |> Enum.reduce_while({[], []}, fn hit, {selected, warnings} ->
-            cond do
-              length(selected) >= max_selected ->
-                {:halt, {selected, warnings}}
-
-              hit.type == :local ->
-                package = hit.package
-
-                if package.active and package.available do
-                  {:cont, {[package | selected], warnings}}
-                else
-                  {:cont, {selected, warnings ++ package.availability_warnings}}
-                end
-
-              hit.type == :remote and hit.installed ->
-                case Registry.package_by_source_id(hit.entry.source_id, runtime_opts) do
-                  %Package{} = package when package.active and package.available ->
-                    {:cont, {[package | selected], warnings}}
-
-                  %Package{} = package ->
-                    {:cont, {selected, warnings ++ package.availability_warnings}}
-
-                  nil ->
-                    {:cont, {selected, warnings}}
-                end
-
-              hit.type == :remote ->
-                case __MODULE__.import(hit.entry, runtime_opts) do
-                  {:ok, package} ->
-                    if package.active and package.available do
-                      {:cont, {[package | selected], warnings}}
-                    else
-                      {:cont, {selected, warnings ++ package.availability_warnings}}
-                    end
-
-                  {:error, reason} ->
-                    {:cont, {selected, warnings ++ [reason]}}
-                end
-            end
-          end)
-
-        packages = Enum.reverse(packages)
+        {packages, warnings} = select_packages(hits, runtime_opts)
 
         {:ok,
          %PreparedRun{
@@ -223,13 +170,71 @@ defmodule Nex.SkillRuntime do
            prompt_fragments: Enum.map(packages, &build_prompt_fragment/1),
            ephemeral_tools: Enum.flat_map(packages, &ephemeral_tool/1),
            availability_warnings: Enum.uniq(warnings),
-           remote_hits:
-             hits
-             |> Enum.filter(&(&1.type == :remote))
-             |> Enum.map(fn %{entry: entry} -> CatalogEntry.to_map(entry) end)
+           remote_hits: remote_hit_maps(hits)
          }}
       end
+    else
+      {:ok, %PreparedRun{}}
     end
+  end
+
+  defp select_packages(hits, runtime_opts) do
+    max_selected = config(runtime_opts)["max_selected_skills"] || 2
+
+    {packages, warnings} =
+      hits
+      |> Enum.take(max_selected * 3)
+      |> Enum.reduce_while({[], []}, fn hit, acc ->
+        select_package(hit, acc, max_selected, runtime_opts)
+      end)
+
+    {Enum.reverse(packages), warnings}
+  end
+
+  defp select_package(_hit, {selected, _warnings} = acc, max_selected, _runtime_opts)
+       when length(selected) >= max_selected do
+    {:halt, acc}
+  end
+
+  defp select_package(%{type: :local, package: package}, acc, _max_selected, _runtime_opts) do
+    accept_package(package, acc)
+  end
+
+  defp select_package(
+         %{type: :remote, installed: true, entry: entry},
+         acc,
+         _max_selected,
+         runtime_opts
+       ) do
+    case Registry.package_by_source_id(entry.source_id, runtime_opts) do
+      %Package{} = package -> accept_package(package, acc)
+      nil -> {:cont, acc}
+    end
+  end
+
+  defp select_package(%{type: :remote, entry: entry}, acc, _max_selected, runtime_opts) do
+    case __MODULE__.import(entry, runtime_opts) do
+      {:ok, package} -> accept_package(package, acc)
+      {:error, reason} -> append_warning(acc, reason)
+    end
+  end
+
+  defp accept_package(package, {selected, warnings}) do
+    if package.active and package.available do
+      {:cont, {[package | selected], warnings}}
+    else
+      {:cont, {selected, warnings ++ package.availability_warnings}}
+    end
+  end
+
+  defp append_warning({selected, warnings}, reason) do
+    {:cont, {selected, warnings ++ [reason]}}
+  end
+
+  defp remote_hit_maps(hits) do
+    hits
+    |> Enum.filter(&(&1.type == :remote))
+    |> Enum.map(fn %{entry: entry} -> CatalogEntry.to_map(entry) end)
   end
 
   @spec record_run(map(), keyword()) :: {:ok, String.t()} | {:error, String.t()}

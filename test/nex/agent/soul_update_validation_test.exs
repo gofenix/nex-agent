@@ -79,7 +79,9 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
 
     soul_layer = LayerContractHelper.matrix()["SOUL"]
 
-    assert soul_layer.allowed == "Behavioral tone, values, style preferences, and identity framing."
+    assert soul_layer.allowed ==
+             "Behavioral tone, values, style preferences, and identity framing."
+
     assert soul_layer.forbidden == ["User profile details that belong in USER."]
 
     assert LayerContractHelper.write_policy() =~ "invalid writes are rejected"

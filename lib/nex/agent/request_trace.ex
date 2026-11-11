@@ -18,12 +18,7 @@ defmodule Nex.Agent.RequestTrace do
         Config.load(config_path: Keyword.get(opts, :config_path))
       end)
 
-    base =
-      if function_exported?(Config, :request_trace, 1) do
-        apply(Config, :request_trace, [config])
-      else
-        default_config()
-      end
+    base = Config.request_trace(config)
 
     Map.merge(base, Keyword.get(opts, :request_trace, %{}))
   end
@@ -99,9 +94,10 @@ defmodule Nex.Agent.RequestTrace do
   @spec read_trace(String.t(), keyword()) :: [map()]
   def read_trace(identifier, opts \\ []) when is_binary(identifier) do
     path =
-      cond do
-        String.ends_with?(identifier, ".jsonl") -> identifier
-        true -> trace_path(identifier, opts)
+      if String.ends_with?(identifier, ".jsonl") do
+        identifier
+      else
+        trace_path(identifier, opts)
       end
 
     case File.read(path) do

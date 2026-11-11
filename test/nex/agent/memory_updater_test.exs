@@ -5,7 +5,10 @@ defmodule Nex.Agent.MemoryUpdaterTest do
 
   setup do
     workspace =
-      Path.join(System.tmp_dir!(), "nex-agent-memory-updater-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-memory-updater-#{System.unique_integer([:positive])}"
+      )
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Long-term Memory\n")
@@ -33,17 +36,16 @@ defmodule Nex.Agent.MemoryUpdaterTest do
         Session.new("session:a")
         | messages: build_messages("alpha"),
           metadata: %{
-            "memory_refresh_llm_call_fun" =>
-              fn messages, _opts ->
-                send(parent, {:prompt_memory_a, prompt_memory_block(messages)})
+            "memory_refresh_llm_call_fun" => fn messages, _opts ->
+              send(parent, {:prompt_memory_a, prompt_memory_block(messages)})
 
-                {:ok,
-                 %{
-                   "status" => "update",
-                   "memory_update" =>
-                     "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n"
-                 }}
-              end
+              {:ok,
+               %{
+                 "status" => "update",
+                 "memory_update" =>
+                   "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n"
+               }}
+            end
           }
       }
 
@@ -52,19 +54,18 @@ defmodule Nex.Agent.MemoryUpdaterTest do
         Session.new("session:b")
         | messages: build_messages("beta"),
           metadata: %{
-            "memory_refresh_llm_call_fun" =>
-              fn messages, _opts ->
-                prompt_memory = prompt_memory_block(messages)
-                send(parent, {:prompt_memory_b, prompt_memory})
-                assert prompt_memory =~ "Learned alpha."
+            "memory_refresh_llm_call_fun" => fn messages, _opts ->
+              prompt_memory = prompt_memory_block(messages)
+              send(parent, {:prompt_memory_b, prompt_memory})
+              assert prompt_memory =~ "Learned alpha."
 
-                {:ok,
-                 %{
-                   "status" => "update",
-                   "memory_update" =>
-                     "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n- Learned beta.\n"
-                 }}
-              end
+              {:ok,
+               %{
+                 "status" => "update",
+                 "memory_update" =>
+                   "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n- Learned beta.\n"
+               }}
+            end
           }
       }
 
@@ -120,7 +121,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
     prompt = List.last(messages)["content"]
 
     [_, block] =
-      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation Segment/s, prompt)
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
 
     String.trim(block)
   end

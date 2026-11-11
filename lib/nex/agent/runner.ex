@@ -146,8 +146,38 @@ defmodule Nex.Agent.Runner do
       |> Map.put("pending_skill_nudge", next_skill_nudge(session, signals))
 
     session = put_evolution_metadata(session, metadata)
+    maybe_record_evolution_signal(signals, prompt, workspace)
     maybe_enqueue_memory_refresh(session, workspace, opts)
     session
+  end
+
+  defp maybe_record_evolution_signal(signals, prompt, workspace) do
+    if signals.correction_hint or signals.tool_errors > 0 do
+      Nex.Agent.Evolution.record_signal(
+        %{
+          source: "runner",
+          signal:
+            cond do
+              signals.correction_hint and signals.tool_errors > 0 ->
+                "User correction with #{signals.tool_errors} tool error(s): #{String.slice(prompt, 0, 200)}"
+
+              signals.correction_hint ->
+                "User correction: #{String.slice(prompt, 0, 200)}"
+
+              true ->
+                "#{signals.tool_errors} tool error(s) during: #{String.slice(prompt, 0, 200)}"
+            end,
+          context: %{
+            tool_errors: signals.tool_errors,
+            correction: signals.correction_hint,
+            tools_used: signals.used_tools |> Enum.uniq()
+          }
+        },
+        workspace: workspace
+      )
+    end
+
+    :ok
   end
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
@@ -194,10 +224,7 @@ defmodule Nex.Agent.Runner do
   defp selected_skill_guard([]), do: []
 
   defp selected_skill_guard(packages) do
-    names =
-      packages
-      |> Enum.map(& &1.name)
-      |> Enum.join(", ")
+    names = Enum.map_join(packages, ", ", & &1.name)
 
     [
       "[Skill Runtime] Selected skill packages for this turn are authoritative: #{names}. " <>
@@ -648,24 +675,20 @@ defmodule Nex.Agent.Runner do
     error_msg = extract_error_message(reason)
     status = extract_error_status(reason)
 
-    cond do
-      # 400: context too long → trim older messages
-      status == 400 and context_length_error?(error_msg) ->
-        trimmed = trim_messages(messages)
+    if status == 400 and context_length_error?(error_msg) do
+      trimmed = trim_messages(messages)
 
-        if length(trimmed) < length(messages) do
-          Logger.warning(
-            "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
-          )
+      if length(trimmed) < length(messages) do
+        Logger.warning(
+          "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
+        )
 
-          {:retry, trimmed, opts}
-        else
-          :give_up
-        end
-
-      # 400: other known patterns can be added here
-      true ->
+        {:retry, trimmed, opts}
+      else
         :give_up
+      end
+    else
+      :give_up
     end
   end
 

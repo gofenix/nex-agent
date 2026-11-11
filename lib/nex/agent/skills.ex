@@ -139,7 +139,7 @@ defmodule Nex.Agent.Skills do
             {:error, "Skill #{name} is still draft-only; publish it from the console before use"}
 
           skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model ->
-          {:error, "Skill #{name} is disabled for model invocation"}
+            {:error, "Skill #{name} is disabled for model invocation"}
 
           true ->
             execute_markdown_skill(skill, args, opts)
@@ -351,23 +351,25 @@ defmodule Nex.Agent.Skills do
   end
 
   defp publish_draft_file(path) do
-    with {:ok, content} <- File.read(path) do
-      {frontmatter, body} = Frontmatter.parse_document(content)
+    case File.read(path) do
+      {:ok, content} ->
+        {frontmatter, body} = Frontmatter.parse_document(content)
 
-      updated_frontmatter =
-        frontmatter
-        |> Map.put("description", strip_draft_prefix(frontmatter["description"]))
-        |> Map.put("user-invocable", true)
+        updated_frontmatter =
+          frontmatter
+          |> Map.put("description", strip_draft_prefix(frontmatter["description"]))
+          |> Map.put("user-invocable", true)
 
-      updated_body =
-        body
-        |> String.trim_leading()
-        |> then(&Regex.replace(@draft_status_regex, &1, ""))
-        |> String.trim_leading()
+        updated_body =
+          body
+          |> String.trim_leading()
+          |> then(&Regex.replace(@draft_status_regex, &1, ""))
+          |> String.trim_leading()
 
-      File.write(path, render_skill_file(updated_frontmatter, updated_body))
-    else
-      {:error, reason} -> {:error, format_file_error(reason)}
+        File.write(path, render_skill_file(updated_frontmatter, updated_body))
+
+      {:error, reason} ->
+        {:error, format_file_error(reason)}
     end
   end
 

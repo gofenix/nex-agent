@@ -20,7 +20,9 @@ defmodule Nex.Agent.SkillsTest do
     {:ok, workspace: workspace}
   end
 
-  test "draft skills stay out of llm discovery and execution until published", %{workspace: workspace} do
+  test "draft skills stay out of llm discovery and execution until published", %{
+    workspace: workspace
+  } do
     assert {:ok, draft} =
              Skills.create(
                %{
@@ -44,6 +46,8 @@ defmodule Nex.Agent.SkillsTest do
     refute published.draft
 
     assert Enum.any?(Skills.for_llm(workspace: workspace), &(&1["name"] == "draft_memory_probe"))
-    assert {:ok, %{result: "Use this draft."}} = Skills.execute("draft_memory_probe", %{}, workspace: workspace)
+
+    assert {:ok, %{result: "Use this draft."}} =
+             Skills.execute("draft_memory_probe", %{}, workspace: workspace)
   end
 end
