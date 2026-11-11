@@ -118,12 +118,10 @@ defmodule Nex.Agent.Channel.FeishuTask do
   def normalize(_payload), do: :not_matched
 
   def dup?(bot_open_id, operator_id, task_id, action, workspace) do
-    cond do
-      operator_id == bot_open_id ->
-        true
-
-      true ->
-        dedup_dup?(task_id, action, workspace)
+    if operator_id == bot_open_id do
+      true
+    else
+      dedup_dup?(task_id, action, workspace)
     end
   end
 

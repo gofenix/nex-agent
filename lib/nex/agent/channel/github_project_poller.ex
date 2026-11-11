@@ -464,9 +464,10 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
   defp poll_issue_comments_for_item(item, entry, registry, state) do
     case state.run_fun.(issue_comments_args(item["repo"], item["issue_number"])) do
       {:ok, output} ->
-        with {:ok, comments} <- decode_comments(output) do
-          process_issue_comments(item, entry, comments, registry, state)
-        else
+        case decode_comments(output) do
+          {:ok, comments} ->
+            process_issue_comments(item, entry, comments, registry, state)
+
           {:error, reason} ->
             Logger.warning(
               "[GithubProjectPoller] comment decode failed repo=#{item["repo"]} issue=#{item["issue_number"]} reason=#{inspect(reason)}"
@@ -860,9 +861,8 @@ defmodule Nex.Agent.Channel.GithubProjectPoller do
   defp progress_field_id(state) do
     case present(state.progress_field_id) do
       nil ->
-        with {:ok, output} <- state.run_fun.(field_list_args(state.project_number, state.owner)),
-             {:ok, field_id} <- field_id(output, state.progress_field) do
-          {:ok, field_id}
+        with {:ok, output} <- state.run_fun.(field_list_args(state.project_number, state.owner)) do
+          field_id(output, state.progress_field)
         end
 
       progress_field_id ->

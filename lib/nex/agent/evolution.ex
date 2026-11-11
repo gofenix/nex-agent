@@ -204,13 +204,11 @@ defmodule Nex.Agent.Evolution do
     signals = read_signals(workspace_opts)
 
     skills =
-      Skills.list(workspace_opts)
-      |> Enum.map(fn s ->
-        name = Map.get(s, :name) || Map.get(s, "name", "")
-        desc = Map.get(s, :description) || Map.get(s, "description", "")
+      Enum.map_join(Skills.list(workspace_opts), "\n", fn skill ->
+        name = Map.get(skill, :name) || Map.get(skill, "name", "")
+        desc = Map.get(skill, :description) || Map.get(skill, "description", "")
         "- #{name}: #{desc}"
       end)
-      |> Enum.join("\n")
 
     history_content = history_for_profile(history, profile)
 
@@ -229,11 +227,9 @@ defmodule Nex.Agent.Evolution do
 
   defp run_reflection(context, profile, opts) do
     signals_text =
-      context.signals
-      |> Enum.map(fn s ->
-        "[#{Map.get(s, "timestamp", "?")}] #{Map.get(s, "source", "?")}: #{Map.get(s, "signal", "")}"
+      Enum.map_join(context.signals, "\n", fn signal ->
+        "[#{Map.get(signal, "timestamp", "?")}] #{Map.get(signal, "source", "?")}: #{Map.get(signal, "signal", "")}"
       end)
-      |> Enum.join("\n")
 
     prompt = """
     You are an evolution analyst for an AI agent. Analyze the agent's recent behavior and produce an evolution report.

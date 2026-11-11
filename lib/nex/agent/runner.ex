@@ -224,10 +224,7 @@ defmodule Nex.Agent.Runner do
   defp selected_skill_guard([]), do: []
 
   defp selected_skill_guard(packages) do
-    names =
-      packages
-      |> Enum.map(& &1.name)
-      |> Enum.join(", ")
+    names = Enum.map_join(packages, ", ", & &1.name)
 
     [
       "[Skill Runtime] Selected skill packages for this turn are authoritative: #{names}. " <>
@@ -678,24 +675,20 @@ defmodule Nex.Agent.Runner do
     error_msg = extract_error_message(reason)
     status = extract_error_status(reason)
 
-    cond do
-      # 400: context too long → trim older messages
-      status == 400 and context_length_error?(error_msg) ->
-        trimmed = trim_messages(messages)
+    if status == 400 and context_length_error?(error_msg) do
+      trimmed = trim_messages(messages)
 
-        if length(trimmed) < length(messages) do
-          Logger.warning(
-            "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
-          )
+      if length(trimmed) < length(messages) do
+        Logger.warning(
+          "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
+        )
 
-          {:retry, trimmed, opts}
-        else
-          :give_up
-        end
-
-      # 400: other known patterns can be added here
-      true ->
+        {:retry, trimmed, opts}
+      else
         :give_up
+      end
+    else
+      :give_up
     end
   end
 

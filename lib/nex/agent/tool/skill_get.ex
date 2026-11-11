@@ -28,9 +28,8 @@ defmodule Nex.Agent.Tool.SkillGet do
 
   def execute(args, ctx) do
     with :ok <- ensure_runtime_enabled(ctx),
-         {:ok, identifier} <- get_identifier(args),
-         {:ok, payload} <- SkillRuntime.get(identifier, runtime_opts(ctx)) do
-      {:ok, payload}
+         {:ok, identifier} <- get_identifier(args) do
+      SkillRuntime.get(identifier, runtime_opts(ctx))
     end
   end
 

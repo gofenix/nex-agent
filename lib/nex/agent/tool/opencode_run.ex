@@ -380,9 +380,7 @@ defmodule Nex.Agent.Tool.OpencodeRun do
   end
 
   defp command_preview(executable, argv) do
-    ([Path.basename(executable)] ++ argv)
-    |> Enum.map(&shell_quote/1)
-    |> Enum.join(" ")
+    Enum.map_join([Path.basename(executable) | argv], " ", &shell_quote/1)
   end
 
   defp shell_quote(value) do

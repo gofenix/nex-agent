@@ -495,12 +495,10 @@ defmodule Nex.Agent.Memory do
   defp normalize_refresh_args(_), do: {:error, "unexpected arguments type"}
 
   defp normalize_legacy_refresh_args(normalized) do
-    cond do
-      Map.get(normalized, "memory_update") in [nil, ""] ->
-        {:error, "save_memory payload missing memory_update for update"}
-
-      true ->
-        {:ok, Map.put(normalized, "status", "update")}
+    if Map.get(normalized, "memory_update") in [nil, ""] do
+      {:error, "save_memory payload missing memory_update for update"}
+    else
+      {:ok, Map.put(normalized, "status", "update")}
     end
   end
 

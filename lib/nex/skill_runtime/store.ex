@@ -101,10 +101,7 @@ defmodule Nex.SkillRuntime.Store do
     path = Path.join(runs_dir(opts), "#{run_id}.jsonl")
     events = build_run_events(trace, run_id)
 
-    content =
-      events
-      |> Enum.map(&(Jason.encode!(&1) <> "\n"))
-      |> Enum.join()
+    content = Enum.map_join(events, &(Jason.encode!(&1) <> "\n"))
 
     File.write!(path, content)
     {:ok, path}
@@ -222,10 +219,7 @@ defmodule Nex.SkillRuntime.Store do
   defp write_jsonl(path, rows) do
     ensure_parent!(path)
 
-    content =
-      rows
-      |> Enum.map(&(Jason.encode!(&1) <> "\n"))
-      |> Enum.join()
+    content = Enum.map_join(rows, &(Jason.encode!(&1) <> "\n"))
 
     File.write!(path, content)
   end
