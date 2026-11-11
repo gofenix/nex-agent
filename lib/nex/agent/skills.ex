@@ -139,7 +139,7 @@ defmodule Nex.Agent.Skills do
             {:error, "Skill #{name} is still draft-only; publish it from the console before use"}
 
           skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model ->
-          {:error, "Skill #{name} is disabled for model invocation"}
+            {:error, "Skill #{name} is disabled for model invocation"}
 
           true ->
             execute_markdown_skill(skill, args, opts)

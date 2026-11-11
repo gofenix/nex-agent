@@ -359,13 +359,15 @@ defmodule Nex.Agent.Channel.Feishu do
         full_json when is_binary(full_json) ->
           _ = send_ws_ack(raw_frame, state)
 
-           case Jason.decode(full_json) do
-             {:ok, payload} ->
-               event_type = get_in(payload, ["header", "event_type"]) || "?"
-               Logger.info("[Feishu] WS event type=#{event_type}")
-               handle_ws_event_payload(payload, state)
-             _ -> state
-           end
+          case Jason.decode(full_json) do
+            {:ok, payload} ->
+              event_type = get_in(payload, ["header", "event_type"]) || "?"
+              Logger.info("[Feishu] WS event type=#{event_type}")
+              handle_ws_event_payload(payload, state)
+
+            _ ->
+              state
+          end
       end
 
     {:noreply, state}
@@ -697,7 +699,13 @@ defmodule Nex.Agent.Channel.Feishu do
         operator_id = inbound.metadata.operator_user_id
         workspace = task_workspace()
 
-        if Nex.Agent.Channel.FeishuTask.dup?(state.bot_open_id, operator_id, task_id, action, workspace) do
+        if Nex.Agent.Channel.FeishuTask.dup?(
+             state.bot_open_id,
+             operator_id,
+             task_id,
+             action,
+             workspace
+           ) do
           Logger.debug("[Feishu] Task event dedup: task=#{task_id} action=#{action}")
           state
         else

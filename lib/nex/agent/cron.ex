@@ -216,6 +216,7 @@ defmodule Nex.Agent.Cron do
         updated = %{job | enabled: enabled, next_run: next, updated_at: now}
         jobs = [updated | remaining]
         save_jobs(current.jobs_file, jobs)
+
         Audit.append(
           if(enabled, do: "cron.enable", else: "cron.disable"),
           audit_payload(updated),

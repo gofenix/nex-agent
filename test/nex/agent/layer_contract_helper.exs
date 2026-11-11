@@ -6,7 +6,8 @@ defmodule Nex.Agent.LayerContractHelper do
   @matrix %{
     "identity" => %{
       authority: "default runtime identity and execution baseline",
-      allowed: "Provides the default runtime identity; workspace content may refine or replace it.",
+      allowed:
+        "Provides the default runtime identity; workspace content may refine or replace it.",
       forbidden: [
         "Stale capability/model claims presented as authoritative runtime facts.",
         "User profile or tool reference content that belongs in other layers."

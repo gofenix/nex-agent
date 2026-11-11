@@ -179,7 +179,8 @@ defmodule Nex.Agent.MemoryUpdater do
         Keyword.get(opts, :req_llm_generate_text_fun) ||
           Map.get(runtime_metadata, "memory_refresh_req_llm_generate_text_fun"),
       llm_call_fun:
-        Keyword.get(opts, :llm_call_fun) || Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
+        Keyword.get(opts, :llm_call_fun) ||
+          Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
     }
   end
 

@@ -113,7 +113,8 @@ defmodule Nex.SkillRuntime.Package do
       source: record["source"],
       source_type: record["source_type"] || "local",
       installed: record["installed"] != false,
-      active: record["active"] != false and not (record["draft"] == true or manifest.draft == true),
+      active:
+        record["active"] != false and not (record["draft"] == true or manifest.draft == true),
       available: record["available"] != false,
       availability_warnings: record["availability_warnings"] || [],
       execution_mode: record["execution_mode"] || manifest.execution_mode || "knowledge",
